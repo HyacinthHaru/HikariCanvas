@@ -27,7 +27,7 @@ public record CanvasManifest(int spec, String kind, long createdAt, String name,
             throw new CanvasImportException("IMPORT_SPEC_UNSUPPORTED",
                 "工程格式版本 " + spec + " 高于当前插件支持的 " + maxSpec + "，请升级插件");
         }
-        // kind 判别符：project（普通工程）/ pack（模板包，docs/template-pack.md D1）。
+        // kind 判别符：project（普通工程）/ pack（模板包，见 docs/template-pack.md）。
         // 两者同为 .canvas、走同一导入管线，pack 只多一层 params.json + ${param} 前置替换。
         String kind = n.path("kind").asText("");
         if (!"project".equals(kind) && !"pack".equals(kind)) {

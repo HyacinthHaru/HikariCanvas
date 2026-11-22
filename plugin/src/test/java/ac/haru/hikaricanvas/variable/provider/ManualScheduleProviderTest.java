@@ -3,7 +3,7 @@ package ac.haru.hikaricanvas.variable.provider;
 import ac.haru.hikaricanvas.HikariCanvasConfig;
 import ac.haru.hikaricanvas.schedule.ScheduleEntry;
 import ac.haru.hikaricanvas.schedule.WallSchedule;
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.Variable;
 import ac.haru.hikaricanvas.variable.VariableStore;
@@ -15,8 +15,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.logging.Logger;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -25,31 +24,17 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P3-L：{@link ManualScheduleProvider} 单测。
- *
- * <p>用 {@link FakeDataSource} 注入测试 entries + LocalTime，避免依赖 SQLite / Bukkit。覆盖：
- * <ul>
- *   <li>initialize 注册所有 wall_schedules 已存在的 wall</li>
- *   <li>refresh 计算 next_departure / next_destination / eta_minutes / is_arriving</li>
- *   <li>per-wall 隔离（多 wall 同时跑互不影响）</li>
- *   <li>ensureWallRegistered 幂等（重复调不抛 + 不重复 create）</li>
- *   <li>edge case：空 entries、过零点、单 entry 已过</li>
- *   <li>is_arriving / arrival_status 阈值（0.4.0 bugfix Bug 3：config 化默认 60s）</li>
- *   <li>precision 秒精度（0.4.0 bugfix Bug 4：支持 HH:mm:ss）</li>
- *   <li>unregisterWall 清干净（7 变量）</li>
- * </ul>
+ * {@link ManualScheduleProvider} 手动时刻表计算、注册生命周期与监听器触发单测。
  */
 class ManualScheduleProviderTest {
 
-    private FakeUserVariableDao fakeDao;
     private VariableStore store;
     private FakeDataSource dataSource;
     private ManualScheduleProvider provider;
 
     @BeforeEach
     void setUp() {
-        fakeDao = new FakeUserVariableDao();
-        store = new VariableStore(fakeDao, w -> { });
+        store = new VariableStore(new NoopUserVariableDao(), w -> { });
         dataSource = new FakeDataSource();
         provider = new ManualScheduleProvider(store, dataSource);
     }
@@ -132,13 +117,11 @@ class ManualScheduleProviderTest {
 
     @Test
     void refresh_isArrivingTrueWithinThresholdSeconds() {
-        // 0.4.0 bugfix（Bug 3）：默认阈值 60s，3min ETA 不再算 arriving
-        dataSource.now = LocalTime.of(8, 29, 30); // 30s 后到 08:30
+        dataSource.now = LocalTime.of(8, 29, 30);
         dataSource.entriesByWall.put("w-1", List.of(
                 new ScheduleEntry(1, "w-1", "08:30", "Beijing", 0)));
         provider.ensureWallRegistered("w-1");
 
-        // 08:29:30 → 08:30 = 30s ≤ 60 → true
         assertEquals("0", currentValueOrNull(store, "schedule:w-1/eta_minutes"));
         assertEquals("30", currentValueOrNull(store, "schedule:w-1/eta_seconds"));
         assertEquals("true", currentValueOrNull(store, "schedule:w-1/is_arriving"));
@@ -147,7 +130,6 @@ class ManualScheduleProviderTest {
 
     @Test
     void refresh_arrivalStatusUsesIdleTextWhenNotArriving() {
-        // 默认 idleText = ""
         dataSource.now = LocalTime.of(8, 0);
         dataSource.entriesByWall.put("w-1", List.of(
                 new ScheduleEntry(1, "w-1", "09:00", "Beijing", 0)));
@@ -159,7 +141,6 @@ class ManualScheduleProviderTest {
 
     @Test
     void refresh_customConfigChangesArrivalText() {
-        // 0.4.0 bugfix（Bug 3）：自定义阈值 + 文案
         provider = new ManualScheduleProvider(store, dataSource,
                 new HikariCanvasConfig.ScheduleConfig(300L, "Arriving", "Standby"));
         dataSource.now = LocalTime.of(8, 25);
@@ -292,17 +273,10 @@ class ManualScheduleProviderTest {
     }
 
     /**
-     * 纯铁路墙（从没配过手动时刻表）删除时，共享的 15 个 {@code schedule:<wallId>/*}
-     * 也要被清掉。
-     *
-     * <p>这条链是这样的：RailScheduleProvider 注册时会 create 全部 29 个 key，但它的
-     * unregisterWall 只删自己专属的 14 个，共享的 15 个留给本 provider 收尾；而本 provider
-     * 早先"没注册过就早退"，于是那 15 个变量在 /canvas delete 之后一直留在内存里到重启。
-     * 现在无论注册过与否都扫一遍删。</p>
+     * 纯铁路墙（从未配过手动时刻表）删除时，共享的 15 个 {@code schedule:<wallId>/*} 也必须清掉。
      */
     @Test
     void unregisterWall_cleansSharedKeys_evenIfNeverRegisteredHere() {
-        // 模拟 rail 侧 create 出来的共享 key（本 provider 没注册过这面墙）
         for (String key : ManualScheduleProvider.ALL_KEYS) {
             store.create("schedule:w-rail", key, VarType.STRING, null, "rail");
         }
@@ -318,7 +292,6 @@ class ManualScheduleProviderTest {
 
     @Test
     void refresh_publishesPrecisionVariable() {
-        // 0.4.0 bugfix（Bug 4）：precision 字段也作为变量暴露
         dataSource.now = LocalTime.of(8, 0);
         dataSource.precisionByWall.put("w-prec", WallSchedule.PRECISION_SECOND);
         dataSource.entriesByWall.put("w-prec", List.of(
@@ -329,7 +302,6 @@ class ManualScheduleProviderTest {
 
     @Test
     void setConfig_hotReload() {
-        // 0.4.0 bugfix（Bug 3）：reload config 后阈值生效
         dataSource.now = LocalTime.of(8, 0);
         dataSource.entriesByWall.put("w-1", List.of(
                 new ScheduleEntry(1, "w-1", "08:02", "T", 0)));
@@ -391,7 +363,6 @@ class ManualScheduleProviderTest {
 
     @Test
     void computeNext_secondGranularity_HHmmss() {
-        // 0.4.0 bugfix（Bug 4）：支持 HH:mm:ss 格式
         List<ScheduleEntry> entries = List.of(
                 new ScheduleEntry(1, "w", "08:30:45", "PreciseTrain", 0));
         var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 30, 0), 60L);
@@ -402,9 +373,7 @@ class ManualScheduleProviderTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.4.0 bugfix3（Bug B）：ChangeListener 集成
-    //  Provider 写值时 listener 应被触发——这是前端 Schedule Manager preview
-    //  实时显值的关键路径。
+    //  ChangeListener 集成
     // ──────────────────────────────────────────────────────────
 
     @Test
@@ -413,8 +382,7 @@ class ManualScheduleProviderTest {
         dataSource.entriesByWall.put("w-1", List.of(
                 new ScheduleEntry(1, "w-1", "08:30", "终点A", 0)));
 
-        java.util.List<VariableStore.VariableChangeEvent> events =
-                new java.util.concurrent.CopyOnWriteArrayList<>();
+        List<VariableStore.VariableChangeEvent> events = new CopyOnWriteArrayList<>();
         store.registerChangeListener(events::add);
 
         provider.ensureWallRegistered("w-1");
@@ -450,8 +418,7 @@ class ManualScheduleProviderTest {
                 new ScheduleEntry(1, "w-1", "08:30", "终点", 0)));
         provider.ensureWallRegistered("w-1");
 
-        java.util.List<VariableStore.VariableChangeEvent> events =
-                new java.util.concurrent.CopyOnWriteArrayList<>();
+        List<VariableStore.VariableChangeEvent> events = new CopyOnWriteArrayList<>();
         store.registerChangeListener(events::add);
 
         provider.unregisterWall("w-1");
@@ -570,9 +537,6 @@ class ManualScheduleProviderTest {
 
     @Test
     void computeNext_crossMidnight_etaNotClampedTo86400() {
-        // R13-schedule-eta：now=00:00:00、单 entry 23:59:59。
-        // 该班次今天仍未发车（23:59:59 > 00:00:00）→ next 当日，eta = 86399s（不被钳到 86400）。
-        // next2 = 同班次明天 = eta + 86400 = 172799s，跨午夜累加值保留，不被旧 86_400L 上界裁掉。
         List<ScheduleEntry> entries = List.of(
                 new ScheduleEntry(1, "w", "23:59:59", "Midnight", 0));
         var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(0, 0, 0), 60L);
@@ -680,18 +644,5 @@ class ManualScheduleProviderTest {
             }
             return WallSchedule.PRECISION_MINUTE;
         }
-    }
-
-    /** Fake UserVariableDao - 不持久化。 */
-    private static final class FakeUserVariableDao extends UserVariableDao {
-        FakeUserVariableDao() {
-            super(Logger.getLogger("test"), null);
-        }
-        @Override
-        public void upsert(String wallId, String name, VarType type,
-                           String defaultValue, String currentValue, String boundTo,
-                           long createdAt, long updatedAt) {}
-        @Override public void delete(String wallId, String name) {}
-        @Override public List<Row> loadAll() { return new ArrayList<>(); }
     }
 }

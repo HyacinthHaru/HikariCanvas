@@ -4,12 +4,12 @@ import ac.haru.hikaricanvas.variable.VariableAlias;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -19,20 +19,18 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.2：{@link VariableAliasDao} CRUD + 级联删测试。
- *
- * <p>真实 SQLite + MigrationRunner 跑 V001..V014；FK CASCADE 由 schema 触发。每个测试新建临时
- * dir + data.db，互相隔离。</p>
+ * {@link VariableAliasDao} CRUD 与外键级联删除单测。
  */
 class VariableAliasDaoTest {
 
-    private Path tmpDir;
+    @TempDir
+    Path tmpDir;
+
     private Database database;
     private VariableAliasDao dao;
 
     @BeforeEach
-    void setUp() throws Exception {
-        tmpDir = Files.createTempDirectory("hikari-alias-test-");
+    void setUp() {
         Logger log = Logger.getLogger("test");
         database = new Database(log, tmpDir.resolve("data.db"));
         new MigrationRunner(database.jdbi(), log).run();
@@ -41,17 +39,12 @@ class VariableAliasDaoTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         if (database != null) database.close();
-        if (tmpDir != null && Files.exists(tmpDir)) {
-            try (var s = Files.walk(tmpDir)) {
-                s.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(java.io.File::delete);
-            }
-        }
     }
 
-    private static final java.util.concurrent.atomic.AtomicInteger ORIGIN_COUNTER =
-            new java.util.concurrent.atomic.AtomicInteger();
+    private static final AtomicInteger ORIGIN_COUNTER =
+            new AtomicInteger();
 
     private void insertWall(String wallId) {
         int ox = ORIGIN_COUNTER.incrementAndGet();

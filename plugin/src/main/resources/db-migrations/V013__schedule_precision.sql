@@ -1,4 +1,4 @@
--- 0.4.0 bugfix（Bug 4）：per-wall schedule 精度（分钟 / 秒）。
+-- 每面墙独立的时刻表时间精度（分钟 / 秒）。
 --
 -- precision='minute'（default，向下兼容现有行）：
 --   - departure_time 为 "HH:mm"

@@ -1,7 +1,53 @@
 package ac.haru.hikaricanvas.web;
 
+import ac.haru.hikaricanvas.HikariCanvasConfig;
+import ac.haru.hikaricanvas.canvasfile.AssetIngest;
+import ac.haru.hikaricanvas.canvasfile.MissingResourceScanner;
+import ac.haru.hikaricanvas.canvasfile.ProjectImporter;
+import ac.haru.hikaricanvas.canvasfile.ScriptImporter;
+import ac.haru.hikaricanvas.deploy.FrameDeployer;
+import ac.haru.hikaricanvas.i18n.Messages;
+import ac.haru.hikaricanvas.image.UploadHandler;
+import ac.haru.hikaricanvas.rail.WallRailBinding;
+import ac.haru.hikaricanvas.render.AnimationTicker;
+import ac.haru.hikaricanvas.render.FontMetricsTable;
+import ac.haru.hikaricanvas.render.FontRegistry;
+import ac.haru.hikaricanvas.render.IconRegistry;
+import ac.haru.hikaricanvas.render.ProjectionThrottler;
+import ac.haru.hikaricanvas.script.ScriptStore;
+import ac.haru.hikaricanvas.script.ValidationError;
+import ac.haru.hikaricanvas.script.engine.ScriptTestLauncher;
+import ac.haru.hikaricanvas.session.Session;
+import ac.haru.hikaricanvas.session.SessionManager;
+import ac.haru.hikaricanvas.session.SessionRateLimiter;
+import ac.haru.hikaricanvas.session.SessionState;
+import ac.haru.hikaricanvas.session.TokenService;
+import ac.haru.hikaricanvas.state.IconElement;
+import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.state.StatePatch;
+import ac.haru.hikaricanvas.storage.AuditLog;
+import ac.haru.hikaricanvas.storage.RailDao;
+import ac.haru.hikaricanvas.storage.ScheduleDao;
+import ac.haru.hikaricanvas.storage.TemplateRepo;
+import ac.haru.hikaricanvas.storage.VariableAliasDao;
+import ac.haru.hikaricanvas.storage.WallRepo;
+import ac.haru.hikaricanvas.template.TemplateEntry;
+import ac.haru.hikaricanvas.template.TemplatePublisher;
+import ac.haru.hikaricanvas.template.TemplateRegistry;
+import ac.haru.hikaricanvas.template.TemplateSpec;
+import ac.haru.hikaricanvas.template.preview.TemplatePreviewService;
+import ac.haru.hikaricanvas.template.preview.WallPreviewService;
+import ac.haru.hikaricanvas.variable.Variable;
+import ac.haru.hikaricanvas.variable.VariableDto;
+import ac.haru.hikaricanvas.variable.VariableStore;
+import ac.haru.hikaricanvas.variable.provider.ManualScheduleProvider;
+import ac.haru.hikaricanvas.variable.provider.RailScheduleProvider;
+import ac.haru.hikaricanvas.variable.provider.VariableProviderDaemon;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.http.HandlerType;
@@ -10,36 +56,38 @@ import io.javalin.router.Endpoint;
 import io.javalin.websocket.WsContext;
 import io.javalin.websocket.WsHandlerType;
 import io.javalin.websocket.WsMessageContext;
-import ac.haru.hikaricanvas.render.FontRegistry;
-import ac.haru.hikaricanvas.render.IconRegistry;
-import ac.haru.hikaricanvas.render.ProjectionThrottler;
-import ac.haru.hikaricanvas.session.Session;
-import ac.haru.hikaricanvas.session.SessionManager;
-import ac.haru.hikaricanvas.session.SessionRateLimiter;
-import ac.haru.hikaricanvas.session.SessionState;
-import ac.haru.hikaricanvas.session.TokenService;
-import ac.haru.hikaricanvas.state.ProjectState;
-import ac.haru.hikaricanvas.state.StatePatch;
-import ac.haru.hikaricanvas.template.TemplateEntry;
-import ac.haru.hikaricanvas.template.TemplateRegistry;
-import ac.haru.hikaricanvas.template.TemplateSpec;
-import ac.haru.hikaricanvas.template.preview.TemplatePreviewService;
-import ac.haru.hikaricanvas.template.preview.WallPreviewService;
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.java.JavaPlugin;
 
+import java.io.InputStream;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 
 /**
  * Javalin HTTP + WebSocket 服务。契约见 {@code docs/protocol.md §3}、{@code §5}。
@@ -71,8 +119,7 @@ public final class WebServer {
     static final int MALFORMED_FRAME_LIMIT = 3;
 
     /** 字体 id 白名单（间接寻址前的第一道闸，杜绝路径穿越 / 嗅探）。 */
-    private static final java.util.regex.Pattern FONT_ID_RE =
-            java.util.regex.Pattern.compile("[a-zA-Z0-9_-]+");
+    private static final Pattern FONT_ID_RE = Pattern.compile("[a-zA-Z0-9_-]+");
     /** advance 表文件名后缀，{@code /fonts/{id}.metrics.json}。 */
     private static final String METRICS_SUFFIX = ".metrics.json";
 
@@ -91,15 +138,15 @@ public final class WebServer {
      * 超限 close 4429 + audit。详见 {@link TokenRateLimiter}。
      */
     private final TokenRateLimiter tokenRateLimiter;
-    private final ac.haru.hikaricanvas.storage.WallRepo wallRepo;
-    private final org.bukkit.plugin.java.JavaPlugin plugin;
+    private final WallRepo wallRepo;
+    private final JavaPlugin plugin;
     private final TemplateRegistry templateRegistry;
     private final TemplatePreviewService templatePreviewService;
     private final int previewCacheSeconds;
     private final WallPreviewService wallPreviewService;
-    private final ac.haru.hikaricanvas.image.UploadHandler uploadHandler;
-    private final ac.haru.hikaricanvas.storage.TemplateRepo templateRepo;
-    private final ac.haru.hikaricanvas.storage.AuditLog auditLog;
+    private final UploadHandler uploadHandler;
+    private final TemplateRepo templateRepo;
+    private final AuditLog auditLog;
     /** HTTP 字体端点 {@code /api/font/file} 与 {@code /api/font/list} 用。 */
     private final FontRegistry fontRegistry;
     /** HTTP 矢量图标端点 {@code /api/icon/list} 与 {@code /api/icon/paths} 用。 */
@@ -107,10 +154,10 @@ public final class WebServer {
     /**
      * i18n 文案中枢。WS auth 读前端携带的 locale → {@code resolveLocaleId} 规范化后
      * 存入 {@link Session#setEditorLocale}，供脚本校验报错按编辑器语言渲染；同时转交
-     * {@link ScriptOpDispatcher}（渲染 {@link ac.haru.hikaricanvas.script.ValidationError}）。
+     * {@link ScriptOpDispatcher}（渲染 {@link ValidationError}）。
      * 可为 null（旧测试装配容忍——auth 缺 messages 时跳过 setEditorLocale）。
      */
-    private final ac.haru.hikaricanvas.i18n.Messages messages;
+    private final Messages messages;
 
     // ---------- 拆分后的 dispatcher（god-class 拆分）----------
     private final EditOpDispatcher editOpDispatcher;
@@ -119,7 +166,7 @@ public final class WebServer {
      * 把 AnimationTicker 转交给 editOpDispatcher（timeline.play/pause/seek 三 op 用）。
      * Ticker 在 WebServer 之后构造（依赖 CanvasProjector），故走 setter 而非构造器参数。
      */
-    public void setAnimationTicker(ac.haru.hikaricanvas.render.AnimationTicker ticker) {
+    public void setAnimationTicker(AnimationTicker ticker) {
         editOpDispatcher.setAnimationTicker(ticker);
     }
     private final BrushOpDispatcher brushOpDispatcher;
@@ -129,21 +176,21 @@ public final class WebServer {
     private final VariableOpDispatcher variableOpDispatcher;
     /** schedule.* 五个 op 的分发；可为 null（ScheduleDao 未配置） */
     private final ScheduleOpDispatcher scheduleOpDispatcher;
-    /** rail.* 12 个 op 的分发；可为 null（RailDao 未配置） */
+    /** rail.* 13 个 op 的分发；可为 null（RailDao 未配置） */
     private final RailOpDispatcher railOpDispatcher;
     /** variable.alias.* 三个 op 的分发；可为 null（VariableAliasDao 未配置） */
     private final VariableAliasDispatcher variableAliasDispatcher;
     /** ready payload 注入 aliases 快照；与 dispatcher 同生命周期。 */
-    private final ac.haru.hikaricanvas.storage.VariableAliasDao variableAliasDao;
+    private final VariableAliasDao variableAliasDao;
     /** script.* 五个 op 的分发；可为 null（ScriptStore 未配置）。 */
     private final ScriptOpDispatcher scriptOpDispatcher;
     /** ready payload 注入 scripts 快照；与 dispatcher 同生命周期。 */
-    private final ac.haru.hikaricanvas.script.ScriptStore scriptStore;
+    private final ScriptStore scriptStore;
     /**
      * ready payload 注入 variables 快照需要直读 VariableStore。
      * 与 {@link #variableOpDispatcher} 同生命周期；可为 null（VariableStore 未配置时跳过注入）。
      */
-    private final ac.haru.hikaricanvas.variable.VariableStore variableStore;
+    private final VariableStore variableStore;
     /** /api/variable/list-all-namespaces 端点 handler，聚合 Provider declaredKeys。可为 null。 */
     private final VariableMetadataHandler variableMetadataHandler;
     /**
@@ -163,10 +210,10 @@ public final class WebServer {
      * Caffeine 替代 ConcurrentHashMap（ConcurrentHashMap 不收缩）；
      * 5 分钟 access TTL + 上限 100 项。
      */
-    private final com.github.benmanes.caffeine.cache.Cache<String, byte[]> wallPreviewCache =
-            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+    private final Cache<String, byte[]> wallPreviewCache =
+            Caffeine.newBuilder()
                     .maximumSize(100)
-                    .expireAfterAccess(java.time.Duration.ofMinutes(5))
+                    .expireAfterAccess(Duration.ofMinutes(5))
                     .build();
     private Javalin app;
 
@@ -200,37 +247,36 @@ public final class WebServer {
                      TokenService tokenService, SessionManager sessionManager,
                      ProjectionThrottler throttler,
                      SessionRateLimiter rateLimiter,
-                     ac.haru.hikaricanvas.storage.WallRepo wallRepo,
-                     ac.haru.hikaricanvas.deploy.FrameDeployer frameDeployer,
+                     WallRepo wallRepo,
+                     FrameDeployer frameDeployer,
                      TemplateRegistry templateRegistry,
                      TemplatePreviewService templatePreviewService,
                      int previewCacheSeconds,
                      WallPreviewService wallPreviewService,
-                     ac.haru.hikaricanvas.image.UploadHandler uploadHandler,
-                     ac.haru.hikaricanvas.template.TemplatePublisher templatePublisher,
-                     ac.haru.hikaricanvas.storage.TemplateRepo templateRepo,
-                     ac.haru.hikaricanvas.storage.AuditLog auditLog,
+                     UploadHandler uploadHandler,
+                     TemplatePublisher templatePublisher,
+                     TemplateRepo templateRepo,
+                     AuditLog auditLog,
                      FontRegistry fontRegistry,
                      IconRegistry iconRegistry,
-                     ac.haru.hikaricanvas.variable.VariableStore variableStore,
-                     ac.haru.hikaricanvas.storage.ScheduleDao scheduleDao,
-                     ac.haru.hikaricanvas.variable.provider.ManualScheduleProvider manualScheduleProvider,
-                     ac.haru.hikaricanvas.storage.RailDao railDao,
-                     ac.haru.hikaricanvas.variable.provider.RailScheduleProvider railScheduleProvider,
-                     ac.haru.hikaricanvas.variable.provider.VariableProviderDaemon variableProviderDaemon,
-                     ac.haru.hikaricanvas.storage.VariableAliasDao variableAliasDao,
-                     org.bukkit.plugin.java.JavaPlugin plugin,
+                     VariableStore variableStore,
+                     ScheduleDao scheduleDao,
+                     ManualScheduleProvider manualScheduleProvider,
+                     RailDao railDao,
+                     RailScheduleProvider railScheduleProvider,
+                     VariableProviderDaemon variableProviderDaemon,
+                     VariableAliasDao variableAliasDao,
+                     JavaPlugin plugin,
                      String serverVersion,
                      int wsAuthTimeoutSeconds,
                      List<String> allowedOrigins,
                      TokenRateLimiter tokenRateLimiter,
-                     ac.haru.hikaricanvas.script.ScriptStore scriptStore,
-                     java.util.function.Supplier<Map<String,
-                             ac.haru.hikaricanvas.HikariCanvasConfig.CommandTemplate>>
+                     ScriptStore scriptStore,
+                     Supplier<Map<String, HikariCanvasConfig.CommandTemplate>>
                              commandTemplatesSupplier,
-                     ac.haru.hikaricanvas.canvasfile.AssetIngest assetIngest,
-                     ac.haru.hikaricanvas.HikariCanvasConfig.ImportConfig importConfig,
-                     ac.haru.hikaricanvas.i18n.Messages messages) {
+                     AssetIngest assetIngest,
+                     HikariCanvasConfig.ImportConfig importConfig,
+                     Messages messages) {
         this.log = log;
         this.host = host;
         this.port = port;
@@ -278,7 +324,7 @@ public final class WebServer {
         // 存 / 删成功后把该 session 最新可见模板列表推回去（前端只在 ready 帧拉一次，否则 gallery 要重连才刷新）。
         this.templateOpDispatcher = new TemplateOpDispatcher(sessionManager, templatePublisher, plugin,
                 (ctx, session, bypass) -> ctx.send(Envelope.of("templates", null,
-                        java.util.Map.of("templates", listTemplates(session.playerUuid(), bypass)))),
+                        Map.of("templates", listTemplates(session.playerUuid(), bypass)))),
                 rateLimiter);
         // HikariCanvas 总是先于 WebServer 构造完 VariableStore，生产恒非 null。
         this.variableOpDispatcher = variableStore == null ? null
@@ -309,37 +355,30 @@ public final class WebServer {
                 ? null
                 : new VariableMetadataHandler(
                         variableStore, variableProviderDaemon, sessionManager,
-                        new com.fasterxml.jackson.databind.ObjectMapper());
+                        new ObjectMapper());
         // 命令模板端点 handler；模板供给缺（旧测试装配）则禁用端点。
         // 供给惰性读 volatile config → /canvas reload 热更友好。
         this.commandTemplateHandler = commandTemplatesSupplier == null
                 ? null
                 : new CommandTemplateHandler(
                         sessionManager, commandTemplatesSupplier,
-                        new com.fasterxml.jackson.databind.ObjectMapper());
+                        new ObjectMapper());
         // .canvas 工程导入端点 handler。AssetIngest 由 bootstrap 注入（图片摄入栈所在处）；
         // ProjectImporter 在此 new——复用 dispatcher 同款内部 push（snapshot 广播）+ wallRepo 持久化
         // （照 EditOpDispatcher 的 OkSnapshot 收尾范式）。AssetIngest / importConfig 任一缺则禁用端点。
         if (assetIngest == null || importConfig == null) {
             this.projectImportHandler = null;
         } else {
-            // scripts.json 导入器。scriptStore 缺（旧装配）→ null，工程导入仍可用、
-            //         仅静默忽略包内脚本。命令模板供给复用 commandTemplatesSupplier（缺则空表 →
-            //         所有 runCommand 判为 blocked，但规则照常落库）。
-            ac.haru.hikaricanvas.canvasfile.ScriptImporter scriptImporter = scriptStore == null
+            ScriptImporter scriptImporter = scriptStore == null
                     ? null
-                    : new ac.haru.hikaricanvas.canvasfile.ScriptImporter(
+                    : new ScriptImporter(
                             scriptStore,
                             commandTemplatesSupplier == null
-                                    ? java.util.Map::of : commandTemplatesSupplier);
-            // 导入时扫缺字体 / 缺 user 图标 / 缺 userglobal 变量并提示
-            // （docs/import-export.md §3.2 step 8）。三件 registry 已是 WebServer 字段；各自可空降级
-            // （variableStore 可能为 null）。scanner 整体注入 ProjectImporter（best-effort 可空范式）。
-            ac.haru.hikaricanvas.canvasfile.MissingResourceScanner missingResourceScanner =
-                    new ac.haru.hikaricanvas.canvasfile.MissingResourceScanner(
-                            fontRegistry, iconRegistry, variableStore);
-            ac.haru.hikaricanvas.canvasfile.ProjectImporter projectImporter =
-                    new ac.haru.hikaricanvas.canvasfile.ProjectImporter(
+                                    ? Map::of : commandTemplatesSupplier);
+            MissingResourceScanner missingResourceScanner =
+                    new MissingResourceScanner(fontRegistry, iconRegistry, variableStore);
+            ProjectImporter projectImporter =
+                    new ProjectImporter(
                             importConfig, assetIngest, push, wallRepo,
                             scriptImporter, auditLog, throttler, missingResourceScanner);
             this.projectImportHandler = new ProjectImportHandler(sessionManager, projectImporter);
@@ -392,16 +431,9 @@ public final class WebServer {
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/palette", ctx -> servePalette(ctx)));
 
-            // 网页"近期项目"列表。**匿名可读，但只给裁过字段的公开投影**。
-            //
-            // 从前这里直接 ctx.json(listAll())，把全服每面墙的作者名 / 世界 / 坐标 / 朝向全吐出来。
-            // 绑 127.0.0.1 时这只是"有主机权限的人能看"，但公网部署是文档里明确支持的形态
-            // （nginx/Caddy 反代 + TLS，反代层没有任何鉴权），于是那张"全服艺术品坐标 + 作者名
-            // 清单"就直接挂在互联网上 —— 对着坐标去拆是分分钟的事。
-            //
-            // 这条端点**不能要求鉴权**：前端落地页 HomePage 是 pre-auth 页面（URL 无 token 时展示），
-            // 天然没有 sessionId。所以走"匿名 + 裁字段"：只留 wallId / alias / 尺寸 / 锁状态 /
-            // 更新时间（见 WallRepo.PublicSummary），不足以定位到世界里的具体位置，也不暴露玩家身份。
+            // 网页"近期项目"列表。匿名可读，仅返回裁掉作者与世界坐标后的公开投影（WallRepo.PublicSummary）。
+            // 前端落地页 HomePage 是 pre-auth 页面（URL 无 token 时展示），天然无 sessionId，
+            // 故不要求鉴权但严格剔除可定位世界坐标与玩家身份的字段。
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/walls", ctx -> ctx.json(wallRepo.listPublic())));
 
@@ -427,7 +459,7 @@ public final class WebServer {
                         ctx.result(png);
                     }));
 
-            // wall 缩略图。HomePage 卡片展示用；按 wall.updatedAt 做缓存。
+            // wall 缩略图。HomePage 卡片展示用（匿名只读，不要求 session 或 lock）；按 wall.updatedAt 做缓存。
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/wall/{id}/preview.png", ctx -> {
                         String wid = ctx.pathParam("id");
@@ -446,7 +478,7 @@ public final class WebServer {
             if (uploadHandler != null) {
                 cfg.routes.addEndpoint(new Endpoint(
                         HandlerType.POST, "/api/upload", uploadHandler::handleUpload));
-                // URL 粘贴上传（与 file upload 同款校验栈 + SSRF 防御）
+                // URL 粘贴上传（UrlFetchSafety 做主机/私网/重定向校验 + UploadHandler 同款图像解码栈）
                 cfg.routes.addEndpoint(new Endpoint(
                         HandlerType.POST, "/api/upload/url", uploadHandler::handleUrlUpload));
                 cfg.routes.addEndpoint(new Endpoint(
@@ -462,11 +494,7 @@ public final class WebServer {
             }
 
             // 字体 advance 表：前端先 fetch /fonts/{id}.metrics.json，失败再 fallback
-            // /api/font/metrics?id=。两条通道后端都要真的能答——开发时 vite 直接 serve
-            // web/public/fonts 掩盖了这点，而 web/public 不进仓库、jar 部署下没有这条静态路径，
-            // 于是线上两条通道齐 404、前端整页退回 canonical 排版，与后端真实 advance 排版对不上。
-            // 这里把 /fonts/*.metrics.json 也接上：内置字体直读 jar 内 /fonts/，
-            // 用户字体（只有内存表）落到 serializeToJson。
+            // /api/font/metrics?id=。内置字体直读 jar 内 /fonts/，用户字体（只有内存表）落到 serializeToJson。
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/fonts/{file}", ctx -> {
                         String id = metricsFontIdOrNull(ctx.pathParam("file"));
@@ -474,7 +502,7 @@ public final class WebServer {
                             ctx.status(404);
                             return;
                         }
-                        java.io.InputStream in = getClass().getClassLoader()
+                        InputStream in = getClass().getClassLoader()
                                 .getResourceAsStream("fonts/" + id + METRICS_SUFFIX);
                         if (in != null) {
                             ctx.header("X-Content-Type-Options", "nosniff");
@@ -484,7 +512,7 @@ public final class WebServer {
                             ctx.result(in);
                             return;
                         }
-                        String json = ac.haru.hikaricanvas.render.FontMetricsTable.serializeToJson(id);
+                        String json = FontMetricsTable.serializeToJson(id);
                         if (json == null) {
                             ctx.status(404);
                             return;
@@ -502,7 +530,7 @@ public final class WebServer {
                             ctx.status(400).result("{\"code\":\"BAD_REQUEST\"}");
                             return;
                         }
-                        String json = ac.haru.hikaricanvas.render.FontMetricsTable.serializeToJson(id);
+                        String json = FontMetricsTable.serializeToJson(id);
                         if (json == null) {
                             ctx.status(404).result("{\"code\":\"NOT_FOUND\"}");
                             return;
@@ -574,7 +602,7 @@ public final class WebServer {
                     HandlerType.GET, "/api/icon/paths", ctx -> {
                         String id = ctx.queryParam("id");
                         if (id == null || id.isEmpty() || id.length() > 64
-                                || !ac.haru.hikaricanvas.state.IconElement.isValidSource(id)) {
+                                || !IconElement.isValidSource(id)) {
                             ctx.status(400).result("{\"code\":\"BAD_REQUEST\"}");
                             return;
                         }
@@ -734,7 +762,7 @@ public final class WebServer {
     private void serveClasspath(Context ctx, String resource) {
         // 静态资源一律禁 MIME 嗅探：即便 Content-Type 配错也不让浏览器宽容猜测掩盖问题。
         ctx.header("X-Content-Type-Options", "nosniff");
-        java.io.InputStream in = getClass().getClassLoader().getResourceAsStream(resource);
+        InputStream in = getClass().getClassLoader().getResourceAsStream(resource);
         if (in == null) {
             ctx.status(404);
             return;
@@ -747,7 +775,7 @@ public final class WebServer {
 
     /** 直读 classpath 根的 palette.json。浏览器端 PaletteLut 用它构建 LUT。 */
     private void servePalette(Context ctx) {
-        java.io.InputStream in = getClass().getClassLoader().getResourceAsStream("palette.json");
+        InputStream in = getClass().getClassLoader().getResourceAsStream("palette.json");
         if (in == null) {
             ctx.status(500).json(Map.of(
                     "error", "palette.json missing from classpath",
@@ -830,11 +858,11 @@ public final class WebServer {
      * 返所有模板的元数据（含 owner / featured / 下载数）+ 按 featured/created
      * 排序。前端 HomePage Marketplace 用这个数据 + selfUuid 决定"我的"判定。
      */
-    private void handleTemplatesList(io.javalin.http.Context ctx) {
-        java.util.List<ac.haru.hikaricanvas.storage.TemplateRepo.Row> rows = templateRepo.listMarketplace(0);
-        java.util.List<Map<String, Object>> json = new java.util.ArrayList<>(rows.size());
-        for (ac.haru.hikaricanvas.storage.TemplateRepo.Row r : rows) {
-            Map<String, Object> m = new java.util.LinkedHashMap<>();
+    private void handleTemplatesList(Context ctx) {
+        List<TemplateRepo.Row> rows = templateRepo.listMarketplace(0);
+        List<Map<String, Object>> json = new ArrayList<>(rows.size());
+        for (TemplateRepo.Row r : rows) {
+            Map<String, Object> m = new LinkedHashMap<>();
             m.put("templateId", r.templateId());
             // 隐私——公开端点不暴露 ownerUuid；保留 ownerName 用于"我的"判定的友好展示
             m.put("ownerName", r.ownerName());
@@ -855,8 +883,7 @@ public final class WebServer {
      *
      * <p>与 {@link TemplateRegistry#byIdForApply} 共用同一可见性判定——对 source==USER
      * 且 ownerUuid 非 caller 且无 {@code canvas.template.use-others} bypass 的条目整条剔除，
-     * 防其他玩家私有模板的完整 {@code raw_state} 画布内容经 ready 帧外泄（apply 端隔离已有，
-     * 此前 list 端零过滤使其形同虚设）。builtin / server 模板始终可见。</p>
+     * 防止其他玩家私有模板元数据经 ready 帧外泄。builtin / server 模板始终可见。</p>
      *
      * @param callerUuid 请求方玩家 UUID；{@code null} 等同非 owner
      * @param hasBypass  调用方是否持 {@code canvas.template.use-others}
@@ -936,7 +963,7 @@ public final class WebServer {
         if (bound != null) {
             wsBySession.remove(bound, ctx);
             if (auditLog != null) {
-                java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                LinkedHashMap<String, Object> details = new LinkedHashMap<>();
                 details.put("reason", "repeated malformed frames");
                 details.put("strikes", strikes);
                 Session s = sessionManager.byId(bound);
@@ -1014,7 +1041,7 @@ public final class WebServer {
                     scheduleOpDispatcher.dispatch(ctx, in, bound);
                 }
             }
-            // rail.* 12 op + rail.line.detail（共 13 op）
+            // rail.* 13 op
             case "rail.line.list", "rail.line.detail",
                  "rail.line.create", "rail.line.update", "rail.line.delete",
                  "rail.station.add", "rail.station.update", "rail.station.delete",
@@ -1062,7 +1089,7 @@ public final class WebServer {
             log.warning("WS auth rate limited: ip=" + authIp
                     + " (≥" + tokenRateLimiter.perMinute() + "/min); close 4429");
             if (auditLog != null) {
-                java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                LinkedHashMap<String, Object> details = new LinkedHashMap<>();
                 details.put("perMinute", tokenRateLimiter.perMinute());
                 details.put("windowMs", tokenRateLimiter.windowMs());
                 // 注意：IP 是敏感数据 — 仅记 SHA-256 hash 防泄露；与 sessionManager.bindOrCheckIp
@@ -1133,20 +1160,20 @@ public final class WebServer {
             boolean[] perms = session.isConsole()
                     // 控制台主体：全授予，不查节点也不 hop 主线程（docs/security.md §5.0）。
                     ? new boolean[]{true, true}
-                    : org.bukkit.Bukkit.getScheduler().callSyncMethod(plugin, () -> {
-                        org.bukkit.entity.Player live = org.bukkit.Bukkit.getPlayer(session.playerUuid());
+                    : Bukkit.getScheduler().callSyncMethod(plugin, () -> {
+                        Player live = Bukkit.getPlayer(session.playerUuid());
                         if (live == null) return new boolean[]{true, false};  // 玩家离线：放行 + 无 bypass
                         return new boolean[]{
                                 live.hasPermission("canvas.edit"),
                                 live.hasPermission("canvas.template.use-others")};
-                    }).get(2, java.util.concurrent.TimeUnit.SECONDS);
+                    }).get(2, TimeUnit.SECONDS);
             boolean allowed = perms != null && perms[0];
             templateBypass = perms != null && perms[1];
             if (!allowed) {
                 log.warning("WS auth permission revoked sid=" + session.id()
                         + " player=" + session.playerName() + " canvas.edit=false");
                 if (auditLog != null) {
-                    java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                    LinkedHashMap<String, Object> details = new LinkedHashMap<>();
                     details.put("operation", "ws.auth");
                     details.put("required", "canvas.edit");
                     auditLog.record("PERMISSION_DENIED",
@@ -1158,7 +1185,7 @@ public final class WebServer {
                 closePermissionRevoked(ctx, "canvas.edit_revoked");
                 return;
             }
-        } catch (java.util.concurrent.TimeoutException te) {
+        } catch (TimeoutException te) {
             // 主线程繁忙：保守放行，避免拒绝合法玩家
             log.warning("WS auth permission check timeout sid=" + session.id()
                     + "; allowing through (main thread busy)");
@@ -1170,11 +1197,11 @@ public final class WebServer {
                     "permission check interrupted"));
             closePermissionRevoked(ctx, "perm_check_interrupted");
             return;
-        } catch (java.util.concurrent.ExecutionException
-                | java.util.concurrent.RejectedExecutionException
-                | java.util.concurrent.CancellationException pe) {
-            // 非超时异常（scheduler 关停/拒绝、callable 内部抛错）改 fail-closed 拒绝，
-            // 而非原先一律保守放行——避免被撤权玩家恰逢 scheduler 异常窗口绕过 canvas.edit 复查。
+        } catch (ExecutionException
+                | RejectedExecutionException
+                | CancellationException pe) {
+            // 非超时异常（scheduler 关停/拒绝、callable 内部抛错）fail-closed 拒绝，
+            // 避免被撤权玩家恰逢 scheduler 异常窗口绕过 canvas.edit 复查。
             log.log(Level.WARNING, "WS auth permission check failed sid=" + session.id()
                     + "; denying (fail-closed)", pe);
             ctx.send(Envelope.error(in.id(), "PERMISSION_DENIED",
@@ -1211,11 +1238,7 @@ public final class WebServer {
 
         // /canvas open 同 wall 路径下 session 已是 ACTIVE；只刷活跃时间，不再走 markActive 转移。
         // 只有首次 auth（ISSUED → ACTIVE）才调 markActive。
-        // 极窄 TOCTOU——读 state 与 markActive 内部重读之间，主线程 reaper 可能恰好
-        // 以 issued-timeout cancel 本 session（state→CLOSING / byId 移除），markActive/touch 会抛
-        // IllegalState/IllegalArgumentException。原先无 try/catch 时异常逃逸到 Javalin onError 只 log，
-        // client 收不到 AUTH_FAILED 而是静默卡死。改为捕获后发 AUTH_FAILED + close，与 841 的
-        // null/CLOSING 检查同语义优雅降级。
+        // 若主线程 reaper 在读 state 与 markActive/touch 之间并发回收了本 session，捕获异常并发 AUTH_FAILED + close。
         try {
             if (session.state() == SessionState.ISSUED) {
                 sessionManager.markActive(session.id());
@@ -1229,9 +1252,8 @@ public final class WebServer {
             closeAuthFailed(ctx, "session reaped during auth");
             return;
         }
-        // R1：先取消未认证超时任务并 gate——只有成功阻止其运行才注册 ctx。若超时已触发 / 正在
-        // close 此连接，放弃注册，避免把已被 close 4001 的 ctx 写进 wsBySession 致后续 push 静默失败、
-        // 客户端假死。竞态窗口（put↔attr 之间超时触发）由此关闭。
+        // 先取消未认证超时任务并 gate——只有成功阻止其运行才注册 ctx。若超时已触发 / 正在
+        // close 此连接，放弃注册，避免把已被 close 4001 的 ctx 写进 wsBySession 致后续 push 静默失败。
         if (!cancelAuthTimeout(ctx)) {
             log.info("WS auth raced auth-timeout close (sid=" + session.id() + "), abort registration");
             return;  // 连接将被超时任务 close 4001；客户端按 close 重新发起 auth
@@ -1249,15 +1271,11 @@ public final class WebServer {
         String reconnectToken = tokenService.rotate(
                 session.playerUuid(), session.playerName(), session.id());
 
-        // T4：ready payload 中的 projectState 直接由 session 持有的权威状态序列化
+        // ready payload 中的 projectState 直接由 session 持有的权威状态序列化
         ProjectState state = session.projectState();
 
         // 附带 wall 元数据（wallId / alias / lockedAt + ownerUuid + selfUuid + canManageWall）。
-        // 字段 publishedAt 改名 lockedAt。
-        // canManageWall（协议 v8）是服务端算好的授权结论，前端直接消费 ——
-        // 此前前端自行比对 isOwner = (selfUuid === ownerUuid)，那是"在第二处重新推导授权"，
-        // 也正是控制台主体永远拿不到解锁按钮的原因。判据与后端三个 dispatcher 分支共用
-        // SessionManager.canManageWall，授权结论只允许有一个权威。
+        // canManageWall（协议 v8）由服务端统一通过 SessionManager.canManageWall 计算（覆盖 wall owner 与控制台主体）。
         String wallId = session.wallId();
         String alias = null;
         Long lockedAt = null;
@@ -1269,16 +1287,16 @@ public final class WebServer {
                 alias = w.alias();
                 lockedAt = w.publishedAt();  // DB 列名保留 published_at，语义为 lock 时间戳
                 ownerUuid = w.ownerUuid().toString();  // Wall.ownerUuid() 返回 UUID，前端 selfUuid 也是 String
-                canManageWall = ac.haru.hikaricanvas.session.SessionManager.canManageWall(session, w);
+                canManageWall = SessionManager.canManageWall(session, w);
             }
         }
 
-        java.util.LinkedHashMap<String, Object> payload = new java.util.LinkedHashMap<>();
+        LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
         payload.put("sessionId", session.id());
         payload.put("serverVersion", serverVersion);
         payload.put("protocolVersion", ProjectState.PROTOCOL_VERSION);
-        // accepted_v = server 实际同意的 business protocol 版本（来自 auth 中
-        // 协商的 client_v，目前固定 2）。client 收到后应双向校验：accepted_v !== CLIENT_V → 断开。
+        // accepted_v = server 实际同意的 business protocol 版本（来自 auth 中协商的 client_v，当前为 8）。
+        // client 收到后应双向校验：accepted_v !== CLIENT_V → 断开。
         payload.put("accepted_v", negotiatedV);
         payload.put("reconnectToken", reconnectToken);
         payload.put("projectState", state);
@@ -1288,53 +1306,44 @@ public final class WebServer {
         if (ownerUuid != null) payload.put("ownerUuid", ownerUuid);
         payload.put("selfUuid", session.playerUuid().toString());
         payload.put("canManageWall", canManageWall);
-        // TemplateSpec 下发（协议 §3.2），前端无需独立接口
-        // 按 caller owner + canvas.template.use-others 过滤——只下发 builtin/server +
-        // 自己的 user 模板（或持 bypass 时全部），堵住其他玩家私有模板 rawState 经 ready 帧外泄。
+        // TemplateSpec 下发（协议 §3.2），按 caller owner + canvas.template.use-others 过滤。
         payload.put("templates", listTemplates(session.playerUuid(), templateBypass));
-        // 携带 wall 可见的变量快照，前端无需额外 HTTP round-trip
-        // 初始化 VariableStore mirror。改用 listVisibleToWall（不依赖 byWall 倒排索引），
-        // 解决 ready payload 鸡生蛋问题：wall 刚 open 时 Compositor 尚未渲染 → listByWall 返空 →
-        // 前端漏掉 system / schedule / scoreboard / papi 等内置变量 → live preview 出现误报
-        // "变量已删除" 红色 banner。listVisibleToWall 按 namespace 形态判定可见性。
-        // VariableDto 主动剔除 referencedByWalls 字段防泄露。
+        // 携带 wall 可见的变量快照，前端无需额外 HTTP round-trip 初始化 VariableStore mirror。
+        // listVisibleToWall 按 namespace 形态判定可见性（不依赖渲染倒排索引）；VariableDto 剔除 referencedByWalls。
         if (variableStore != null && wallId != null) {
-            java.util.List<ac.haru.hikaricanvas.variable.Variable> vars =
-                    variableStore.listVisibleToWall(wallId);
-            java.util.List<ac.haru.hikaricanvas.variable.VariableDto> dtos =
-                    new java.util.ArrayList<>(vars.size());
-            for (ac.haru.hikaricanvas.variable.Variable v : vars) {
+            List<Variable> vars = variableStore.listVisibleToWall(wallId);
+            List<VariableDto> dtos = new ArrayList<>(vars.size());
+            for (Variable v : vars) {
                 // 注入 userglobal owner 信息供前端 Picker / Panel 区分"我的全局 / 其他全局"
-                dtos.add(ac.haru.hikaricanvas.variable.VariableDto.from(v, variableStore));
+                dtos.add(VariableDto.from(v, variableStore));
             }
             payload.put("variables", dtos);
         } else {
-            payload.put("variables", java.util.List.of());
+            payload.put("variables", List.of());
         }
         // 携带当前 wall 的全部变量别名（fullName → alias 字符串映射），让前端
         // VariableAliasStore 一次性初始化。null wall 或 dao 未配时回空 map。
         if (variableAliasDao != null && wallId != null) {
             payload.put("aliases", variableAliasDao.loadByWall(wallId));
         } else {
-            payload.put("aliases", java.util.Map.of());
+            payload.put("aliases", Map.of());
         }
         // 携带当前 wall 的脚本规则快照（ScriptRule 列表，wire 形态由注解 serializer
         // 决定），让前端 ScriptStore mirror 一次性初始化。null wall 或 store 未配时回空 list。
         payload.put("scripts", (scriptStore != null && wallId != null)
-                ? scriptStore.listByWall(wallId) : java.util.List.of());
+                ? scriptStore.listByWall(wallId) : List.of());
         // 携带当前 wall 的铁路绑定（line + station + direction），让 ScheduleManagerModal
         // 一打开就知道是否走 RailScheduleProvider 路径。未绑定时返 null。
         if (railOpDispatcher != null && wallId != null) {
             try {
                 // 直接 query RailDao（dispatcher 内部已持有）；这里复用 plugin 装配链
-                ac.haru.hikaricanvas.rail.WallRailBinding b =
-                        ac.haru.hikaricanvas.web.RailOpDispatcher.lookupBinding(railOpDispatcher, wallId);
+                WallRailBinding b = RailOpDispatcher.lookupBinding(railOpDispatcher, wallId);
                 // 判定必须与 RailScheduleProvider 的接管条件完全一致：lineId 与 stationId
                 // 都非空才算「走铁路数据源」。只看 lineId 会在「站点被删掉」之后骗人——
                 // 那时 FK 把 station_id 置了 null、provider 已 unregisterWall 交回 ManualSchedule，
                 // 前端却还显示「铁路模式已启用」，服主对着一个不生效的开关调半天。
                 if (b != null && b.lineId() != null && b.stationId() != null) {
-                    java.util.Map<String, Object> bMap = new java.util.LinkedHashMap<>();
+                    Map<String, Object> bMap = new LinkedHashMap<>();
                     bMap.put("wallId", b.wallId());
                     bMap.put("lineId", b.lineId());
                     bMap.put("stationId", b.stationId());
@@ -1442,7 +1451,7 @@ public final class WebServer {
      * ScriptRunner 装配完成后注入；dispatcher 侧 volatile 可见）。
      * scriptStore 未配置（dispatcher 为 null）时 no-op。
      */
-    public void setScriptTestLauncher(ac.haru.hikaricanvas.script.engine.ScriptTestLauncher launcher) {
+    public void setScriptTestLauncher(ScriptTestLauncher launcher) {
         if (scriptOpDispatcher != null) {
             scriptOpDispatcher.setTestLauncher(launcher);
         }
@@ -1488,10 +1497,10 @@ public final class WebServer {
      *
      * <p>从 Jetty Session.getRemoteAddress() 取 client socket peer 地址（不是 Host header，
      * 那是服务器端 hostname）。返回形如 {@code "/127.0.0.1:54321"} 的 InetSocketAddress
-     * toString —— 我们用 {@link java.net.InetSocketAddress#getAddress()} 拿 IP 字符串。
+     * toString —— 我们用 {@link InetSocketAddress#getAddress()} 拿 IP 字符串。
      *
      * <p>反代场景下 client IP 是反代机的，不是真实玩家。需要反代写 {@code X-Forwarded-For}
-     * 并在 nginx/Caddy 配置好。V1 不解析 XFF（避免伪造头攻击）；如果未来要支持，应当
+     * 并在 nginx/Caddy 配置好。当前不解析 XFF（避免伪造头攻击）；如果未来要支持，应当
      * 配 {@code trust-proxy} 白名单。</p>
      *
      * <p>取不到 → 返回 {@code "unknown"}。所有 session 的首次 auth 都会绑到 "unknown"，
@@ -1500,8 +1509,8 @@ public final class WebServer {
      */
     private static String clientIp(WsContext ctx) {
         try {
-            java.net.SocketAddress addr = ctx.session.getRemoteSocketAddress();
-            if (addr instanceof java.net.InetSocketAddress isa && isa.getAddress() != null) {
+            SocketAddress addr = ctx.session.getRemoteSocketAddress();
+            if (addr instanceof InetSocketAddress isa && isa.getAddress() != null) {
                 return isa.getAddress().getHostAddress();
             }
             if (addr != null) return addr.toString();
@@ -1546,7 +1555,7 @@ public final class WebServer {
         outboundGates.remove(sessionId);
         WsContext ctx = wsBySession.remove(sessionId);
         if (auditLog != null) {
-            java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+            LinkedHashMap<String, Object> details = new LinkedHashMap<>();
             details.put("reason", "repeated input rate-limit violations");
             Session s = sessionManager.byId(sessionId);
             String playerUuid = (s == null || s.playerUuid() == null) ? null : s.playerUuid().toString();
@@ -1571,14 +1580,14 @@ public final class WebServer {
     private static String sha256HexShort(String s) {
         if (s == null) return null;
         try {
-            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-            byte[] digest = md.digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(s.getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder(16);
             for (int i = 0; i < 8; i++) {
                 sb.append(String.format("%02x", digest[i] & 0xff));
             }
             return sb.toString();
-        } catch (java.security.NoSuchAlgorithmException e) {
+        } catch (NoSuchAlgorithmException e) {
             return null;
         }
     }

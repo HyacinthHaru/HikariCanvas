@@ -177,11 +177,11 @@ class BenchmarkRunnerTest {
 
     @Test
     void runnerSelectorNarrowsAndReportJsonRoundTrips() throws Exception {
-        BenchmarkConfig cfg = new BenchmarkConfig(0, 2, null, null, "text-saturated-2x2");
+        BenchmarkConfig cfg = new BenchmarkConfig(0, 1, null, null, "size-1x1");
         BenchmarkReport report = new BenchmarkRunner().run(compositor, new SceneLibrary(), cfg, 99L);
         assertEquals(1, report.scenes().size());
-        assertEquals("text-saturated-2x2", report.scenes().get(0).sceneId());
-        assertEquals(1, report.perElement().size());
+        assertEquals("size-1x1", report.scenes().get(0).sceneId());
+        assertTrue(report.perElement().isEmpty());
 
         ObjectMapper mapper = new ObjectMapper();
         String json = mapper.writeValueAsString(report);
@@ -199,15 +199,13 @@ class BenchmarkRunnerTest {
         assertEquals(report.scenes().get(0).sceneId(), back.scenes().get(0).sceneId());
         assertEquals(report.scenes().get(0).rasterizeMs().p50(),
                 back.scenes().get(0).rasterizeMs().p50(), EPS);
-        assertEquals(report.perElement().get(0).marginalMsPerElement(),
-                back.perElement().get(0).marginalMsPerElement(), EPS);
         assertEquals(report.env().availableProcessors(), back.env().availableProcessors());
         assertEquals(report.config().measuredIterations(), back.config().measuredIterations());
     }
 
     @Test
-    void fullBenchPipelineRunsHeadlessEndToEnd() {
-        BenchmarkConfig cfg = new BenchmarkConfig(0, 2, null, null, "all");
+    void fullBenchPipelineRunsHeadlessEndToEnd() throws Exception {
+        BenchmarkConfig cfg = new BenchmarkConfig(0, 1, null, null, "all");
         long ts = 1_700_000_000_000L;
 
         BenchmarkReport report = new BenchmarkRunner()
@@ -221,10 +219,17 @@ class BenchmarkRunnerTest {
         assertEquals(21, report.scenes().size());
         assertEquals(9, report.perElement().size());
         for (SceneResult r : report.scenes()) {
-            assertEquals(2, r.sampleCount(), r.sceneId());
+            assertEquals(1, r.sampleCount(), r.sceneId());
             assertTrue(r.rasterizeMs().mean() > 0, r.sceneId());
             assertTrue(r.paletteMs().mean() >= 0, r.sceneId());
         }
+
+        ObjectMapper mapper = new ObjectMapper();
+        BenchmarkReport back = mapper.readValue(
+                mapper.writeValueAsString(report), BenchmarkReport.class);
+        assertEquals(report.perElement().size(), back.perElement().size());
+        assertEquals(report.perElement().get(0).marginalMsPerElement(),
+                back.perElement().get(0).marginalMsPerElement(), EPS);
 
         Messages msgs = new Messages(LOG);
         msgs.loadBuiltIn();

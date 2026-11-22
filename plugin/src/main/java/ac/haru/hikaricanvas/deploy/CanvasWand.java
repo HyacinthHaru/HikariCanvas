@@ -17,7 +17,7 @@ import java.util.UUID;
  * Canvas Wand 物品工厂 + 识别。
  *
  * <p>物品类型：命名金铲（{@link Material#GOLDEN_SHOVEL}），WorldEdit 风格肌肉记忆。
- * PDC key {@code canvas:wand_owner} 存玩家 UUID 字符串，防止别人捡到后误触。
+ * PDC key {@code hikaricanvas:wand_owner} 存玩家 UUID 字符串，防止别人捡到后误触。
  *
  * <p>PDC namespace 固定 {@code hikaricanvas}（{@code NamespacedKey(plugin,…)} 取插件名小写；
  * 见 {@code data-model.md §3.1}）。</p>

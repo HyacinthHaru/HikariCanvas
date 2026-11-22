@@ -16,11 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P1-E：VariableProviderDaemon 框架单测。
- *
- * <p>用 mock {@link FakeProvider} 验证：注册流程、调度、异常隔离、unregister 取消任务、
- * shutdown 全清。守护线程池，所有 schedule task 在 daemon shutdown 后被 awaitTermination
- * 清掉，单测跑 &lt; 1s。</p>
+ * {@link VariableProviderDaemon} 注册、周期调度、异常隔离与关闭回收单测。
  */
 class VariableProviderDaemonTest {
 

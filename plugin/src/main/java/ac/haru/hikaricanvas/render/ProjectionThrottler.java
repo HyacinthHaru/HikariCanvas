@@ -17,8 +17,8 @@ import java.util.concurrent.ConcurrentMap;
  * <p>契约见 {@code docs/architecture.md §5.1}：
  * <ul>
  *   <li>静止：无 op = 无推送</li>
- *   <li>输入中：5 fps 上限</li>
- *   <li>提交：全量推送（由 SessionManager.commit 另走路径）</li>
+ *   <li>输入中：按 {@code minIntervalMs} 节流合并（默认 5 fps）</li>
+ *   <li>会话关闭前：{@link #flushNow} 同步推送尾帧</li>
  * </ul>
  *
  * <p><b>策略：</b></p>
@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentMap;
  *   <li>session 结束：{@link #discardSession} 取消 pending task、清状态</li>
  * </ul>
  *
- * <p><b>线程：</b> async scheduler + `ConcurrentMap` + per-session `synchronized(bucket)`。
+ * <p><b>线程：</b> async scheduler + {@code ConcurrentMap} + per-session {@code synchronized(bucket)}。
  * 和 CanvasProjector 一致，整条链都不需要主线程。</p>
  */
 // 非 final：测试需可子类化覆盖 submit 做记录型 fake；生产无子类，行为不变。
@@ -66,10 +66,9 @@ public class ProjectionThrottler {
         DirtyRegion pending;
         /**
          * 上次 flush 的时间戳，单位 <b>纳秒</b>（{@link System#nanoTime()} 单调钟读数），
-         * 免疫 NTP 回拨 / VM 时间同步导致的 {@code since} 为负、帧被推迟问题。
+         * 免疫 NTP 回拨 / VM 时间同步导致的差值为负、帧被推迟问题。
          *
-         * <p>注意：{@code nanoTime()} 原点任意（可负），仅差值有意义，故不能像旧
-         * {@code currentTimeMillis} 那样靠初值 0 推断「从未 flush」——首帧立即下发改由
+         * <p>{@code nanoTime()} 原点任意（可负），仅差值有意义；首帧立即下发由
          * {@link #projectedOnce} 标志判定。</p>
          */
         long lastProjectAtNanos;
@@ -147,16 +146,14 @@ public class ProjectionThrottler {
         synchronized (b) {
             b.pending = b.pending == null ? region : b.pending.union(region);
             now = System.nanoTime();
-            // nanoTime 单调，正常情况下 since >= 0；用 Math.max(0, ..) 兜底极端
-            // nanoTime 实现回绕（理论上 ~292 年才回绕，仍防御一手）。
-            long sinceNanos = Math.max(0L, now - b.lastProjectAtNanos);
-            // 首帧立即下发（nanoTime 原点任意，不能靠 lastProjectAtNanos==0 推断）。
-            if (!b.projectedOnce || sinceNanos >= effectiveNanos) {
+            long elapsed = now - b.lastProjectAtNanos;
+            // 首帧立即下发（nanoTime 原点任意，由 projectedOnce 判定）。
+            if (!b.projectedOnce || elapsed >= effectiveNanos) {
                 claimed = claimFlush(sessionId, b, now);
             } else {
                 claimed = null;
                 if (b.flushTask == null) {
-                    long waitMs = Math.max(1L, (effectiveNanos - sinceNanos) / MS_TO_NANOS);
+                    long waitMs = Math.max(1L, (effectiveNanos - elapsed) / MS_TO_NANOS);
                     long delayTicks = Math.max(1L, (waitMs + 49) / 50);
                     b.flushTask = Bukkit.getScheduler().runTaskLaterAsynchronously(
                             plugin, () -> onScheduledFlush(sessionId), delayTicks);
@@ -234,36 +231,17 @@ public class ProjectionThrottler {
      * {@code lastProjectAt} 不变（不推进时间基），让下一次 submit 自动重投递该区域，兑现
      * architecture.md §5.1.5「session 关闭前最后一帧 100% 正确」承诺。</p>
      *
-     * <p><b>数据竞争修复：</b>{@code project()} 内 {@code CanvasCompositor.rasterize}
-     * 会遍历 {@code ProjectState} 的 layers / 各 layer 的 elements live ArrayList。这些列表的
-     * 结构修改全部发生在 {@link EditSession} 的 {@code synchronized(this)} mutator 里，而
-     * rasterize 此前不持该监视器——两侧无共享锁，并发 WS 编辑 op 与变量驱动重画会对同一
-     * ArrayList 边改边迭代，抛 {@code ConcurrentModificationException} / 撕裂读。
-     * {@link #projectUnderEditLock} 在 {@code session.editSession()} 监视器内调
-     * {@code project()}，让 rasterize 入口的 {@code List.copyOf} 浅拷贝与 mutator 互斥
-     * （拷贝完成后即是不可变快照，后续迭代不再需要锁）；editSession 为 null（SELECTING 阶段）
-     * 时无 live 列表可竞争，直接 project。</p>
-     *
-     * <p><b>锁序（0.9.17 修正）：</b>本类<b>绝不</b>在持 Bucket 锁时去取 EditSession 锁。
-     * 此处原先的注释声称「锁顺序恒为 Bucket → EditSession，dispatcher 在 EditSession mutator
-     * 返回<b>后</b>才调 submit，从不反向」——这与实现不符，且反向臂真实存在：
-     * {@code EditSession.setUserVariableValue}（以及另外 9 个 {@code *Variable*} 方法）是
-     * {@code synchronized}，它在监视器内同步调 {@code VariableStore.setValue} →
-     * {@code notifyReferencingWalls} → {@code wallDirtyCallback} →
-     * {@code SessionManager.submitFullCanvasDirtyByWallAndReport} → {@link #submit} →
-     * {@code synchronized(bucket)}。于是 Jetty 线程持 EditSession 等 Bucket、投影线程持
-     * Bucket 等 EditSession，互等即死锁；死锁后 {@code /canvas cancel} 与 SessionReaper
-     * 经 {@code preForgetHook.flushNow} 取同一 Bucket 锁，<b>主线程永久冻结</b>。
-     *
-     * <p>修法是把投影移出 Bucket 锁（claim / perform 两段式），让「持 Bucket 锁」与
-     * 「持 EditSession 锁」不再有交集——这样无论调用方处在哪个监视器里都不会成环，
-     * 比逐个修正 10 个 EditSession 方法的调用时机更稳。同一 session 的投影串行由
-     * {@code Bucket.projecting} 标志继续保证。</p>
+     * <p><b>并发与锁序不变式：</b>{@link #projectUnderEditLock} 在 {@code session.editSession()}
+     * 监视器内调用 {@code project()}，使 {@code CanvasCompositor.rasterize} 入口对 layers / elements
+     * 的 {@code List.copyOf} 浅拷贝与 {@link EditSession} mutator 互斥。本类<b>绝不</b>在持有
+     * {@code Bucket} 锁时获取 {@link EditSession} 锁（claim / perform 两段式，两把锁无交集），
+     * 从而消除与 {@code EditSession.*Variable* → VariableStore → submit} 路径的反向锁序死锁；
+     * 同一会话的投影串行由 {@code Bucket.projecting} 标志保证。</p>
      */
     private DirtyRegion claimFlush(String sessionId, Bucket b, long nowNanos) {
         DirtyRegion toProject = b.pending;
         if (toProject == null) {
-            // 无脏区域：推进时间基即可（保持原有「空 flush 也刷新窗口」语义）。
+            // 无脏区域：推进时间基即可（空 flush 仍刷新节流窗口）。
             b.lastProjectAtNanos = nowNanos;
             return null;
         }
@@ -286,8 +264,7 @@ public class ProjectionThrottler {
             return null;
         }
         if (b.projecting) {
-            // 已有一次投影在飞行中。脏区域留在 pending，由那次投影收尾时续排，
-            // 保证同一 session 的投影仍然串行（原本靠 Bucket 监视器串行）。
+            // 已有一次投影在飞行中。脏区域留在 pending，由那次投影收尾时续排，保证同一会话投影串行。
             return null;
         }
         // 认领这批脏区域：清空 pending 让投影期间新来的 submit 并入下一批。
@@ -300,7 +277,7 @@ public class ProjectionThrottler {
      * 真正执行投影 + 结果回写。<b>调用方必须已经释放 {@code b} 的监视器。</b>
      *
      * <p>见 {@link #claimFlush} 的锁序说明——本方法内部会取 {@link EditSession} 监视器，
-     * 若调用方仍持 Bucket 锁就会重新引入 ABBA 死锁。</p>
+     * 若调用方仍持 Bucket 锁就会引入 ABBA 死锁。</p>
      */
     private void performFlush(String sessionId, Bucket b, DirtyRegion toProject, long nowNanos) {
         Session s = sessionFor(sessionId);
@@ -310,11 +287,8 @@ public class ProjectionThrottler {
                 projectUnderEditLock(s, toProject);
             }
         } catch (Throwable t) {
-            // catch Throwable 而非 Exception：畸形元素（如 glow.radius 超大）会让渲染器抛
-            // OutOfMemoryError 而非 Exception，此前 Error 直接冒泡出去，pending 既不并回也不
-            // 清空，下一次 submit 仍以同一畸形 state 重试 → 每帧反复大分配。
-            // OOM 之外的 Error（StackOverflow / LinkageError 等）同样只记不抛：
-            // 让单面墙的畸形数据不至于打死整条投影线程。
+            // 捕获 Throwable（含 OutOfMemoryError / StackOverflowError 等）：记录失败并纳入熔断计数，
+            // 避免 Error 冒泡导致单面墙畸形数据打死投影线程或每帧无上限重试大分配。
             failure = t;
         }
         synchronized (b) {
@@ -341,8 +315,7 @@ public class ProjectionThrottler {
                             + " err=" + failure.getMessage());
                 }
             }
-            // 投影期间新并入的脏区域此刻没有任何人负责，补排一次尾帧（原实现里这批脏区域
-            // 会被同一个持锁的 flush 顺带处理，出锁投影后必须显式续排）。
+            // 出锁投影期间新并入的脏区域在此显式补排一次尾帧。
             if (b.pending != null && b.flushTask != null) {
                 return;
             }

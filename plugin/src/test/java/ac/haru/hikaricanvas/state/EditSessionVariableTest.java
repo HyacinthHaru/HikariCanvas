@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P1-B：EditSession 的 5 个 variable.* op 方法单测。
+ * {@link EditSession} 变量操作（per-wall {@code user:*} 与全局 {@code userglobal/*}）单元测试。
  *
  * <p>覆盖：</p>
  * <ul>
@@ -180,7 +180,7 @@ class EditSessionVariableTest {
         // 模拟："另一个 wall（w-other）也引用了本变量" — markWallReferences 后变量 set
         // 时 wallDirtyCallback 应被对所有 referencer 触发，包括同 wall。
         store.markWallReferences(WALL,
-                java.util.Set.of("user:" + WALL + "/score"));
+                Set.of("user:" + WALL + "/score"));
 
         es.setUserVariableValue(store, WALL, "user:" + WALL + "/score", "9");
         assertEquals(List.of(WALL), dirtyWalls);
@@ -207,9 +207,8 @@ class EditSessionVariableTest {
                 "user:" + WALL + "/x", null);
         EditSession.OpResult.Ok ok = assertInstanceOf(EditSession.OpResult.Ok.class, r);
         assertNull(store.get("user:" + WALL + "/x").orElseThrow().currentValue());
-        // P3-9：null 清值改用 replace(path, null)（与 SessionManager VALUE_SET 同形，
-        // 前端 applyVariablePatches 的 replace && sub==='currentValue' 分支可处理），
-        // 不再发前端无对应分支的 remove .../currentValue。
+        // null 清值统一发 replace(path, null)（与 SessionManager VALUE_SET 同形，
+        // 前端 applyVariablePatches 的 replace && sub==='currentValue' 分支处理）。
         assertEquals("replace", ok.patch().ops().get(0).op());
         assertTrue(ok.patch().ops().get(0).path().endsWith("/currentValue"));
         assertNull(ok.patch().ops().get(0).value());
@@ -321,7 +320,7 @@ class EditSessionVariableTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.4.3 全局用户变量路径
+    //  全局用户变量路径（userglobal/*）
     // ──────────────────────────────────────────────────────────
 
     private static final UUID ALICE = UUID.fromString("11111111-1111-1111-1111-111111111111");
@@ -440,7 +439,7 @@ class EditSessionVariableTest {
         }
     }
 
-    /** 0.4.3：UserGlobalVariableDao 内存 fake；最小够测试用。 */
+    /** UserGlobalVariableDao 内存 fake；最小够测试用。 */
     private static final class FakeGlobalDao extends UserGlobalVariableDao {
         final List<String> upsertedNames = new ArrayList<>();
         final Set<String> deletedNames = new HashSet<>();

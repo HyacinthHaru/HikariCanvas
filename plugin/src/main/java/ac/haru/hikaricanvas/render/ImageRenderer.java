@@ -8,7 +8,9 @@ import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.awt.Shape;
+import java.awt.Stroke;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Area;
 import java.awt.geom.Path2D;
@@ -16,6 +18,7 @@ import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.ConvolveOp;
 import java.awt.image.Kernel;
+import java.util.Arrays;
 
 /**
  * ImageElement 绘制：按 hash 加载文件 + 可选 mask 裁切 + bbox 拉伸。dither 由
@@ -73,9 +76,8 @@ public final class ImageRenderer implements ElementRenderer {
      * 关键帧插值还能把 w/h 顶过 MAX_DIM。裁到画布内之后最坏就是画布大小。向外多扩
      * {@code 3 × featherPx}（3 遍模糊，每遍影响半径 featherPx）保证可见区内像素与不裁剪时逐位相同。</p>
      *
-     * <p><b>降级而不是不画：</b>裁完面积仍超 {@link #MAX_FEATHER_PIXELS} 时走硬边 clip + 直接画原图
-     * —— O(1) 内存。以前这里是直接 {@code return}，
-     * 后端整张图消失、前端照常显示，双端分叉。中途抛异常时同样降级。</p>
+     * <p><b>降级而不是不画：</b>裁完面积仍超 {@link #MAX_FEATHER_PIXELS} 或中途异常时，
+     * 降级为硬边 clip + 直接画原图（O(1) 内存），避免后端整张图消失造成双端分叉。</p>
      */
     private static void drawWithFeather(Graphics2D g, ImageElement im, BufferedImage src, RenderContext ctx) {
         int w = im.w();
@@ -83,7 +85,7 @@ public final class ImageRenderer implements ElementRenderer {
         Mask mask = im.mask();
         int featherPx = mask == null ? 0 : mask.featherPxOrZero();
 
-        java.awt.Rectangle crop = featherBufferRect(g, w, h, featherPx);
+        Rectangle crop = featherBufferRect(g, w, h, featherPx);
         if (crop == null) {
             // 超上限 / 读不到画布范围 —— 降级硬边，别硬分配也别整张图不画
             drawHardEdgeFallback(g, im, src, ctx);
@@ -152,15 +154,15 @@ public final class ImageRenderer implements ElementRenderer {
      *
      * @return 可分配矩形；{@code isEmpty()} = 完全在画布外（不画）；{@code null} = 超上限 / 无从裁剪，调用方降级
      */
-    static java.awt.Rectangle featherBufferRect(Graphics2D g, int w, int h, int featherPx) {
-        java.awt.Rectangle full = new java.awt.Rectangle(0, 0, w, h);
-        java.awt.Rectangle canvas = CanvasCompositor.visibleBounds(g);
-        java.awt.Rectangle crop;
+    static Rectangle featherBufferRect(Graphics2D g, int w, int h, int featherPx) {
+        Rectangle full = new Rectangle(0, 0, w, h);
+        Rectangle canvas = CanvasCompositor.visibleBounds(g);
+        Rectangle crop;
         if (canvas == null) {
             // 拿不到画布范围（直接拿裸 Graphics2D 调 renderer 的路径）：只能退回全尺寸
             crop = full;
         } else {
-            java.awt.Rectangle grown = new java.awt.Rectangle(canvas);
+            Rectangle grown = new Rectangle(canvas);
             int pad = 3 * Math.max(0, featherPx) + 1;   // 3 遍模糊，每遍影响半径 featherPx
             grown.grow(pad, pad);
             crop = full.intersection(grown);
@@ -185,10 +187,8 @@ public final class ImageRenderer implements ElementRenderer {
      * 盒滤波模糊（box blur，3 次近似高斯）。仅对 alpha 通道关键，但本实现对 ARGB
      * 整体跑——更简洁且性能差距可忽略。
      *
-     * <p><b>用可分离 1D 核</b>（水平一遍 + 垂直一遍），每像素 {@code O(k)}。原来用
-     * {@code (2r+1)²} 二维核：{@code r=32} 时每像素 4225 次乘加、跑 3 遍，500×500 元素就是
-     * 30 亿次运算/帧，而这段跑在编辑会话锁里。二维均值核本身就是两个 1D 均值核的卷积，
-     * 拆开是数学等价的。</p>
+     * <p><b>用可分离 1D 核</b>（水平一遍 + 垂直一遍，与二维均值核数学等价），
+     * 每像素复杂度 {@code O(k)} 而非 {@code O(k²)}，避免大半径在编辑会话锁内耗时飙升。</p>
      *
      * @param src     ARGB 输入图
      * @param radius  半径（像素）；0 / 负值直接 return src
@@ -202,7 +202,7 @@ public final class ImageRenderer implements ElementRenderer {
         int kSize = 2 * r + 1;
         float kVal = 1f / kSize;
         float[] kernel = new float[kSize];
-        java.util.Arrays.fill(kernel, kVal);
+        Arrays.fill(kernel, kVal);
         ConvolveOp horizontal = new ConvolveOp(new Kernel(kSize, 1, kernel), ConvolveOp.EDGE_NO_OP, null);
         ConvolveOp vertical = new ConvolveOp(new Kernel(1, kSize, kernel), ConvolveOp.EDGE_NO_OP, null);
         for (int i = 0; i < passes; i++) {
@@ -269,7 +269,7 @@ public final class ImageRenderer implements ElementRenderer {
      */
     private static void drawImagePlaceholder(Graphics2D g, ImageElement im) {
         Color prev = g.getColor();
-        java.awt.Stroke prevStroke = g.getStroke();
+        Stroke prevStroke = g.getStroke();
         try {
             g.setColor(new Color(0xAAAAAA));
             g.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,

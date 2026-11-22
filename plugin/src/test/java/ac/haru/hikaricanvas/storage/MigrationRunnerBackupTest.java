@@ -11,7 +11,7 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** 0.9.1：WAL 安全 auto-backup —— 备份在迁移前发生、含已提交（可能仍在 WAL）的数据、是 pre-migration schema。 */
+/** WAL 安全 auto-backup 单测：备份在迁移前发生、含已提交（可能仍在 WAL）的数据、保持 pre-migration schema。 */
 class MigrationRunnerBackupTest {
 
     private Path tmpDir;

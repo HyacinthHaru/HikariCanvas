@@ -1,20 +1,19 @@
 package ac.haru.hikaricanvas.web;
 
-import io.javalin.http.Context;
-import io.javalin.http.UploadedFile;
 import ac.haru.hikaricanvas.canvasfile.CanvasImportException;
 import ac.haru.hikaricanvas.canvasfile.ImportResult;
 import ac.haru.hikaricanvas.canvasfile.ProjectImporter;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
-import org.bukkit.Bukkit;
-import org.bukkit.entity.Player;
+import io.javalin.http.Context;
+import io.javalin.http.UploadedFile;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Map;
 import java.util.Objects;
-import java.util.UUID;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.logging.Level;
@@ -58,9 +57,6 @@ public final class ProjectImportHandler {
     private final ProjectImporter importer;
     /**
      * 会话级 IP 绑定用（{@code security.md §2.5}）；测试构造传 null = 跳过该检查。
-     *
-     * <p>WS 帧每一条都过 {@code bindOrCheckIp}，而 HTTP 面此前完全没接——token 泄漏后
-     * 异地重放可以直接 POST 一整个工程覆盖别人的画布。</p>
      */
     private final SessionManager sessionManager;
 
@@ -68,14 +64,9 @@ public final class ProjectImportHandler {
      * 生产构造：sessionId 经 {@link SessionManager#byId(String)} 解析，
      * 权限经 {@link MainThreadPerms} <b>在主线程</b>解析（离线 / 超时 fail-closed）。
      *
-     * <p>权限判定必须 hop 主线程：{@code Bukkit.getPlayer(UUID)}（读 join/quit 时 mutate 的
-     * 在线表）与 {@code Player.hasPermission}（读 LuckPerms reload 时主线程重算的
-     * PermissibleBase）都是主线程专用 API，而本 handler 跑在 Jetty 线程。原实现直接裸调，
-     * 与 7 个 WS dispatcher 早已统一的纪律不一致——那 7 个改了，HTTP 端点漏了。</p>
-     *
      * <p>{@code canvas.edit} 在 {@code paper-plugin.yml} 里 default=true，但本端点
      * <b>不走</b> default-true 兜底：导入会整体替换画布内容，离线身份不该有这个能力，
-     * 保持原有的「离线即拒」语义。</p>
+     * 保持「离线即拒」语义。</p>
      */
     public ProjectImportHandler(SessionManager sessionManager, ProjectImporter importer) {
         this(s -> Objects.requireNonNull(sessionManager, "sessionManager").byId(s),
@@ -106,13 +97,11 @@ public final class ProjectImportHandler {
     }
 
     /**
-     * 宿主插件实例。用 {@code getProvidingPlugin} 而不是加构造参数——装配层
-     * （{@code WebServer}）的签名不动，改动面收在本文件内。
-     * 单测环境（无 Bukkit server）返回 null，{@link MainThreadPerms} 会退回直接调用。
+     * 宿主插件实例。单测环境（无 Bukkit server）返回 null，{@link MainThreadPerms} 会退回直接调用。
      */
-    private static org.bukkit.plugin.Plugin resolveHostPlugin() {
+    private static Plugin resolveHostPlugin() {
         try {
-            return org.bukkit.plugin.java.JavaPlugin.getProvidingPlugin(ProjectImportHandler.class);
+            return JavaPlugin.getProvidingPlugin(ProjectImportHandler.class);
         } catch (Throwable t) {
             return null;
         }
@@ -137,9 +126,7 @@ public final class ProjectImportHandler {
             return;
         }
 
-        // 2) 会话级 IP 绑定（security.md §2.5）。WS 帧每条都查，HTTP 面此前完全没接——
-        // token 泄漏后异地重放可以直接 POST 一整个工程覆盖别人的画布。
-        // 与 WS 侧同语义：首次绑定，之后不一致即拒；NO_SESSION 交给上面那道检查兜（走不到这）。
+        // 2) 会话级 IP 绑定（security.md §2.5）：首次绑定，之后不一致即拒。
         if (sessionManager != null) {
             String callerIp = ctx.ip();
             if (sessionManager.bindOrCheckIp(sessionId, callerIp)

@@ -178,7 +178,7 @@ describe('time <-> pixel mapping', () => {
     });
 });
 
-describe('formatTimeLabel (P4)', () => {
+describe('formatTimeLabel', () => {
     it('uses ms below 1s', () => {
         expect(formatTimeLabel(0)).toBe('0ms');
         expect(formatTimeLabel(500)).toBe('500ms');
@@ -190,7 +190,7 @@ describe('formatTimeLabel (P4)', () => {
     });
 });
 
-describe('formatClock (P4.5 fix Bug1 定宽时钟)', () => {
+describe('formatClock（定宽时钟）', () => {
     it('zero-pads seconds + millis to fixed m:ss.mmm', () => {
         expect(formatClock(0)).toBe('0:00.000');
         expect(formatClock(2333)).toBe('0:02.333');
@@ -207,7 +207,7 @@ describe('formatClock (P4.5 fix Bug1 定宽时钟)', () => {
     });
 });
 
-describe('computeRulerTicks (P4)', () => {
+describe('computeRulerTicks', () => {
     it('returns [] for degenerate input', () => {
         expect(computeRulerTicks(0, 0.1, 100)).toEqual([]);
         expect(computeRulerTicks(1000, 0, 100)).toEqual([]);
@@ -225,7 +225,7 @@ describe('computeRulerTicks (P4)', () => {
     });
 });
 
-describe('aggregateTransformKeyframes (P4.5 整体关键帧)', () => {
+describe('aggregateTransformKeyframes（整体关键帧）', () => {
     function tlWith(tracks: Record<string, Keyframe[]>): Timeline {
         return {
             id: 'tl-1', name: 't', durationMs: 1000, fps: 20, loopMode: 'loop',
@@ -272,7 +272,7 @@ describe('aggregateTransformKeyframes (P4.5 整体关键帧)', () => {
     });
 });
 
-describe('planTransformUpsert (P4.5b 自动加帧计划)', () => {
+describe('planTransformUpsert（自动加帧计划）', () => {
     it('all-add when no keyframes exist at timeMs, values from element current geometry', () => {
         const rect = mkRect();   // x10 y20 w30 h40 rot0, opacity 缺省→1
         const plan = planTransformUpsert(mkTimeline({}), rect, 0);
@@ -322,7 +322,7 @@ describe('planTransformUpsert (P4.5b 自动加帧计划)', () => {
     });
 });
 
-describe('applyDragOverride (P4.5b 拖动期跟手覆盖)', () => {
+describe('applyDragOverride（拖动期跟手覆盖）', () => {
     function mkState(elements: Element[]): ProjectState {
         return {
             version: 3,
@@ -369,7 +369,7 @@ describe('applyDragOverride (P4.5b 拖动期跟手覆盖)', () => {
     });
 });
 
-describe('trigger helpers (P5)', () => {
+describe('trigger helpers', () => {
     it('triggerNeedsVariable: 仅 variableChange / schedule 需变量', () => {
         expect(triggerNeedsVariable('manual')).toBe(false);
         expect(triggerNeedsVariable('variableChange')).toBe(true);
@@ -391,7 +391,7 @@ describe('trigger helpers (P5)', () => {
     });
 });
 
-describe('groupsInMarquee (P4.5b 框选批量选中)', () => {
+describe('groupsInMarquee（框选批量选中）', () => {
     // pxPerMs=0.1 → timeMs 0→x0, 500→x50, 1000→x100；rowH=28 → 行中线 i*28+14
     const rows: MarqueeRowView[] = [
         { kind: 'element', elementId: 'e-1', groups: [{ timeMs: 0 }, { timeMs: 1000 }] }, // i0 yc14

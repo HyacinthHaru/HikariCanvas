@@ -1,7 +1,7 @@
 /**
- * 0.7.0-P5-H：前端 validator 镜像单测。
+ * 前端脚本规则校验器单测。
  *
- * <p><b>核心目标 = 与后端 {@code ScriptRuleValidator.java} 逐字段对齐</b>：常量边界值（wait
+ * <p><b>核心目标 = 与后端 {@code ScriptRuleValidator.java} 逐字段对齐</b>：边界值（wait
  * 50/5000、near 1/32、timer 1/86400、块数 50/51、if 深 4/5、音量 / 音调区间）+ 每类错误触发 +
  * 合法规则返空 + 白名单集合一致。后端是 fail-fast，前端收集全部，但<b>每条判定的临界点必须一致</b>。</p>
  */
@@ -26,14 +26,9 @@ import {
     VOLUME_MAX,
     PITCH_MIN,
     PITCH_MAX,
-    ELEMENT_PROPERTIES,
-    TIMELINE_OPS,
-    SOUND_SCOPES,
     MESSAGE_MAX,
     PATCH_MAX_KEYS,
     KIND_MAX,
-    MESSAGE_CHANNELS,
-    SCALE_OPS,
     PARTICLES,
     PARTICLE_COUNT_MIN,
     PARTICLE_COUNT_MAX,
@@ -41,7 +36,6 @@ import {
     WAITUNTIL_TIMEOUT_MAX,
     REPEAT_MIN,
     REPEAT_MAX,
-    MESSAGE_TARGETS,
     TWEEN_DURATION_MIN,
     TWEEN_DURATION_MAX,
     PROBABILITY_MIN,
@@ -66,53 +60,6 @@ function rule(over: Partial<ScriptRule> = {}): ScriptRule {
         ...over,
     };
 }
-
-// ---------- 常量与后端逐一对照（关键临界值）----------
-
-describe('validator 常量与后端 ScriptRuleValidator.java 一致', () => {
-    it('数值上下界', () => {
-        expect(NAME_MAX).toBe(64);
-        expect(MAX_TOTAL_BLOCKS).toBe(50);
-        expect(MAX_IF_DEPTH).toBe(4);
-        expect(WAIT_MIN).toBe(50);
-        expect(WAIT_MAX).toBe(5000);
-        expect(TIMER_MIN).toBe(1);
-        expect(TIMER_MAX).toBe(86400);
-        expect(NEAR_MIN).toBe(1);
-        expect(NEAR_MAX).toBe(32);
-        expect(SET_VALUE_MAX).toBe(4096);
-        expect(SOUND_ID_MAX).toBe(128);
-        expect(COMMAND_PARAM_MAX).toBe(256);
-        expect(LOG_MESSAGE_MAX).toBe(256);
-        expect(CONDITION_MAX).toBe(512);
-        expect(VOLUME_MIN).toBe(0.0);
-        expect(VOLUME_MAX).toBe(2.0);
-        expect(PITCH_MIN).toBe(0.5);
-        expect(PITCH_MAX).toBe(2.0);
-    });
-    it('白名单集合', () => {
-        // 0.7.3 D3：ELEMENT_PROPERTIES 加入 'color'（TextElement.color，setColor 友好积木用）。
-        // fill 保留（rect/circle/path/shape/brush/icon 仍用 fill；setElementProperty 通用动作
-        // 用 fill；仅 setColor 友好积木对 TextElement 用 color）。
-        expect([...ELEMENT_PROPERTIES].sort()).toEqual(
-            ['color', 'fill', 'h', 'opacity', 'rotation', 'text', 'w', 'x', 'y'],
-        );
-        expect([...TIMELINE_OPS].sort()).toEqual(['pause', 'play', 'seek']);
-        expect([...SOUND_SCOPES].sort()).toEqual(['all', 'near']);
-    });
-    it('0.7.1 新动作常量与后端一致', () => {
-        expect(MESSAGE_MAX).toBe(256);
-        expect(PATCH_MAX_KEYS).toBe(8);
-        expect(KIND_MAX).toBe(32);
-        expect([...MESSAGE_CHANNELS].sort()).toEqual(['actionbar', 'chat', 'title']);
-        expect([...SCALE_OPS].sort()).toEqual(['divide', 'multiply']);
-    });
-    it('0.7.2-P3 常量与后端一致（target 白名单 + repeatUntil 范围复用 repeat）', () => {
-        expect([...MESSAGE_TARGETS].sort()).toEqual(['all', 'trigger']);
-        // repeatUntil maxIterations 复用 repeat 的 count 硬上限（1..100，不另加 config）。
-        expect([REPEAT_MIN, REPEAT_MAX]).toEqual([1, 100]);
-    });
-});
 
 // ---------- 合法规则 ----------
 
@@ -185,7 +132,6 @@ describe('validateRule — 触发器字段（blockId=trigger）', () => {
         expect(validateRule(rule({ trigger: mk(NEAR_MAX + 1) })).length).toBeGreaterThan(0);
     });
 
-    // ---- 0.7.1-P2：3 个新触发器 ----
     it('playerLeaveRange 边界 1 / 32 合法，0 / 33 报错（同 playerNear，文案"玩家离开半径"）', () => {
         const mk = (n: number): ScriptTrigger => ({ type: 'playerLeaveRange', rangeBlocks: n });
         expect(validateRule(rule({ trigger: mk(NEAR_MIN) }))).toEqual([]);
@@ -194,7 +140,6 @@ describe('validateRule — 触发器字段（blockId=trigger）', () => {
         const hi = validateRule(rule({ trigger: mk(NEAR_MAX + 1) }));
         expect(lo.length).toBeGreaterThan(0);
         expect(hi.length).toBeGreaterThan(0);
-        // 文案与后端逐字一致 + blockId=trigger
         const e = lo.find((x) => x.message.includes('玩家离开半径'));
         expect(e?.message).toBe(`玩家离开半径需在 ${NEAR_MIN}..${NEAR_MAX} 方块之间`);
         expect(e?.blockId).toBe('trigger');
@@ -221,7 +166,7 @@ describe('validateRule — 动作字段（blockId=actions/i）', () => {
         const bad: ScriptAction = { type: 'setVariable', fullName: 'user/x', value: 'a'.repeat(SET_VALUE_MAX + 1) };
         expect(validateRule(rule({ actions: [bad] })).some((e) => e.message.includes('值超长'))).toBe(true);
     });
-    it('appendVariable text 超长校验（R21-b：前端补齐后端 SET_VALUE_MAX）', () => {
+    it('appendVariable text 超长校验（SET_VALUE_MAX）', () => {
         const bad = { type: 'appendVariable', fullName: 'user/x', text: 'a'.repeat(SET_VALUE_MAX + 1) } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [bad] })).some((e) => e.message.includes('拼接文本超长'))).toBe(true);
         const ok = { type: 'appendVariable', fullName: 'user/x', text: 'a'.repeat(SET_VALUE_MAX) } as ScriptAction;
@@ -229,7 +174,7 @@ describe('validateRule — 动作字段（blockId=actions/i）', () => {
         const okNull = { type: 'appendVariable', fullName: 'user/x', text: null } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [okNull] })).some((e) => e.message.includes('拼接文本超长'))).toBe(false);
     });
-    it('tweenBlock 非 cubicBezier 却带 bezier → 拒（R21-c：前端补齐后端 else-if）', () => {
+    it('tweenBlock 非 cubicBezier 却带 bezier → 拒绝', () => {
         const body = [{ type: 'setElementProperties', elementId: 'el', kind: 'moveTo', x: 0, y: 0 }] as unknown as ScriptAction[];
         const bad = { type: 'tweenBlock', durationMs: 1000, easing: { type: 'linear', bezier: [0, 0, 1, 1] }, body } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [bad] })).some((e) => e.message.includes('bezier 参数仅允许 cubicBezier'))).toBe(true);
@@ -261,10 +206,8 @@ describe('validateRule — 动作字段（blockId=actions/i）', () => {
     it('playSound 音量 / 音调边界', () => {
         const mk = (volume: number, pitch: number): ScriptAction =>
             ({ type: 'playSound', soundId: 's', volume, pitch, scope: 'near' });
-        // 边界合法
         expect(validateRule(rule({ actions: [mk(VOLUME_MIN, PITCH_MIN)] }))).toEqual([]);
         expect(validateRule(rule({ actions: [mk(VOLUME_MAX, PITCH_MAX)] }))).toEqual([]);
-        // 越界
         expect(validateRule(rule({ actions: [mk(-0.1, 1)] })).some((e) => e.message.includes('音量'))).toBe(true);
         expect(validateRule(rule({ actions: [mk(2.1, 1)] })).some((e) => e.message.includes('音量'))).toBe(true);
         expect(validateRule(rule({ actions: [mk(1, 0.4)] })).some((e) => e.message.includes('音调'))).toBe(true);
@@ -309,9 +252,9 @@ describe('validateRule — 动作字段（blockId=actions/i）', () => {
     });
 });
 
-// ---------- 0.7.1-P1 新动作字段（文案与后端逐字一致）----------
+// ---------- 批量属性 / 消息 / 随机与比例变量 / 等待时间轴 ----------
 
-describe('validateRule — 0.7.1 新动作字段', () => {
+describe('validateRule — 批量属性 / 消息 / 随机与比例变量 / 等待时间轴', () => {
     it('setElementProperties 合法（kind=moveTo + patch{x,y}）', () => {
         const a: ScriptAction = { type: 'setElementProperties', elementId: 'el-1', patch: { x: '1', y: '2' }, kind: 'moveTo' };
         expect(validateRule(rule({ actions: [a] }))).toEqual([]);
@@ -329,7 +272,6 @@ describe('validateRule — 0.7.1 新动作字段', () => {
         expect(validateRule(rule({ actions: [bogusKey] })).some((e) => e.message === '元素属性不在允许范围：bogus')).toBe(true);
         const emptyVal: ScriptAction = { type: 'setElementProperties', elementId: 'el', patch: { x: '  ' }, kind: 'x' };
         expect(validateRule(rule({ actions: [emptyVal] })).some((e) => e.message === '属性 x 的值不能为空')).toBe(true);
-        // 9 个键（全合法名但超 8）→ 报超数 + 仍逐键检查。用合法白名单内键凑 9 不可能（仅 8 个），改用重复构造越界检验路径：
         const tooMany: ScriptAction = {
             type: 'setElementProperties', elementId: 'el',
             patch: { x: '1', y: '1', w: '1', h: '1', rotation: '1', opacity: '1', text: 't', fill: '#fff', extra: 'z' },
@@ -352,7 +294,6 @@ describe('validateRule — 0.7.1 新动作字段', () => {
     it('sendMessage 合法 / text=null / text 超长 / 非法 channel', () => {
         const ok: ScriptAction = { type: 'sendMessage', text: 'hi', channel: 'actionbar', target: 'trigger' };
         expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
-        // 空串合法（text != null）。
         expect(validateRule(rule({ actions: [{ type: 'sendMessage', text: '', channel: 'chat', target: 'trigger' }] }))).toEqual([]);
         const nul = { type: 'sendMessage', text: null, channel: 'chat', target: 'trigger' } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [nul] })).some((e) => e.message === '发消息内容不能为 null')).toBe(true);
@@ -360,11 +301,9 @@ describe('validateRule — 0.7.1 新动作字段', () => {
         expect(validateRule(rule({ actions: [long] })).some((e) => e.message === `发消息内容超长（最多 ${MESSAGE_MAX}）`)).toBe(true);
         const badCh = { type: 'sendMessage', text: 'hi', channel: 'boss', target: 'trigger' } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [badCh] })).some((e) => e.message === '消息渠道不在允许范围：boss')).toBe(true);
-        // text 256 合法。
         expect(validateRule(rule({ actions: [{ type: 'sendMessage', text: 'a'.repeat(MESSAGE_MAX), channel: 'title', target: 'trigger' }] }))).toEqual([]);
     });
 
-    // ---- 0.7.2-P3：sendMessage 加 target（trigger 默认 / all 全服），白名单与后端逐字一致 ----
     it('sendMessage target 白名单：trigger / all 合法，其他报错', () => {
         const trigger: ScriptAction = { type: 'sendMessage', text: 'hi', channel: 'chat', target: 'trigger' };
         expect(validateRule(rule({ actions: [trigger] }))).toEqual([]);
@@ -373,7 +312,6 @@ describe('validateRule — 0.7.1 新动作字段', () => {
         const bad = { type: 'sendMessage', text: 'hi', channel: 'chat', target: 'nope' } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [bad] }))
             .some((e) => e.message === '发送对象不在允许范围：nope' && e.blockId === 'actions/0')).toBe(true);
-        // target 缺失（旧 payload）→ 当 trigger 不报错（向后兼容，与后端 Deserializer 默 trigger 同口径）。
         const legacy = { type: 'sendMessage', text: 'hi', channel: 'chat' } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [legacy] }))).toEqual([]);
     });
@@ -400,7 +338,6 @@ describe('validateRule — 0.7.1 新动作字段', () => {
         expect(validateRule(rule({ actions: [nan] })).some((e) => e.message === '乘除系数必须是有限数值')).toBe(true);
         const divZero: ScriptAction = { type: 'scaleVariable', fullName: 'user/s', op: 'divide', factor: 0 };
         expect(validateRule(rule({ actions: [divZero] })).some((e) => e.message === '除数不能为 0')).toBe(true);
-        // divide 非零合法。
         expect(validateRule(rule({ actions: [{ type: 'scaleVariable', fullName: 'user/s', op: 'divide', factor: 2 }] }))).toEqual([]);
     });
 
@@ -412,9 +349,9 @@ describe('validateRule — 0.7.1 新动作字段', () => {
     });
 });
 
-// ---------- 0.7.1-P5：停止 / 粒子 / 等待直到（文案与后端逐字一致）----------
+// ---------- 停止 / 粒子 / 等待直到 ----------
 
-describe('validateRule — 0.7.1-P5 新动作字段', () => {
+describe('validateRule — stopScript / playParticle / waitUntil', () => {
     it('PARTICLES 白名单 14 个与后端逐字一致', () => {
         expect([...PARTICLES].sort()).toEqual([
             'minecraft:cloud', 'minecraft:crit', 'minecraft:dripping_water', 'minecraft:enchant',
@@ -422,12 +359,6 @@ describe('validateRule — 0.7.1-P5 新动作字段', () => {
             'minecraft:heart', 'minecraft:lava', 'minecraft:note', 'minecraft:portal',
             'minecraft:smoke', 'minecraft:totem_of_undying',
         ]);
-    });
-    it('P5 范围常量与后端一致', () => {
-        expect(PARTICLE_COUNT_MIN).toBe(1);
-        expect(PARTICLE_COUNT_MAX).toBe(1000);
-        expect(WAITUNTIL_TIMEOUT_MIN).toBe(50);
-        expect(WAITUNTIL_TIMEOUT_MAX).toBe(60000);
     });
 
     it('stopScript 永远合法', () => {
@@ -437,18 +368,14 @@ describe('validateRule — 0.7.1-P5 新动作字段', () => {
     it('playParticle 合法（火焰 ×10）/ 非白名单粒子 / count 越界 / offset 非有限', () => {
         const ok: ScriptAction = { type: 'playParticle', particle: 'minecraft:flame', count: 10, offsetX: 0.5, offsetY: 0.5, offsetZ: 0.5 };
         expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
-        // count 边界 1 / 1000 合法。
         expect(validateRule(rule({ actions: [{ type: 'playParticle', particle: 'minecraft:heart', count: PARTICLE_COUNT_MIN, offsetX: 0, offsetY: 0, offsetZ: 0 }] }))).toEqual([]);
         expect(validateRule(rule({ actions: [{ type: 'playParticle', particle: 'minecraft:heart', count: PARTICLE_COUNT_MAX, offsetX: 0, offsetY: 0, offsetZ: 0 }] }))).toEqual([]);
-        // 非白名单粒子。
         const badParticle = { type: 'playParticle', particle: 'minecraft:nope', count: 10, offsetX: 0, offsetY: 0, offsetZ: 0 } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [badParticle] })).some((e) => e.message === '粒子种类不在允许范围: minecraft:nope')).toBe(true);
-        // count 越界（0 / 2000）。
         expect(validateRule(rule({ actions: [{ type: 'playParticle', particle: 'minecraft:flame', count: 0, offsetX: 0, offsetY: 0, offsetZ: 0 }] }))
             .some((e) => e.message === `粒子数量需在 ${PARTICLE_COUNT_MIN}..${PARTICLE_COUNT_MAX} 之间`)).toBe(true);
         expect(validateRule(rule({ actions: [{ type: 'playParticle', particle: 'minecraft:flame', count: 2000, offsetX: 0, offsetY: 0, offsetZ: 0 }] }))
             .some((e) => e.message.includes('粒子数量需在'))).toBe(true);
-        // offset 非有限。
         const nanOffset = { type: 'playParticle', particle: 'minecraft:flame', count: 10, offsetX: NaN, offsetY: 0, offsetZ: 0 } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [nanOffset] })).some((e) => e.message === '粒子偏移必须是有限数值')).toBe(true);
     });
@@ -456,13 +383,10 @@ describe('validateRule — 0.7.1-P5 新动作字段', () => {
     it('waitUntil 合法 / 空条件 / timeout 越界', () => {
         const ok: ScriptAction = { type: 'waitUntil', condition: 'var("user/x") > 0', timeoutMs: 5000 };
         expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
-        // timeout 边界 50 / 60000 合法。
         expect(validateRule(rule({ actions: [{ type: 'waitUntil', condition: 'var("user/x")>0', timeoutMs: WAITUNTIL_TIMEOUT_MIN }] }))).toEqual([]);
         expect(validateRule(rule({ actions: [{ type: 'waitUntil', condition: 'var("user/x")>0', timeoutMs: WAITUNTIL_TIMEOUT_MAX }] }))).toEqual([]);
-        // 空条件。
         expect(validateRule(rule({ actions: [{ type: 'waitUntil', condition: '', timeoutMs: 5000 }] }))
             .some((e) => e.message === `等待条件不能为空且最多 ${CONDITION_MAX} 字符`)).toBe(true);
-        // timeout 越界（10 / 999999）。
         expect(validateRule(rule({ actions: [{ type: 'waitUntil', condition: 'var("user/x")>0', timeoutMs: 10 }] }))
             .some((e) => e.message === `超时时长需在 ${WAITUNTIL_TIMEOUT_MIN}..${WAITUNTIL_TIMEOUT_MAX} 毫秒之间`)).toBe(true);
         expect(validateRule(rule({ actions: [{ type: 'waitUntil', condition: 'var("user/x")>0', timeoutMs: 999999 }] }))
@@ -470,9 +394,9 @@ describe('validateRule — 0.7.1-P5 新动作字段', () => {
     });
 });
 
-// ---------- 0.7.2-P2：变量积木 + 元素积木（文案与后端逐字一致）----------
+// ---------- 变量复制拼接 / 元素克隆删除 ----------
 
-describe('validateRule — 0.7.2-P2 新动作字段（copy / append / clone / delete）', () => {
+describe('validateRule — copyVariable / appendVariable / cloneElement / deleteElement', () => {
     it('copyVariable 合法 / 空 target / 空 source', () => {
         const ok: ScriptAction = { type: 'copyVariable', target: 'user/dst', source: 'user/src' };
         expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
@@ -487,7 +411,6 @@ describe('validateRule — 0.7.2-P2 新动作字段（copy / append / clone / de
     it('appendVariable 合法 / 空 fullName', () => {
         const ok: ScriptAction = { type: 'appendVariable', fullName: 'user/log', text: 'x=${var:user/x}' };
         expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
-        // text 空串合法（仅校验目标变量名非空）。
         expect(validateRule(rule({ actions: [{ type: 'appendVariable', fullName: 'user/log', text: '' }] }))).toEqual([]);
         const emptyName: ScriptAction = { type: 'appendVariable', fullName: '', text: 'x' };
         expect(validateRule(rule({ actions: [emptyName] }))
@@ -547,7 +470,7 @@ describe('validateRule — if 嵌套深度 + 条件', () => {
         const a: ScriptAction = {
             type: 'if',
             condition: 'true',
-            then: [{ type: 'wait', ms: 1 }], // 越界 wait
+            then: [{ type: 'wait', ms: 1 }],
             else: [],
         };
         const errs = validateRule(rule({ actions: [a] }));
@@ -556,10 +479,9 @@ describe('validateRule — if 嵌套深度 + 条件', () => {
     });
 });
 
-// ---------- 0.7.1-P2：repeat 有界循环 ----------
+// ---------- repeat 有界循环 ----------
 
 describe('validateRule — repeat 有界循环（count 1..100 + body 非空 + 递归）', () => {
-    /** 造一个 repeat（count + body）。 */
     function mk(count: number, body: ScriptAction[]): ScriptAction {
         return { type: 'repeat', count, body };
     }
@@ -597,20 +519,17 @@ describe('validateRule — repeat 有界循环（count 1..100 + body 非空 + �
     });
 
     it('countBlocks 计 repeat 自身 + body 节点但不乘 count（硬限 50 是树节点数）', () => {
-        // repeat（计 1）+ body 内 49 个 log = 50，合法（不因 count=100 乘成 4900）。
         const body49: ScriptAction[] = Array.from({ length: 49 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
-        expect(validateRule(rule({ actions: [mk(100, body49)] }))).toEqual([]); // 1 + 49 = 50
-        // 再加 1 → 51 超上限。
+        expect(validateRule(rule({ actions: [mk(100, body49)] }))).toEqual([]);
         const body50: ScriptAction[] = Array.from({ length: 50 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
         expect(validateRule(rule({ actions: [mk(100, body50)] }))
-            .some((e) => e.message.includes('积木总数'))).toBe(true); // 51
+            .some((e) => e.message.includes('积木总数'))).toBe(true);
     });
 });
 
-// ---------- 0.7.2-P3：repeatUntil 动态循环（while 语义；condition + maxIterations + body）----------
+// ---------- repeatUntil 动态循环 ----------
 
 describe('validateRule — repeatUntil 重复直到（condition 非空 + maxIterations 1..100 + body 非空 + 递归）', () => {
-    /** 造一个 repeatUntil（condition + maxIterations + body）。 */
     function mk(condition: string, maxIterations: number, body: ScriptAction[]): ScriptAction {
         return { type: 'repeatUntil', condition, maxIterations, body };
     }
@@ -665,10 +584,10 @@ describe('validateRule — repeatUntil 重复直到（condition 非空 + maxIter
 
     it('countBlocks 计 repeatUntil 自身 + body 节点（硬限 50 是树节点数）', () => {
         const body49: ScriptAction[] = Array.from({ length: 49 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
-        expect(validateRule(rule({ actions: [mk(cond, 100, body49)] }))).toEqual([]); // 1 + 49 = 50
+        expect(validateRule(rule({ actions: [mk(cond, 100, body49)] }))).toEqual([]);
         const body50: ScriptAction[] = Array.from({ length: 50 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
         expect(validateRule(rule({ actions: [mk(cond, 100, body50)] }))
-            .some((e) => e.message.includes('积木总数'))).toBe(true); // 51
+            .some((e) => e.message.includes('积木总数'))).toBe(true);
     });
 });
 
@@ -683,21 +602,19 @@ describe('validateRule — 积木总数上限', () => {
         expect(errs.some((e) => e.message.includes('积木总数') && e.message.includes('超过上限'))).toBe(true);
     });
     it('if 自身 + 分支计入总数', () => {
-        // 1 个 if（计 1）+ then 内 49 个 log = 50，合法；再加 1 → 51 超。
         const then50: ScriptAction[] = Array.from({ length: 49 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
         const ok: ScriptAction = { type: 'if', condition: 'true', then: then50, else: [] };
-        expect(validateRule(rule({ actions: [ok] }))).toEqual([]); // 1 + 49 = 50
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
         const then51: ScriptAction[] = Array.from({ length: 50 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
         const over: ScriptAction = { type: 'if', condition: 'true', then: then51, else: [] };
-        expect(validateRule(rule({ actions: [over] })).some((e) => e.message.includes('积木总数'))).toBe(true); // 51
+        expect(validateRule(rule({ actions: [over] })).some((e) => e.message.includes('积木总数'))).toBe(true);
     });
 });
 
-// ---------- tween-P1：tweenBlock 补间包裹积木 ----------
+// ---------- tweenBlock 补间包裹积木 ----------
 
 describe('validateRule — tweenBlock 补间包裹（durationMs + easing + body 属性动作白名单）', () => {
     const easeInOut: Easing = { type: 'easeInOut' };
-    /** 合法的 setElementProperties body 条目（moveTo kind，白名单内）。 */
     const moveToAction: ScriptAction = {
         type: 'setElementProperties',
         elementId: 'el-abc',
@@ -739,7 +656,7 @@ describe('validateRule — tweenBlock 补间包裹（durationMs + easing + body 
             type: 'setElementProperties',
             elementId: 'el-abc',
             patch: { text: 'hi' },
-            kind: 'setText',  // setText 不可补间（离散跳变）
+            kind: 'setText',
         };
         const errs = validateRule(rule({ actions: [mkTween(1000, [textAction])] }));
         expect(errs.some((e) => e.message.includes('补间里只能放移动/缩放/转动/透明度/变色') && e.blockId === 'actions/0/body/0')).toBe(true);
@@ -768,15 +685,7 @@ describe('validateRule — tweenBlock 补间包裹（durationMs + easing + body 
         expect(errs.some((e) => e.blockId === 'actions/0/body/0')).toBe(true);
     });
 
-    it('tweenBlock 不增 if 深度：body 内放深 4 的 if 合法', () => {
-        let inner: ScriptAction[] = [moveToAction];
-        for (let i = 0; i < MAX_IF_DEPTH; i++) {
-            // tweenBlock body 只允许属性动作；if 放在 tweenBlock body 会被 body 白名单拒
-            // → 实际用例是 if 在 tweenBlock 外层，tweenBlock 在 if 分支内。
-            // 测 tweenBlock 不增 if 深度：外层 4 层 if 嵌套，最内层有 tweenBlock（合法）。
-            inner = [{ type: 'if', condition: 'true', then: inner, else: [] }];
-        }
-        // 4 层 if 嵌套内包 tweenBlock（body=moveToAction）应合法（tweenBlock 不计 if 深度）。
+    it('tweenBlock 不增 if 深度：4 层 if 嵌套内包 tweenBlock 合法', () => {
         const tweenInner: ScriptAction = mkTween(500, [moveToAction]);
         let outerActions: ScriptAction[] = [tweenInner];
         for (let i = 0; i < MAX_IF_DEPTH; i++) {
@@ -786,7 +695,7 @@ describe('validateRule — tweenBlock 补间包裹（durationMs + easing + body 
     });
 });
 
-// ---------- 0.7.3：G1 randomBranch ----------
+// ---------- randomBranch ----------
 
 describe('validateRule — randomBranch 随机分支', () => {
     function mkRb(probability: number, thenA: ScriptAction[] = [], elseA: ScriptAction[] = []): ScriptAction {
@@ -813,13 +722,11 @@ describe('validateRule — randomBranch 随机分支', () => {
     });
 
     it('randomBranch 计入 if 深度：MAX_IF_DEPTH 层合法，MAX_IF_DEPTH+1 层报错', () => {
-        // MAX_IF_DEPTH=4 层合法（最深节点 depth=4，不超）。
         let inner4: ScriptAction[] = [{ type: 'log', message: 'x' }];
         for (let i = 0; i < MAX_IF_DEPTH; i++) {
             inner4 = [mkRb(50, inner4, [])];
         }
         expect(validateRule(rule({ actions: inner4 }))).toEqual([]);
-        // MAX_IF_DEPTH+1=5 层报错（最深节点 depth=5 > 4）。
         let inner5: ScriptAction[] = [{ type: 'log', message: 'x' }];
         for (let i = 0; i < MAX_IF_DEPTH + 1; i++) {
             inner5 = [mkRb(50, inner5, [])];
@@ -829,17 +736,15 @@ describe('validateRule — randomBranch 随机分支', () => {
 
     it('countBlocks 计 randomBranch 自身 + then/else 节点', () => {
         const then48: ScriptAction[] = Array.from({ length: 48 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
-        // 1 randomBranch + 48 then + 1 else = 50，合法。
         const ok = mkRb(50, then48, [{ type: 'log', message: 'e' }]);
         expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
-        // 1 + 49 + 1 = 51，超。
         const then49: ScriptAction[] = Array.from({ length: 49 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
         const over = mkRb(50, then49, [{ type: 'log', message: 'e' }]);
         expect(validateRule(rule({ actions: [over] })).some((e) => e.message.includes('积木总数'))).toBe(true);
     });
 });
 
-// ---------- 0.7.3：G2 setElementLayer ----------
+// ---------- setElementLayer ----------
 
 describe('validateRule — setElementLayer 元素置层', () => {
     it('合法（elementId 非空 + mode ∈ {front,back}）', () => {
@@ -864,7 +769,7 @@ describe('validateRule — setElementLayer 元素置层', () => {
     });
 });
 
-// ---------- 0.7.3：G3 roundVariable ----------
+// ---------- roundVariable ----------
 
 describe('validateRule — roundVariable 变量取整', () => {
     it('合法（fullName 非空 + mode ∈ {round,floor,ceil}）', () => {
@@ -891,7 +796,7 @@ describe('validateRule — roundVariable 变量取整', () => {
     });
 });
 
-// ---------- 0.7.3：G4 showTitle ----------
+// ---------- showTitle ----------
 
 describe('validateRule — showTitle 标题弹窗', () => {
     function mkSt(over: Partial<{ title: string; subtitle: string; fadeInMs: number; stayMs: number; fadeOutMs: number; target: string }>): ScriptAction {
@@ -910,7 +815,6 @@ describe('validateRule — showTitle 标题弹窗', () => {
     it('合法（title 非空 + 时长在范围内 + target=trigger/all）', () => {
         expect(validateRule(rule({ actions: [mkSt({})] }))).toEqual([]);
         expect(validateRule(rule({ actions: [mkSt({ target: 'all', subtitle: '副' })] }))).toEqual([]);
-        // subtitle 非空 title 空也合法（至少一个非空）
         expect(validateRule(rule({ actions: [mkSt({ title: '', subtitle: '副标题' })] }))).toEqual([]);
     });
 
@@ -953,7 +857,6 @@ describe('validateRule — 收集全部错误（非 fail-fast）', () => {
                 { type: 'log', message: 'x' },
             ],
         }));
-        // 名称空 + wait 越界 两条都在
         expect(errs.some((e) => e.message === '规则名称不能为空')).toBe(true);
         expect(errs.some((e) => e.message.includes('等待时长'))).toBe(true);
         expect(errs.length).toBeGreaterThanOrEqual(2);

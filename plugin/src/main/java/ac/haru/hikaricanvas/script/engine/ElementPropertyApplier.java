@@ -1,11 +1,14 @@
 package ac.haru.hikaricanvas.script.engine;
 
 import ac.haru.hikaricanvas.state.EditSession;
+import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.state.StrictNumber;
 import ac.haru.hikaricanvas.storage.WallRepo;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -25,10 +28,10 @@ import java.util.regex.Pattern;
  *       （在播 invalidate / 有 activeTimeline refreshAutoPlay / 静态墙 renderStatic 补画）。</li>
  * </ul>
  *
- * <p><b>纪律</b>：两路径都不读 wall lock（CLAUDE.md §lock-state 第 2 条——后端编辑路径
+ * <p><b>纪律</b>：两路径都不读 wall lock（{@code docs/architecture.md §13}——后端编辑路径
  * 与 lock 解耦；layer.locked 仍由 EditSession 语义生效）。值转换：数值属性走
- * {@link StrictNumber}（非数值 → 0.0，与 0.6 变量数值链同语义）；fill 仅收
- * {@code #RRGGBB(AA)}（→ EditSession 内 string→SolidFill 既有兼容路径），其他格式
+ * {@link StrictNumber}（非数值 → 0.0，与变量数值链同语义）；fill 仅收
+ * {@code #RRGGBB(AA)}（→ EditSession 内 string→SolidFill 兼容路径），其他格式
  * error step；property×元素类型错配（如 text 元素给 fill）由 EditSession 校验拒 →
  * error step，链不断。</p>
  *
@@ -155,7 +158,7 @@ public final class ElementPropertyApplier {
         if (rawPatch == null || rawPatch.isEmpty()) {
             return TraceStep.error(blockId, "patch is empty");
         }
-        Map<String, Object> merged = new java.util.LinkedHashMap<>();
+        Map<String, Object> merged = new LinkedHashMap<>();
         try {
             for (Map.Entry<String, String> e : rawPatch.entrySet()) {
                 merged.putAll(buildPatch(e.getKey(), e.getValue()));
@@ -200,7 +203,7 @@ public final class ElementPropertyApplier {
 
     /**
      * 相对移动。dx/dy round 成 int 增量。session 路径锁内原子读改写；
-     * headless 路径读 DB state 当前 x/y + 增量（已知低危竞态同 {@link #applyHeadless} 注释）。
+     * headless 路径读 DB state 当前 x/y + 增量（并发权衡同 {@link #applyHeadless} 注释）。
      */
     public TraceStep applyNudge(String wallId, String blockId, String elementId,
                                 double dx, double dy) {
@@ -343,7 +346,7 @@ public final class ElementPropertyApplier {
             try {
                 outcome = sessionApplier.reorderToEdge(wallId, elementId, mode);
             } catch (RuntimeException e) {
-                log.log(java.util.logging.Level.WARNING,
+                log.log(Level.WARNING,
                         "[script] session reorderToEdge error: wall=" + wallId
                                 + " element=" + elementId + " err=" + e.getMessage(), e);
                 outcome = SessionOutcome.failed(String.valueOf(e.getMessage()));
@@ -388,13 +391,12 @@ public final class ElementPropertyApplier {
     }
 
     /**
-     * 路径 B 通用骨架（clone / delete 共用，照 {@link #applyHeadless} 的 loadById → 临时
+     * 路径 B 通用骨架（clone / delete / setElementLayer 共用，走 loadById → 临时
      * EditSession → updateState → Ticker 链）：{@code op} 在临时 session 上执行一次结构变更
-     * （history / patch 产物即弃，仅 state 落库）。成本 / 已知竞态同 {@link #applyHeadless} 注释。
+     * （history / patch 产物即弃，仅 state 落库）。成本与并发权衡同 {@link #applyHeadless} 注释。
      */
     private TraceStep runHeadless(String wallId, String blockId, String desc,
-                                  java.util.function.Function<EditSession,
-                                          EditSession.OpResult> op) {
+                                  Function<EditSession, EditSession.OpResult> op) {
         if (wallRepo == null) {
             return TraceStep.error(blockId, "headless path unavailable (WallRepo not wired)");
         }
@@ -424,9 +426,9 @@ public final class ElementPropertyApplier {
      * 连续 N 个 setElementProperty 即 N 次往返。上限受 Budget 三闸封顶（10 runs/s ×
      * 50 actions），与编辑器 persistWall 频率同级，可接受。</p>
      *
-     * <p><b>已知竞态（可接受，勿当新缺陷重报）</b>：与编辑器 session open/close 瞬间并发时
-     * （路径 A 查无 session → 本路径写 DB → 新 session 持旧 state 首次 persist 覆盖；或
-     * CLOSING session 的最终 persist 覆盖），脚本改动可能丢一次——单属性、低频低危。</p>
+     * <p><b>并发权衡</b>：与编辑器 session open/close 瞬间并发时（路径 A 查无活跃 session 后
+     * 本路径写 DB，恰逢新 session 持旧快照首次 persist 或 CLOSING session 最终 persist 覆盖），
+     * 单次脚本属性写入可能被编辑器快照覆盖；为避免跨路径全局锁引入阻塞，此处保持无锁最终一致。</p>
      */
     private TraceStep applyHeadless(String wallId, String blockId, String elementId,
                                     String property, Map<String, Object> patch) {
@@ -455,10 +457,9 @@ public final class ElementPropertyApplier {
      *
      * <ul>
      *   <li>在播动画 → {@code invalidate}，Ticker 下一帧自己拿新 state 重渲；</li>
-     *   <li>没在播但挂了时间轴 → {@code refreshAutoPlay}（照 {@code SessionManager.persistWall}）；</li>
-     *   <li><b>静态墙 → {@code renderStatic} 补一次重画</b>。这里原先什么都不做，于是没人开编辑器、
-     *       又没时间轴的墙被脚本改完只有数据库变了，画面要等到重启 / 有人打开编辑器 / 恰好某个
-     *       变量触发重画才更新。补间在静态墙上落末帧走的就是这条 renderStatic 路径，语义一致。</li>
+     *   <li>没在播但挂了时间轴 → {@code refreshAutoPlay}（与 {@code SessionManager.persistWall} 一致）；</li>
+     *   <li><b>静态墙 → {@code renderStatic} 补一次重画</b>：无活跃编辑器且无时间轴的墙落库后
+     *       立即推一帧新画面到地图，与补间在静态墙上落末帧的路径一致。</li>
      * </ul>
      *
      * <p>渲完立刻 {@code clearStaticDiff}：两次调用都投递到 Ticker 的单线程 executor，FIFO 保证
@@ -467,7 +468,7 @@ public final class ElementPropertyApplier {
      *
      * <p>活跃编辑器 session 的墙不会走到这——那条是路径 A，压根不进 headless。</p>
      */
-    private void repaintAfterHeadlessWrite(String wallId, ac.haru.hikaricanvas.state.ProjectState state) {
+    private void repaintAfterHeadlessWrite(String wallId, ProjectState state) {
         if (ticker == null) return;
         if (ticker.isWallAnimating(wallId)) {
             ticker.invalidate(wallId);
@@ -485,14 +486,14 @@ public final class ElementPropertyApplier {
      *
      * <p>本 switch 必须与 {@code ScriptRuleValidator.ELEMENT_PROPERTIES} 逐项对齐——
      * 校验层放行而这里 default 抛错的属性，会让积木保存成功但运行时恒返 error step，
-     * 且补间末帧无法落库（{@code color} 曾漏此 case）。</p>
+     * 且补间末帧无法落库。</p>
      *
      * @throws IllegalArgumentException 属性不在白名单 / fill / color 格式非法
      */
     static Map<String, Object> buildPatch(String property, String value) {
         if (property == null) throw new IllegalArgumentException("property missing");
         return switch (property) {
-            // 数值属性：StrictNumber 严格文法（非数值 → 0.0，与 0.6 变量数值链同语义）
+            // 数值属性：StrictNumber 严格文法（非数值 → 0.0，与变量数值链同语义）
             case "x", "y", "w", "h", "rotation" -> Map.of(property,
                     StrictNumber.clampInt(Math.round(StrictNumber.parse(value))));
             case "opacity" -> Map.of(property,
@@ -503,8 +504,7 @@ public final class ElementPropertyApplier {
                     throw new IllegalArgumentException(
                             "fill only supports #RRGGBB / #RRGGBBAA, got: " + value);
                 }
-                // 字符串形态交给 EditSession（ElementValidator.parseFillNullable
-                // string → SolidFill 的 M11 既有兼容路径）
+                // 字符串形态交给 EditSession（ElementValidator.parseFillNullable string → SolidFill 兼容路径）
                 yield Map.of(property, value);
             }
             case "color" -> {

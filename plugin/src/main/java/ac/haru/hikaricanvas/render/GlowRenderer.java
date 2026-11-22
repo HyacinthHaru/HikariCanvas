@@ -5,9 +5,12 @@ import ac.haru.hikaricanvas.state.Glow;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -54,15 +57,14 @@ public final class GlowRenderer {
     /** 超限警告的限流间隔：畸形工程每帧都会撞上限，不能让它把日志刷爆。 */
     private static final long WARN_INTERVAL_NANOS = 60_000_000_000L;  // 60s
 
-    private static final java.util.concurrent.atomic.AtomicLong LAST_WARN_NANOS =
-            new java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE);
+    private static final AtomicLong LAST_WARN_NANOS = new AtomicLong(Long.MIN_VALUE);
 
     private GlowRenderer() {}
 
     /**
      * 在 {@code mainG} 上画发光效果（叠底层）。
      *
-     * @param mainG  主画布 Graphics2D（TYPE_INT_RGB，drawImage 时自动 SRC_OVER 合成）
+     * @param mainG  主画布 Graphics2D（{@code TYPE_INT_ARGB}，drawImage 时自动 SRC_OVER 合成）
      * @param glyphs TextLayout 产出的字形位置列表
      * @param font   已按 fontSize 派生的 Font（从 {@code mainG.getFont()} 取也可）
      * @param fontId 字体 id（来自 {@code TextElement.fontId}），用于查 advance 表；null 走 canonical
@@ -76,9 +78,7 @@ public final class GlowRenderer {
         // 非旋转 glyph bbox 与前端 PreviewRenderer.renderGlow 用同一套规则：
         //   ascent = round(fontSize * 0.8)，descent = fontSize - ascent，
         //   宽度 = TextLayout.charAdvance(fontId, ch, fontSize)。
-        // 宽度必须与主字形 layout 同源。之前这里用 canonicalCharWidth（ASCII 一律 0.5×fontSize），
-        // 而 layout 早已改用真实 advance —— 于是 W / M 这类宽字符的墨迹超出 bbox 被裁掉右缘光晕，
-        // 前端却按真实字宽算，双端对不上。旋转 glyph（fontSize×fontSize 方格）两端一致，不改。
+        // 宽度与主字形 layout 同源，确保宽字符右缘光晕不被裁切且双端一致；旋转 glyph 取 fontSize×fontSize 方格。
         int fontSize = font.getSize();
         int ascent = (int) Math.round(fontSize * TextLayout.ASCENT_RATIO);
         int descent = fontSize - ascent;
@@ -113,7 +113,7 @@ public final class GlowRenderer {
 
         // 1.5) 与画布求交 + 面积上限（rendering.md §5.3）。外接盒只看字形位置，不受画布约束，
         //      合法参数就能涨到几亿像素；下面这段是唯一的分配闸门。
-        java.awt.Rectangle box = clipToCanvas(mainG, bboxX, bboxY, bboxW, bboxH, pad);
+        Rectangle box = clipToCanvas(mainG, bboxX, bboxY, bboxW, bboxH, pad);
         if (box == null) return;
         bboxX = box.x;
         bboxY = box.y;
@@ -134,7 +134,7 @@ public final class GlowRenderer {
                 if (pg.rotated()) {
                     // 镜像 TextRenderer.drawGlyph rotated 分支 + 前端 renderGlow
                     // translate 到方格中心 → rotate 90° → drawString 在 (-chW/2, ascent - fontSize/2)
-                    java.awt.geom.AffineTransform saved = lg.getTransform();
+                    AffineTransform saved = lg.getTransform();
                     lg.translate(pg.x() - bboxX, pg.baselineY() - bboxY);
                     lg.rotate(Math.PI / 2);
                     int chW = lg.getFontMetrics().stringWidth(pg.ch());
@@ -175,16 +175,16 @@ public final class GlowRenderer {
      * 把字形外接盒裁到「画布向外扩 {@code pad}」的范围内，再卡面积上限。
      *
      * <p>扩 {@code pad}（= {@code radius + 1}）是关键：模糊输出在 (x, y) 只依赖输入
-     * {@code [x-radius, x+radius] × [y-radius, y+radius]}，多留一圈就能保证**画布内每个像素的
-     * 模糊结果与不裁剪时逐位相同**，裁掉的全是画布外看不见的部分。</p>
+     * {@code [x-radius, x+radius] × [y-radius, y+radius]}，多留一圈就能保证<b>画布内每个像素的
+     * 模糊结果与不裁剪时逐位相同</b>，裁掉的全是画布外看不见的部分。</p>
      *
      * @return 可以分配的矩形；{@code null} = 完全在画布外 / 超面积上限，本次不画发光
      */
-    static java.awt.Rectangle clipToCanvas(Graphics2D g, int x, int y, int w, int h, int pad) {
-        java.awt.Rectangle canvas = CanvasCompositor.visibleBounds(g);
-        java.awt.Rectangle box = new java.awt.Rectangle(x, y, w, h);
+    static Rectangle clipToCanvas(Graphics2D g, int x, int y, int w, int h, int pad) {
+        Rectangle canvas = CanvasCompositor.visibleBounds(g);
+        Rectangle box = new Rectangle(x, y, w, h);
         if (canvas != null) {
-            java.awt.Rectangle grown = new java.awt.Rectangle(canvas);
+            Rectangle grown = new Rectangle(canvas);
             grown.grow(pad, pad);
             box = box.intersection(grown);
             if (box.isEmpty()) return null;

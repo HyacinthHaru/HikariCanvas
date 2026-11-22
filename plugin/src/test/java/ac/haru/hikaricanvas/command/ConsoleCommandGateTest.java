@@ -14,19 +14,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.9.19：{@code canvas open / list / alias / delete / cancel} 的 sender 白名单。
+ * {@code canvas open / list / alias / delete / cancel} 的 sender 白名单。
  *
  * <p>白名单是 <b>Player + ConsoleCommandSender</b>，<b>命令方块必须被排除</b>。</p>
  *
- * <p>为什么不能图省事写成 {@code src.getSender().hasPermission(...)}：那样命令方块也能跑
- * {@code canvas open}，而这条命令会回显含 token 的编辑器链接 —— token 会被打进方块输出 /
- * 世界数据，门槛远低于控制台日志，而且服主完全无从察觉。控制台链接入日志是经评估接受的
- * 折衷（{@code docs/security.md §2.2}），命令方块<b>不在</b>那个折衷范围内。</p>
- *
- * <p>用 {@link Proxy} 伪造 sender：本仓的 MockBukkit 是死依赖（全仓引用皆注释），
- * 而这些接口方法极多、手写 stub 不现实。Proxy 只需答 {@code hasPermission}。</p>
+ * <p>命令方块若能执行 {@code canvas open}，回显的含 token 编辑器链接会进入方块输出与世界数据，
+ * 安全边界远低于控制台日志（{@code docs/security.md §2.2}）。</p>
  */
-@DisplayName("0.9.19 控制台命令门禁")
+@DisplayName("控制台命令门禁")
 class ConsoleCommandGateTest {
 
     private static final String NODE = "canvas.edit";

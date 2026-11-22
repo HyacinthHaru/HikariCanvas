@@ -27,7 +27,7 @@ class UploadHandlerHelpersTest {
                 (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
                 0, 0, 0, 0
         };
-        assertEquals("image/png", UploadHandler.detectMagicMime(png));
+        assertEquals("image/png", ImageDecodeGuard.detectMagicMime(png));
     }
 
     @Test
@@ -36,7 +36,7 @@ class UploadHandlerHelpersTest {
                 (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0,
                 0, 0, 0, 0, 0, 0, 0, 0
         };
-        assertEquals("image/jpeg", UploadHandler.detectMagicMime(jpg));
+        assertEquals("image/jpeg", ImageDecodeGuard.detectMagicMime(jpg));
     }
 
     @Test
@@ -45,14 +45,14 @@ class UploadHandlerHelpersTest {
                 'R', 'I', 'F', 'F', 0, 0, 0, 0,
                 'W', 'E', 'B', 'P'
         };
-        assertEquals("image/webp", UploadHandler.detectMagicMime(webp));
+        assertEquals("image/webp", ImageDecodeGuard.detectMagicMime(webp));
     }
 
     @Test
     void detectMagicMimeUnknown() {
-        assertNull(UploadHandler.detectMagicMime(new byte[]{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}));
-        assertNull(UploadHandler.detectMagicMime(new byte[]{1, 2}));  // 太短
-        assertNull(UploadHandler.detectMagicMime(null));
+        assertNull(ImageDecodeGuard.detectMagicMime(new byte[]{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}));
+        assertNull(ImageDecodeGuard.detectMagicMime(new byte[]{1, 2}));  // 太短
+        assertNull(ImageDecodeGuard.detectMagicMime(null));
     }
 
     @Test
@@ -62,7 +62,7 @@ class UploadHandlerHelpersTest {
                 'R', 'I', 'F', 'F', 0, 0, 0, 0,
                 'W', 'A', 'V', 'E'
         };
-        assertNull(UploadHandler.detectMagicMime(wav));
+        assertNull(ImageDecodeGuard.detectMagicMime(wav));
     }
 
     // ---------- downscale ----------

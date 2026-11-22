@@ -1,17 +1,31 @@
 package ac.haru.hikaricanvas.web;
 
-import io.javalin.websocket.WsMessageContext;
+import ac.haru.hikaricanvas.canvasfile.CanvasImportException;
+import ac.haru.hikaricanvas.canvasfile.ProjectImporter;
+import ac.haru.hikaricanvas.render.AnimationTicker;
 import ac.haru.hikaricanvas.render.ProjectionThrottler;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
 import ac.haru.hikaricanvas.session.SessionRateLimiter;
 import ac.haru.hikaricanvas.state.EditSession;
+import ac.haru.hikaricanvas.state.ElementValidator;
+import ac.haru.hikaricanvas.state.Fill;
 import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.state.ValidationException;
+import ac.haru.hikaricanvas.storage.AuditLog;
+import ac.haru.hikaricanvas.storage.WallRepo;
+import ac.haru.hikaricanvas.template.ForbiddenTemplateException;
 import ac.haru.hikaricanvas.template.TemplateEntry;
 import ac.haru.hikaricanvas.template.TemplateRegistry;
+import io.javalin.websocket.WsMessageContext;
+import org.bukkit.plugin.Plugin;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import static ac.haru.hikaricanvas.web.WebHelpers.asPayloadMap;
 import static ac.haru.hikaricanvas.web.WebHelpers.intOrNull;
@@ -20,44 +34,43 @@ import static ac.haru.hikaricanvas.web.WebHelpers.stringOrNull;
 
 /**
  * 编辑 op 分发：{@code element.* / layer.* / canvas.* / undo / redo / history.mark /
- * template.apply / timeline.* / keyframe.*}（共 7 op，§5.12 / §5.13）。
+ * template.apply / timeline.* / keyframe.*}（共 31 个 op）。
  * <p>从 {@link WebServer} 抽出。每个成功 op 走 ack + pushPatch/pushSnapshot + throttler 投影 + 持久化的标准路径。</p>
  *
  * <p><b>播放控制：</b> {@code timeline.play / pause / seek} 三个 op 在此特判（{@link
  * #handleTimelinePlayback}）。它们<b>不走 OpResult 流</b>——不 mutate {@link ProjectState}、不进
- * history、无 patch、无 throttler 投影，只在 {@link ac.haru.hikaricanvas.render.AnimationTicker} 上启停
+ * history、无 patch、无 throttler 投影，只在 {@link AnimationTicker} 上启停
  * / 定位后端产帧（protocol.md §5.12）。权限与编辑 op 同权（session 活跃即可，不查 owner，docs/timeline.md §5.2）。</p>
  */
 final class EditOpDispatcher {
 
-    private static final java.util.logging.Logger LOG =
-            java.util.logging.Logger.getLogger(EditOpDispatcher.class.getName());
+    private static final Logger LOG = Logger.getLogger(EditOpDispatcher.class.getName());
 
     private final SessionManager sessionManager;
     private final ProjectionThrottler throttler;
     private final SessionRateLimiter rateLimiter;
     private final TemplateRegistry templateRegistry;
-    private final ac.haru.hikaricanvas.storage.WallRepo wallRepo;
+    private final WallRepo wallRepo;
     private final OpPushCallback push;
     /** 可空——给 template.apply 跨用户拒绝路径写 audit。 */
-    private final ac.haru.hikaricanvas.storage.AuditLog auditLog;
+    private final AuditLog auditLog;
     /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
-    private final org.bukkit.plugin.Plugin plugin;
+    private final Plugin plugin;
 
     /**
      * 时间轴播放控制引擎（timeline.play/pause/seek 三 op 的目标）。由装配层经
      * {@code WebServer.setAnimationTicker} 注入；null = 三 op 返 {@code INTERNAL_ERROR}
      * （引擎未装配）。volatile：注入在 WebServer 构造之后。
      */
-    private volatile ac.haru.hikaricanvas.render.AnimationTicker animationTicker;
+    private volatile AnimationTicker animationTicker;
 
     /** 装配 seam（见 {@link #animationTicker}）。 */
-    void setAnimationTicker(ac.haru.hikaricanvas.render.AnimationTicker ticker) {
+    void setAnimationTicker(AnimationTicker ticker) {
         this.animationTicker = ticker;
     }
 
     /** timeline.play/pause/seek case 用。 */
-    ac.haru.hikaricanvas.render.AnimationTicker animationTicker() {
+    AnimationTicker animationTicker() {
         return animationTicker;
     }
 
@@ -67,10 +80,10 @@ final class EditOpDispatcher {
      * {@code INTERNAL_ERROR}（导入子系统未装配——无 assetIngest / importConfig 的降级装配，
      * best-effort，同 {@link #animationTicker} 未装配时的播放控制降级）。volatile：注入在 WebServer 构造之后。
      */
-    private volatile ac.haru.hikaricanvas.canvasfile.ProjectImporter projectImporter;
+    private volatile ProjectImporter projectImporter;
 
-    /** 装配 seam（见 {@link #projectImporter}），照 {@link #setAnimationTicker} 范式。 */
-    void setProjectImporter(ac.haru.hikaricanvas.canvasfile.ProjectImporter importer) {
+    /** 装配 seam（见 {@link #projectImporter}）。 */
+    void setProjectImporter(ProjectImporter importer) {
         this.projectImporter = importer;
     }
 
@@ -78,7 +91,7 @@ final class EditOpDispatcher {
                      ProjectionThrottler throttler,
                      SessionRateLimiter rateLimiter,
                      TemplateRegistry templateRegistry,
-                     ac.haru.hikaricanvas.storage.WallRepo wallRepo,
+                     WallRepo wallRepo,
                      OpPushCallback push) {
         this(sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push, null, null);
     }
@@ -87,9 +100,9 @@ final class EditOpDispatcher {
                      ProjectionThrottler throttler,
                      SessionRateLimiter rateLimiter,
                      TemplateRegistry templateRegistry,
-                     ac.haru.hikaricanvas.storage.WallRepo wallRepo,
+                     WallRepo wallRepo,
                      OpPushCallback push,
-                     ac.haru.hikaricanvas.storage.AuditLog auditLog) {
+                     AuditLog auditLog) {
         this(sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push, auditLog, null);
     }
 
@@ -97,10 +110,10 @@ final class EditOpDispatcher {
                      ProjectionThrottler throttler,
                      SessionRateLimiter rateLimiter,
                      TemplateRegistry templateRegistry,
-                     ac.haru.hikaricanvas.storage.WallRepo wallRepo,
+                     WallRepo wallRepo,
                      OpPushCallback push,
-                     ac.haru.hikaricanvas.storage.AuditLog auditLog,
-                     org.bukkit.plugin.Plugin plugin) {
+                     AuditLog auditLog,
+                     Plugin plugin) {
         this.sessionManager = sessionManager;
         this.throttler = throttler;
         this.rateLimiter = rateLimiter;
@@ -223,15 +236,13 @@ final class EditOpDispatcher {
                 yield es.resizeCanvas(wn.intValue(), hn.intValue());
             }
             case "canvas.background" -> {
-                // 优先看 fill（Fill 对象，solid/linear/radial），
-                // 兼容老 color（hex 字符串）。两者皆缺 → INVALID_PAYLOAD。
+                // 优先看 fill（Fill 对象，solid/linear/radial），否则看 color（hex 字符串）；两者皆缺 → INVALID_PAYLOAD。
                 Object fillRaw = payload.get("fill");
                 if (fillRaw != null) {
                     try {
-                        ac.haru.hikaricanvas.state.Fill fill =
-                                ac.haru.hikaricanvas.state.ElementValidator.parseFillNullable(fillRaw);
+                        Fill fill = ElementValidator.parseFillNullable(fillRaw);
                         yield es.setBackground(fill);
-                    } catch (ac.haru.hikaricanvas.state.ValidationException ve) {
+                    } catch (ValidationException ve) {
                         yield new EditSession.OpResult.Error(ve.code, ve.getMessage());
                     }
                 }
@@ -316,7 +327,7 @@ final class EditOpDispatcher {
                 Map<String, Object> tp = (Map<String, Object>) mapOrEmpty(payload.get("params"));
                 // 跨用户隔离——查 caller 的 use-others bypass 权限
                 // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
-                java.util.UUID callerUuid = s.playerUuid();
+                UUID callerUuid = s.playerUuid();
                 boolean hasBypass = MainThreadPerms.hasPermission(plugin, s, "canvas.template.use-others");
                 yield applyTemplate(sessionId, tpl, tp, callerUuid, s.playerName(), hasBypass);
             }
@@ -329,7 +340,7 @@ final class EditOpDispatcher {
             // 兜底：op 解析期任意运行期异常不应静默逃逸（前端会 5s ack_timeout）。
             // 必须留日志——客户端只拿到脱敏的 "op processing failed"，服务端再不记就等于
             // 生产上偶发失败无从排查。
-            LOG.log(java.util.logging.Level.WARNING, "edit op failed: op=" + in.op(), re);
+            LOG.log(Level.WARNING, "edit op failed: op=" + in.op(), re);
             ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR", "op processing failed"));
             return;
         }
@@ -412,12 +423,12 @@ final class EditOpDispatcher {
      * @param wallId 当前 session 绑定的 wall（{@code null} → {@code WALL_NOT_FOUND}）
      */
     Envelope handleTimelinePlayback(String op, String inId, Map<String, Object> payload,
-                                    String wallId, java.util.UUID callerUuid,
+                                    String wallId, UUID callerUuid,
                                     String callerName, String sessionId) {
         if (wallId == null) {
             return Envelope.error(inId, "WALL_NOT_FOUND", "session has no bound wall");
         }
-        ac.haru.hikaricanvas.render.AnimationTicker ticker = animationTicker();
+        AnimationTicker ticker = animationTicker();
         if (ticker == null) {
             return Envelope.error(inId, "INTERNAL_ERROR", "animation engine not assembled");
         }
@@ -425,10 +436,10 @@ final class EditOpDispatcher {
 
         return switch (op) {
             case "timeline.play" -> {
-                ac.haru.hikaricanvas.render.AnimationTicker.Result r = ticker.play(wallId, timelineId);
+                AnimationTicker.Result r = ticker.play(wallId, timelineId);
                 // 只在真播起来了才记 TIMELINE_PLAY。审计日志的用途就是事后取证，
                 // 把「墙不存在 / 时间轴不存在」的失败也记成"已执行"会直接误导排查。
-                if (r == ac.haru.hikaricanvas.render.AnimationTicker.Result.OK) {
+                if (r == AnimationTicker.Result.OK) {
                     recordTimelineAudit("TIMELINE_PLAY", callerUuid, callerName, sessionId,
                             wallId, timelineId, null);
                 }
@@ -452,8 +463,8 @@ final class EditOpDispatcher {
                 if (at < 0L) {
                     yield Envelope.error(inId, "INVALID_PAYLOAD", "atMs must be >= 0");
                 }
-                ac.haru.hikaricanvas.render.AnimationTicker.Result r = ticker.seek(wallId, timelineId, at);
-                if (r == ac.haru.hikaricanvas.render.AnimationTicker.Result.OK) {
+                AnimationTicker.Result r = ticker.seek(wallId, timelineId, at);
+                if (r == AnimationTicker.Result.OK) {
                     recordTimelineAudit("TIMELINE_SEEK", callerUuid, callerName, sessionId,
                             wallId, timelineId, at);
                 }
@@ -464,9 +475,8 @@ final class EditOpDispatcher {
         };
     }
 
-    /** play/seek 的 {@link ac.haru.hikaricanvas.render.AnimationTicker.Result} → 协议响应映射。 */
-    private static Envelope mapPlaybackResult(String inId,
-                                              ac.haru.hikaricanvas.render.AnimationTicker.Result r) {
+    /** play/seek 的 {@link AnimationTicker.Result} → 协议响应映射。 */
+    private static Envelope mapPlaybackResult(String inId, AnimationTicker.Result r) {
         return switch (r) {
             case OK -> Envelope.of("ack", inId, Map.of());
             case WALL_NOT_FOUND -> Envelope.error(inId, "WALL_NOT_FOUND", "wall not found");
@@ -477,12 +487,11 @@ final class EditOpDispatcher {
 
     /**
      * 播放控制 audit 留痕（auditLog 可空时跳过）。{@code timelineId} 可空；{@code atMs} 仅 seek 传。
-     * 形态照 {@code WallOpDispatcher} 的 {@code WALL_LOCK}：details 含 wall_id + timeline_id（可空）。
      */
-    private void recordTimelineAudit(String event, java.util.UUID callerUuid, String callerName,
+    private void recordTimelineAudit(String event, UUID callerUuid, String callerName,
                                      String sessionId, String wallId, String timelineId, Long atMs) {
         if (auditLog == null) return;
-        java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+        LinkedHashMap<String, Object> details = new LinkedHashMap<>();
         details.put("wall_id", wallId);
         if (timelineId != null) details.put("timeline_id", timelineId);   // 缺省 = ticker 取 activeTimelineId
         if (atMs != null) details.put("at_ms", atMs);
@@ -496,7 +505,7 @@ final class EditOpDispatcher {
      */
     private EditSession.OpResult applyTemplate(String sessionId,
                                                String templateId, Map<String, Object> params,
-                                               java.util.UUID callerUuid, String callerName,
+                                               UUID callerUuid, String callerName,
                                                boolean hasBypass) {
         if (templateId == null || templateId.isBlank()) {
             return new EditSession.OpResult.Error("INVALID_PAYLOAD", "templateId is required");
@@ -504,11 +513,11 @@ final class EditOpDispatcher {
         TemplateEntry entry;
         try {
             entry = templateRegistry.byIdForApply(templateId, callerUuid, hasBypass);
-        } catch (ac.haru.hikaricanvas.template.ForbiddenTemplateException fte) {
+        } catch (ForbiddenTemplateException fte) {
             // 包装为 FORBIDDEN，不 echo 内部异常细节
             // 跨用户 template.apply 拒绝留痕（监控异常尝试用他人 template）
             if (auditLog != null) {
-                java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                LinkedHashMap<String, Object> details = new LinkedHashMap<>();
                 details.put("operation", "template.apply");
                 details.put("template_id", fte.templateId());
                 auditLog.record("PERMISSION_DENIED",
@@ -534,16 +543,15 @@ final class EditOpDispatcher {
      * {@code OkSnapshot} 分支统一收尾，<b>不在此重复</b>（否则双推）。
      *
      * <p>{@code projectImporter} 未装配（导入子系统缺）→ {@code INTERNAL_ERROR}；会话已关 →
-     * {@code SESSION_CLOSED}；{@link ac.haru.hikaricanvas.canvasfile.CanvasImportException} 的稳定码
+     * {@code SESSION_CLOSED}；{@link CanvasImportException} 的稳定码
      * （{@code IMPORT_INVALID_PARAM} / {@code IMPORT_MALFORMED} / ...）原样透传给前端。warnings 为
-     * 非致命，P1 仅记 {@code fine}（下行给前端是后续 wire 变更）。</p>
+     * 非致命，仅记 {@code fine}。</p>
      *
-     * <p>package-private（非 private）以便 dispatcher 单测直接驱动 pack 分支（含未装配降级路径），
-     * 绕开 {@code WsMessageContext}（Javalin final 类，不可 mock）——照 {@link #handleCanvasTweenFps} 范式。</p>
+     * <p>package-private 以便 dispatcher 单测直接驱动 pack 分支（含未装配降级路径）。</p>
      */
     EditSession.OpResult applyPackEntry(String sessionId, String templateId, TemplateEntry entry,
-                                        Map<String, Object> params, java.util.UUID callerUuid) {
-        ac.haru.hikaricanvas.canvasfile.ProjectImporter importer = projectImporter;
+                                        Map<String, Object> params, UUID callerUuid) {
+        ProjectImporter importer = projectImporter;
         if (importer == null) {
             return new EditSession.OpResult.Error("INTERNAL_ERROR", "pack apply unavailable");
         }
@@ -552,18 +560,18 @@ final class EditOpDispatcher {
             return new EditSession.OpResult.Error("SESSION_CLOSED", "no active edit session");
         }
         try {
-            ac.haru.hikaricanvas.canvasfile.ProjectImporter.ApplyResult ar =
+            ProjectImporter.ApplyResult ar =
                     importer.applyPack(session, entry.packBytes(), params, callerUuid);
             if (!ar.warnings().isEmpty()) {
                 LOG.fine("template.apply pack '" + templateId + "' produced "
                         + ar.warnings().size() + " warning(s)");
             }
-            // walls.template_id / template_version write-back（best-effort，同 YAML 路径）
+            // walls.template_id / template_version write-back（best-effort）
             if (ar.result() instanceof EditSession.OpResult.OkSnapshot && session.wallId() != null) {
                 wallRepo.setTemplate(session.wallId(), templateId, entry.spec().version());
             }
             return ar.result();
-        } catch (ac.haru.hikaricanvas.canvasfile.CanvasImportException e) {
+        } catch (CanvasImportException e) {
             return new EditSession.OpResult.Error(e.code(), e.getMessage());
         }
     }

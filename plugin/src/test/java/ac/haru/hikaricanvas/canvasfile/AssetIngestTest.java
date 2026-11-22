@@ -10,14 +10,12 @@ import ac.haru.hikaricanvas.storage.WallRepo;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -29,22 +27,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.8-A2 Task 11：{@link AssetIngest} 图片摄入校验。
- *
- * <p>不 mock：临时目录 + SQLite 真跑迁移 + 真磁盘 IO（仿 {@code ImageStorageTest} 装配）。
- * 每张 {@code assets/<hash>.png} 走 magic 校验 + ImageIO 隔离解码 + 配额事务 + 按内容重算 hash 落盘。</p>
+ * {@link AssetIngest} 图片摄入校验单测（magic 校验、ImageIO 隔离解码、配额事务与内容重算 hash 落盘）。
  */
 class AssetIngestTest {
 
-    private Path tmpDir;
+    @TempDir
+    Path tmpDir;
+
     private Database database;
     private ImageStorage storage;
     private AssetIngest ingest;
     private final UUID uploader = UUID.randomUUID();
 
     @BeforeEach
-    void setUp() throws Exception {
-        tmpDir = Files.createTempDirectory("hc-asset-ingest-");
+    void setUp() {
         Path dbFile = tmpDir.resolve("data.db");
         Logger log = Logger.getLogger("test");
         database = new Database(log, dbFile);
@@ -57,13 +53,8 @@ class AssetIngestTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         if (database != null) database.close();
-        if (tmpDir != null && Files.exists(tmpDir)) {
-            try (var s = Files.walk(tmpDir)) {
-                s.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
-            }
-        }
     }
 
     private static byte[] png(int w, int h) throws Exception {

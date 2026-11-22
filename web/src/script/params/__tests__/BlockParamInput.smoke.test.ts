@@ -1,14 +1,13 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P5-F：BlockParamInput 各类型渲染 smoke + emit 值正确性。
+ * BlockParamInput 各类型渲染 smoke + emit 值正确性。
  *
  * <p>核心验证：① 每种 FieldType 渲染对应控件不崩；② 改值 emit 的<b>值类型与 wire 一致</b>
  * （number → number / 其余 → string / command → 复合对象）；③ number 范围钳位；④ element /
- * timeline 选项来自 project store；⑤ variable picker 按钮 click 开关（memory 约束）；
+ * timeline 选项来自 project store；⑤ variable picker 按钮 click 开关；
  * ⑥ command 复合字段：选模板 → params 子输入渲染 → 改值 emit 正确。</p>
  *
- * <p>happy-dom + pinia + 锁中文 locale（照 BlockNode.smoke 范式）。command 类型 stub 全局
- * fetch 返模板。</p>
+ * <p>happy-dom + pinia + 锁中文 locale。command 类型 stub 全局 fetch 返模板。</p>
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
@@ -176,7 +175,7 @@ describe('BlockParamInput — variable', () => {
         expect(wVal.text()).toContain('user/score');
     });
 
-    it('点按钮打开 picker（memory：button click 触发，非 select-change）', async () => {
+    it('点按钮打开 picker（button click 触发，非 select-change）', async () => {
         const f = field({ type: 'variable', name: 'fullName' });
         const w = mountInput(f, '');
         // 初始无 picker
@@ -324,7 +323,7 @@ describe('BlockParamInput — command（复合字段）', () => {
         expect(w.text()).toContain('服主还没配命令模板');
     });
 
-    // 0.7.3-D1：孤儿模板检测
+    // 孤儿模板检测
     it('templateId 非空但不在列表 → 显示孤儿警告', async () => {
         // 服主已删除 "old-cmd"，当前只剩 "announce"
         vi.stubGlobal('fetch', vi.fn(async () => ({

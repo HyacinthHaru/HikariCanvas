@@ -1,6 +1,7 @@
 package ac.haru.hikaricanvas.pool;
 
 import ac.haru.hikaricanvas.render.HikariCanvasRenderer;
+import ac.haru.hikaricanvas.render.WallRestorer;
 import ac.haru.hikaricanvas.storage.AuditLog;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
@@ -11,9 +12,11 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -153,11 +156,9 @@ public final class MapPool {
                 //   ① MapView 不存在        → 真孤儿，DELETE pool 行
                 //   ② MapView 在，但其 world 未加载（MapView.getWorld() 返 null）
                 //
-                // ② 在真实服上很常见：initialize 在 onEnable 同步执行，而 Multiverse 等插件
-                // 管理的世界此时往往还没加载。原实现把 ② 也 DELETE，后果是 mapId 从池簿记
-                // 永久消失（不再复用 → 重新 createMap → idcounts.dat 膨胀，项目核心风险），
-                // 且该世界的 wall 因 byId 无此 mapId 使 bindToWall 返 false，永久打不开、
-                // 每次重启复现。审计名 POOL_ORPHAN_ROW 还让误删看起来像正常回收。
+                // ② 在 Multiverse 等延迟加载世界的服务器上很常见：onEnable 同步初始化时世界尚未加载。
+                // 若误删 pool 行会导致 mapId 从簿记消失（触发重复 createMap 膨胀 idcounts.dat），
+                // 且该世界的 wall 因 byId 缺少此 mapId 而无法 bindToWall。
                 if (backend.hasMapView(rec.mapId())) {
                     worldNotLoaded++;
                     // 保留 pool 行 + 登记进 byId（簿记完整，detectLeaks 也能看到）。
@@ -251,11 +252,6 @@ public final class MapPool {
                         "per_world_configured", perWorldInitial.keySet()));
     }
 
-    /** 兼容旧调用方：等价于 {@code initialize(defaultWorld, Map.of())}。 */
-    public synchronized void initialize(World defaultWorld) {
-        initialize(defaultWorld, Map.of());
-    }
-
     // ---------- wall 模型主路径 ----------
 
     /**
@@ -299,10 +295,7 @@ public final class MapPool {
         List<Integer> out = new ArrayList<>(count);
 
         // 借出与 bindToWall 走同一条持久化纪律：先在单事务里把全部 map 落盘
-        // （all-or-nothing，失败抛出），DB 成功后才改内存。
-        // 原实现在循环里逐张 persist（吞异常只打 SEVERE），中段失败会留下"内存已借出、
-        // DB 还写着 FREE"的分叉：重启后这批 map 回到 FREE 队列被别的 wall 借走，
-        // 而先前那面 wall 的 map_ids 仍指向它们 → 两面墙共用同一张地图、像素互相覆盖。
+        // （all-or-nothing，失败抛出），DB 成功后才改内存，避免内存与 DB 状态分叉导致跨墙复用同一地图。
         List<Integer> picked = new ArrayList<>(count);
         List<PooledMap> updates = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
@@ -413,10 +406,10 @@ public final class MapPool {
     /**
      * 把单个 mapId 强制归还为 FREE（不论当前 owner）。
      *
-     * <p>{@link ac.haru.hikaricanvas.render.WallRestorer} 失败回滚专用：启动期 restore 某 wall
-     * 中途任何一步炸（bind / compose），调用方必须把这一轮已经 bind 过的 mapId 全 release，
-     * 否则它们留在 RESERVED 状态但 wall 也没真正恢复 → 下一轮 detectLeaks 才能扫到，
-     * 中间窗口期视为"软泄漏"。直接走这条 API 立刻归还，干净。</p>
+     * <p>总不变式：已被某个存在的 {@code walls} 行认领的地图绝不能回 FREE。
+     * {@link WallRestorer} 仅在 {@code bindToWall} 提交前失败（如临时预留尚未绑定到墙）时调用此方法回滚；
+     * 一旦 {@code bindCommitted} 成立，即使后续渲染失败也保留绑定（{@code walls} 行仍在，{@link #detectLeaks}
+     * 认得其归属，放回 FREE 反而会导致跨墙串台）。</p>
      *
      * @return true 若 mapId 存在并被归还；false 若 mapId 不在池里（或已 FREE）
      */
@@ -458,14 +451,14 @@ public final class MapPool {
      *
      * <p>本重载不带 live 集的读取时刻，等价于"假定快照绝对新鲜"（无 reserve 竞态豁免），
      * 供测试与单线程调用方使用。<b>周期泄漏任务必须用
-     * {@link #detectLeaks(java.util.Set, long)}</b>。</p>
+     * {@link #detectLeaks(Set, long)}</b>。</p>
      */
-    public synchronized int detectLeaks(java.util.Set<String> liveWallIds) {
+    public synchronized int detectLeaks(Set<String> liveWallIds) {
         return detectLeaks(liveWallIds, Long.MAX_VALUE);
     }
 
     /**
-     * {@link #detectLeaks(java.util.Set)} 带快照时刻的版本。
+     * {@link #detectLeaks(Set)} 带快照时刻的版本。
      *
      * @param liveWallIds     walls 表快照
      * @param liveSnapshotAt  <b>读 walls 表之前</b>取的 {@code System.currentTimeMillis()}。
@@ -482,15 +475,15 @@ public final class MapPool {
      * 时被刷新，晚于快照就说明"这张地图是在我们看 walls 表之后才借出去的"，此时快照对它
      * 没有发言权。跳过一轮的代价是 5 分钟后再判，代价可忽略；反过来误删则是数据损坏。</p>
      */
-    public synchronized int detectLeaks(java.util.Set<String> liveWallIds, long liveSnapshotAt) {
+    public synchronized int detectLeaks(Set<String> liveWallIds, long liveSnapshotAt) {
         return detectLeaks(liveWallIds, liveSnapshotAt, System.currentTimeMillis());
     }
 
     /**
      * 注入"当前时刻"的版本，package-private 只为测试用 —— pending 豁免的 TTL 判定要跨
-     * 几十秒，测试不可能真等。生产路径一律走 {@link #detectLeaks(java.util.Set, long)}。
+     * 几十秒，测试不可能真等。生产路径一律走 {@link #detectLeaks(Set, long)}。
      */
-    synchronized int detectLeaks(java.util.Set<String> liveWallIds, long liveSnapshotAt, long now) {
+    synchronized int detectLeaks(Set<String> liveWallIds, long liveSnapshotAt, long now) {
         // 防呆：live 集合为空但池里确有 wall:* 拥有的 RESERVED map —— 几乎必然是「读 walls
         // 表失败」而不是「真的一面墙都没有」。此时若照常执行，这些在用地图会被判泄漏、强制
         // FREE 并落盘，随后被新墙复用 → 旧墙 ItemFrame 显示新墙像素（跨墙串台，全服级损坏）。
@@ -623,10 +616,10 @@ public final class MapPool {
      * unknown-world 桶（zero UUID，world 卸载窗口期暂存）固定标 {@code "<unknown>"}。
      * 空桶（曾有 map 后全被借出）跳过不计。</p>
      *
-     * @return world 名 → 该 world FREE map 数（{@link java.util.LinkedHashMap}，无序枚举）。
+     * @return world 名 → 该 world FREE map 数（{@link LinkedHashMap}，无序枚举）。
      */
     public synchronized Map<String, Integer> byWorldStats() {
-        Map<String, Integer> out = new java.util.LinkedHashMap<>();
+        Map<String, Integer> out = new LinkedHashMap<>();
         UUID unknownKey = new UUID(0L, 0L);
         for (Map.Entry<UUID, Deque<Integer>> e : freeByWorld.entrySet()) {
             Deque<Integer> q = e.getValue();

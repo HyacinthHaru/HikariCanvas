@@ -12,7 +12,8 @@ import java.util.Set;
  * 契约 {@code docs/scripting.md §2.1}。
  *
  * <p>{@link #validate(ScriptRule)} 返回 {@code empty} = 合法；{@code present} =
- * 人读错误信息（后续 dispatcher 塞进 {@code SCRIPT_INVALID} 错误码）。
+ * 结构化 {@link ValidationError}（key + 命名参数，后续 dispatcher 按编辑器 locale
+ * 渲染后填入 {@code SCRIPT_INVALID} 错误码）。
  * 一次只报第一个错误（fail-fast），与项目其他 validator 一致。</p>
  *
  * <p>注意：{@link Action.If#condition()} 这里只查非空 + 长度上限；
@@ -108,7 +109,7 @@ public final class ScriptRuleValidator {
     public static final int SHOW_TITLE_FADE_MAX_MS = 10_000;   // fadeIn / fadeOut ≤ 10s
     public static final int SHOW_TITLE_STAY_MAX_MS = 60_000;   // stay ≤ 60s
     /** ShowTitle.target 白名单（复用 SendMessage 的 target 集合）。 */
-    public static final Set<String> TITLE_TARGETS = Set.of("trigger", "all");
+    public static final Set<String> TITLE_TARGETS = MESSAGE_TARGETS;
     /** ShowTitle title / subtitle 最大长度（单个字段）。 */
     public static final int TITLE_TEXT_MAX = 256;
 
@@ -550,7 +551,7 @@ public final class ScriptRuleValidator {
                 }
                 yield Optional.empty();
             }
-            // tween：补间动画包裹（docs/scripting-tween.md）
+            // tween：补间动画包裹（docs/scripting.md）
             case Action.TweenBlock a -> {
                 // durationMs 范围 [1, TWEEN_DURATION_MAX]
                 if (a.durationMs() < 1 || a.durationMs() > TWEEN_DURATION_MAX) {
@@ -599,7 +600,6 @@ public final class ScriptRuleValidator {
                     Optional<ValidationError> bodyErr = validateAction(bodyAction, ifDepth);
                     if (bodyErr.isPresent()) yield bodyErr;
                 }
-                // TODO P3: 同属性在 body 里重复警告（v1 先放行，P3 补）
                 yield Optional.empty();
             }
         };

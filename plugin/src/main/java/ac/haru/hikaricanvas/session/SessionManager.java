@@ -3,18 +3,34 @@ package ac.haru.hikaricanvas.session;
 import ac.haru.hikaricanvas.deploy.WallResolver;
 import ac.haru.hikaricanvas.pool.MapPool;
 import ac.haru.hikaricanvas.pool.PoolExhaustedException;
+import ac.haru.hikaricanvas.render.AnimationTicker;
+import ac.haru.hikaricanvas.render.CanvasProjector;
+import ac.haru.hikaricanvas.render.DirtyRegion;
 import ac.haru.hikaricanvas.render.HikariCanvasRenderer;
+import ac.haru.hikaricanvas.render.ProjectionThrottler;
+import ac.haru.hikaricanvas.render.TimelineTriggerRegistry;
+import ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome;
 import ac.haru.hikaricanvas.state.EditSession;
+import ac.haru.hikaricanvas.state.PatchOp;
 import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.state.StatePatch;
+import ac.haru.hikaricanvas.state.StrictNumber;
 import ac.haru.hikaricanvas.storage.AuditLog;
 import ac.haru.hikaricanvas.storage.WallRepo;
+import ac.haru.hikaricanvas.variable.Variable;
+import ac.haru.hikaricanvas.variable.VariableStore;
+import ac.haru.hikaricanvas.web.OpPushCallback;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.entity.Player;
+import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -54,8 +70,7 @@ import java.util.logging.Logger;
  * <p>排他约束：</p>
  * <ul>
  *   <li>每玩家最多 1 个活跃会话（含 {@link SessionState#SELECTING}）</li>
- *   <li>每墙面排他锁 {@link WallKey}——{@code SELECTING → ISSUED} 时获取、
- *       cancel/commit 时释放</li>
+ *   <li>每墙面排他锁 {@link WallKey}——{@code SELECTING → ISSUED} 时获取、cancel 时释放</li>
  * </ul>
  */
 public final class SessionManager {
@@ -70,8 +85,8 @@ public final class SessionManager {
      * 注入 ownerUuid / ownerName 字段到 patch value。setter 注入，未配置时 patch 不含 owner
      * 字段（前端有兜底）。
      */
-    @org.jetbrains.annotations.Nullable
-    private volatile ac.haru.hikaricanvas.variable.VariableStore variableStoreRef;
+    @Nullable
+    private volatile VariableStore variableStoreRef;
     /** deleteWall 释放 map 后清除像素缓存，防 mapId 复用导致跨 wall 像素泄漏。可空（不强制依赖）。 */
     private final HikariCanvasRenderer canvasRenderer;
 
@@ -149,15 +164,15 @@ public final class SessionManager {
      * </ul>
      * 默认 null（未注入）时两处均跳过——测试零侵入。
      */
-    private volatile ac.haru.hikaricanvas.render.AnimationTicker animationTicker;
+    private volatile AnimationTicker animationTicker;
     /** 时间轴触发器索引。编辑持久化 / session 关闭后重建该 wall 的触发绑定。可空（测试零侵入）。 */
-    private volatile ac.haru.hikaricanvas.render.TimelineTriggerRegistry timelineTriggerRegistry;
+    private volatile TimelineTriggerRegistry timelineTriggerRegistry;
 
-    public void setAnimationTicker(ac.haru.hikaricanvas.render.AnimationTicker ticker) {
+    public void setAnimationTicker(AnimationTicker ticker) {
         this.animationTicker = ticker;
     }
 
-    public void setTimelineTriggerRegistry(ac.haru.hikaricanvas.render.TimelineTriggerRegistry registry) {
+    public void setTimelineTriggerRegistry(TimelineTriggerRegistry registry) {
         this.timelineTriggerRegistry = registry;
     }
 
@@ -184,7 +199,7 @@ public final class SessionManager {
     }
 
     /**
-     * 注册 wall 删除监听。callback 在 {@link #deleteWall} 完成 map 释放 + DB 删行后
+     * 注册 wall 删除监听。callback 在 {@link #deleteWall} 完成 DB 删行 + map 释放后
      * 触发，按 hook 注册顺序异常隔离逐个调用。
      */
     public void addWallDeleteHook(Consumer<String> hook) {
@@ -278,10 +293,7 @@ public final class SessionManager {
         if (s.pos1() == null || s.pos2() == null) {
             return null;
         }
-        // 两个角各传自己的朝向。原来两个参数都传 s.face()（那时 Session 只存一个 face
-        // 字段），于是 WallResolver 的 NORMAL_MISMATCH 判定——「两次点击打在朝向不同的
-        // 面上」——两边恒等、永远不成立，是死代码。玩家先点北墙再点东墙时不会被拦，
-        // 会拿两个不共面的角去算 bbox。
+        // 两个角分别传各自的朝向，确保 NORMAL_MISMATCH（两角朝向不一致）被准确拦截。
         return wallResolver.resolve(s.pos1(), s.pos1Face(), s.pos2(), s.pos2Face());
     }
 
@@ -370,17 +382,14 @@ public final class SessionManager {
         // rollback stack。每步成功后 push 一个 undo action；任何后续步骤
         // 抛异常时倒序运行（LIFO）。所有 Runnable 都用 try/catch 包裹，单条 rollback
         // 失败仅 log.warning，不影响其它 rollback 和原始异常传递。
-        final java.util.Deque<Runnable> rollbacks = new java.util.ArrayDeque<>();
+        final Deque<Runnable> rollbacks = new ArrayDeque<>();
 
         try {
-            // locked existing wall 二次编辑路径的 owner 校验
-            // —— 与 OpenResult 路径一致。/canvas edit + confirm 撞上别人的 locked wall：
-            // 非 owner + 无 canvas.admin.bypass-lock → Forbidden（防止绕过 /canvas open
-            // 已有的 lock 校验拿到编辑 token）。Bukkit.getPlayer 调用在 confirm assertMainThread
-            // 路径下安全，但放在锁外。
+            // locked existing wall 二次编辑路径的 owner 校验（与 OpenResult 路径一致）：
+            // 非 owner + 无 canvas.admin.bypass-lock → Forbidden。
             if (existing != null && existing.publishedAt() != null
                     && !s.playerUuid().equals(existing.ownerUuid())) {
-                org.bukkit.entity.Player live = Bukkit.getPlayer(s.playerUuid());
+                Player live = Bukkit.getPlayer(s.playerUuid());
                 boolean bypass = live != null && live.hasPermission("canvas.admin.bypass-lock");
                 if (!bypass) {
                     LinkedHashMap<String, Object> details = new LinkedHashMap<>();
@@ -419,7 +428,6 @@ public final class SessionManager {
                 } catch (PoolExhaustedException e) {
                     return new ConfirmResult.PoolExhausted(e.getMessage());
                 }
-                final List<Integer> reservedMapIds = mapIds;
                 // step1 rollback：释放 pending owner 持有的 reserve
                 rollbacks.push(() -> mapPool.releaseWall(reserveOwnerWallId));
 
@@ -443,10 +451,6 @@ public final class SessionManager {
                 // step3 rollback：释放最终绑定的 maps（按 wallId owner）
                 final String boundWallId = wallId;
                 rollbacks.push(() -> mapPool.releaseWall(boundWallId));
-                // 用 reservedMapIds 防止后续 step 把变量 shadow（仅文档作用，不参与逻辑）
-                if (reservedMapIds != mapIds) {
-                    log.warning("mapIds mutated mid-flow (unexpected); using last value");
-                }
                 newWall = true;
             }
 
@@ -532,7 +536,7 @@ public final class SessionManager {
     }
 
     /** 倒序执行 rollback stack，单条失败仅 log.warning，不抛。 */
-    private void runRollbacks(java.util.Deque<Runnable> rollbacks) {
+    private void runRollbacks(Deque<Runnable> rollbacks) {
         while (!rollbacks.isEmpty()) {
             Runnable r = rollbacks.pop();
             try {
@@ -578,17 +582,13 @@ public final class SessionManager {
                 wallRepo.loadByAlias(wallIdOrAlias).orElse(null));
         if (w == null) return new OpenResult.NotFound();
 
-        // lock-aware open。后端编辑 op 仍透明放行（CLAUDE.md §lock-state 第 2 条），
+        // lock-aware open（docs/architecture.md §13）：后端编辑 op 仍透明放行，
         // 仅在 open 入口拦截：locked wall + 非 owner + 无 canvas.admin.bypass-lock 权限 → Forbidden。
         // 注意：Bukkit.getPlayer 调用在锁外（持锁中调 Bukkit API 易死锁）。
         if (w.publishedAt() != null) {
-            // 权限查询要 Bukkit，抽不出去；判定本身抽成纯函数便于单测（同 issuedExpired 的处理）。
-            // 控制台主体不查节点——它不是"持 bypass 权限的玩家"，而是权限体系之上的主体，
-            // 走 Bukkit.getPlayer 对它永远返 null（见 Principal 类注释）。
-            // 只在真需要时才查（控制台与 owner 都不需要）——保持原有的"不多调一次 Bukkit"行为。
             boolean hasBypassPerm = !principal.isConsole()
                     && !playerUuid.equals(w.ownerUuid())
-                    && Bukkit.getPlayer(playerUuid) instanceof org.bukkit.entity.Player live
+                    && Bukkit.getPlayer(playerUuid) instanceof Player live
                     && live.hasPermission("canvas.admin.bypass-lock");
             if (!mayOpenLockedWall(principal, playerUuid, w.ownerUuid(), hasBypassPerm)) {
                 // lock-aware open 拒绝留痕——监控异常尝试访问他人 locked wall
@@ -730,17 +730,11 @@ public final class SessionManager {
      * （仅 UPDATE project_json，不动 mapIds / wall_id）。非主线程调用即可。
      */
     public void persistWall(String sessionId) {
-        // CHM read 无锁
         Session s = byId.get(sessionId);
         if (s == null || s.wallId() == null || s.projectState() == null) return;
         wallRepo.updateState(s.wallId(), s.projectState());
-        // updateState 同步落库后处理 Ticker。
-        //  - 已在播 → invalidate（廉价刷缓存，下一帧即用新 state，编辑可见延迟 ≤1 帧）。
-        //  - 没在播但有 activeTimeline → refreshAutoPlay：编辑期就让游戏里的墙自动播，
-        //    不必等编辑器关闭 / 会话回收 / 重启全量扫描——这也是"新建动画要重启才动"那个毛刺的根因
-        //    （浏览器关闭不一定立刻 cancel→refreshAutoPlay，旧逻辑只在关闭/启动才起播）。
-        //  - 静态墙（无 activeTimeline）→ 不碰 Ticker（避免每次编辑多一次 loadWall 的 DB 读）。
-        ac.haru.hikaricanvas.render.AnimationTicker ticker = this.animationTicker;
+        // updateState 同步落库后处理 Ticker：已在播 → invalidate；有 activeTimeline 尚未播 → refreshAutoPlay。
+        AnimationTicker ticker = this.animationTicker;
         if (ticker != null) {
             if (ticker.isWallAnimating(s.wallId())) {
                 ticker.invalidate(s.wallId());
@@ -748,100 +742,58 @@ public final class SessionManager {
                 ticker.refreshAutoPlay(s.wallId());
             }
         }
-        // 编辑落库后重建该 wall 的触发绑定（timeline.trigger / activeTimelineId 可能刚改）。
-        ac.haru.hikaricanvas.render.TimelineTriggerRegistry trig = this.timelineTriggerRegistry;
+        TimelineTriggerRegistry trig = this.timelineTriggerRegistry;
         if (trig != null) {
             trig.rebuildForWall(s.wallId());
         }
     }
 
     /**
-     * 脚本 {@code setElementProperty} 路径 A——墙开着编辑器时走
-     * {@link ac.haru.hikaricanvas.state.EditSession#updateElement} 标准链，并照
-     * {@code EditOpDispatcher} case {@code "element.update"} 的收尾链：推 state.patch
-     * （前端实时可见）+ ProjectionThrottler 脏区投影 + {@link #persistWall}（其内含
-     * Ticker invalidate/refreshAutoPlay + TimelineTriggerRegistry rebuild）。
-     *
-     * <p>与 dispatcher 的差异：无 ack（脚本无 WS 请求方）；push / throttler 由
-     * 装配层闭包绑入（本类不长期持有两引用，照 {@code broadcastVariableChangeToWall}
-     * 传参先例）。</p>
-     *
-     * <p>线程：任意线程可调（EditSession synchronized；persistWall 非主线程 OK；
-     * throttler.submit / push.pushPatch 自身线程安全）——ScriptRunner 线程直调，无需
-     * 主线程 hop。</p>
+     * 脚本 {@code setElementProperty} 路径 A——墙开着编辑器时走 {@link EditSession#updateElement}
+     * 标准链，并经 {@link #finishScriptElementStructuralOp} 推 state.patch + 投影脏区 + {@link #persistWall}。
      *
      * @return NO_SESSION = 该墙无活跃 session（调用方走 headless 路径）；
      *         APPLIED = 已应用并收尾；FAILED = op 被拒（detail 含错误码）
      */
-    public ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome
-    applyScriptElementPatch(String wallId, String elementId,
-                            Map<String, Object> patch,
-                            ac.haru.hikaricanvas.web.OpPushCallback push,
-                            ac.haru.hikaricanvas.render.ProjectionThrottler throttler) {
+    public SessionOutcome applyScriptElementPatch(String wallId, String elementId,
+                                                  Map<String, Object> patch,
+                                                  OpPushCallback push,
+                                                  ProjectionThrottler throttler) {
         if (wallId == null || elementId == null || patch == null || patch.isEmpty()) {
-            return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                    .SessionOutcome.failed("invalid script element patch args");
+            return SessionOutcome.failed("invalid script element patch args");
         }
         for (Session s : byId.values()) {
             if (s.state() == SessionState.CLOSING) continue;
             if (!wallId.equals(s.wallId())) continue;
-            ac.haru.hikaricanvas.state.EditSession es = s.editSession();
+            EditSession es = s.editSession();
             if (es == null) continue;
-            ac.haru.hikaricanvas.state.EditSession.OpResult r = es.updateElement(elementId, patch);
-            if (r instanceof ac.haru.hikaricanvas.state.EditSession.OpResult.Ok ok) {
-                if (push != null && !ok.patch().ops().isEmpty()) {
-                    try {
-                        push.pushPatch(s.id(), ok.patch());
-                    } catch (Exception e) {
-                        log.log(java.util.logging.Level.WARNING,
-                                "applyScriptElementPatch push failed: session=" + s.id()
-                                        + " wall=" + wallId + " err=" + e.getMessage(), e);
-                    }
-                }
-                if (throttler != null && ok.dirty() != null) {
-                    throttler.submit(s.id(), ok.dirty());
-                }
-                persistWall(s.id());
-                return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                        .SessionOutcome.applied();
-            }
-            if (r instanceof ac.haru.hikaricanvas.state.EditSession.OpResult.Error er) {
-                return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                        .SessionOutcome.failed(er.code() + ": " + er.message());
-            }
-            return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                    .SessionOutcome.failed("unexpected op result: "
-                            + r.getClass().getSimpleName());
+            EditSession.OpResult r = es.updateElement(elementId, patch);
+            return finishScriptElementStructuralOp(s, wallId, r, push, throttler,
+                    "applyScriptElementPatch");
         }
-        return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome.noSession();
+        return SessionOutcome.noSession();
     }
 
     /**
-     * 脚本 {@code nudgeElement} 路径 A——墙开着编辑器时，在<b>同一次 session 迭代</b>内
-     * 读元素当前 x/y + delta 写回，走与 {@link #applyScriptElementPatch} 相同的标准
-     * element.update 链（state.patch 推送 + 投影节流 + persistWall）。读 + 写在同一 EditSession
-     * 引用上顺序进行，避免脚本 nudge 与编辑器互相覆盖。
+     * 脚本 {@code nudgeElement} 路径 A——墙开着编辑器时在同一 {@link EditSession} 引用上读取
+     * 当前 {@code x/y} 并写入偏移后的新坐标，走 {@link #finishScriptElementStructuralOp} 收尾。
      *
      * <p>无活跃 session → {@code NO_SESSION}（调用方走 headless 读改写）。元素不存在 →
-     * {@code FAILED}（不回退 headless，避免双路径语义分叉——同 patch 路径）。</p>
+     * {@code FAILED}（不回退 headless，避免双路径语义分叉）。</p>
      */
-    public ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome
-    applyScriptElementNudge(String wallId, String elementId, int dx, int dy,
-                            ac.haru.hikaricanvas.web.OpPushCallback push,
-                            ac.haru.hikaricanvas.render.ProjectionThrottler throttler) {
+    public SessionOutcome applyScriptElementNudge(String wallId, String elementId, int dx, int dy,
+                                                  OpPushCallback push,
+                                                  ProjectionThrottler throttler) {
         if (wallId == null || elementId == null) {
-            return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                    .SessionOutcome.failed("invalid script element nudge args");
+            return SessionOutcome.failed("invalid script element nudge args");
         }
         for (Session s : byId.values()) {
             if (s.state() == SessionState.CLOSING) continue;
             if (!wallId.equals(s.wallId())) continue;
-            ac.haru.hikaricanvas.state.EditSession es = s.editSession();
+            EditSession es = s.editSession();
             if (es == null) continue;
-            // 读当前 x/y（同 EditSession 引用，写紧随其后）。
-            // 已知低危竞态（勿当新缺陷重报）：本读发生在下方 synchronized updateElement 之外，
-            // 唯一竞争者是编辑器主线程 WS op 恰在此读与写之间插入一次移动——后果仅这一拍 nudge
-            // 基于略旧 x/y，下一拍即自愈，不破坏数据完整性；与 applyScriptElementPatch 并发契约同档。
+            // 读取发生在下方 synchronized updateElement 之前；若并发 WS 移动恰好插入读写之间，
+            // 仅影响当前单拍偏移基准，不破坏状态完整性。
             Integer curX = null;
             Integer curY = null;
             for (var layer : es.state().layers()) {
@@ -853,144 +805,101 @@ public final class SessionManager {
                 }
             }
             if (curX == null) {
-                return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                        .SessionOutcome.failed("元素不存在: " + elementId);
+                return SessionOutcome.failed("element not found: " + elementId);
             }
             Map<String, Object> patch = Map.of(
-                    "x", ac.haru.hikaricanvas.state.StrictNumber.clampInt((long) curX + dx),
-                    "y", ac.haru.hikaricanvas.state.StrictNumber.clampInt((long) curY + dy));
-            ac.haru.hikaricanvas.state.EditSession.OpResult r = es.updateElement(elementId, patch);
-            if (r instanceof ac.haru.hikaricanvas.state.EditSession.OpResult.Ok ok) {
-                if (push != null && !ok.patch().ops().isEmpty()) {
-                    try {
-                        push.pushPatch(s.id(), ok.patch());
-                    } catch (Exception e) {
-                        log.log(java.util.logging.Level.WARNING,
-                                "applyScriptElementNudge push failed: session=" + s.id()
-                                        + " wall=" + wallId + " err=" + e.getMessage(), e);
-                    }
-                }
-                if (throttler != null && ok.dirty() != null) {
-                    throttler.submit(s.id(), ok.dirty());
-                }
-                persistWall(s.id());
-                return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                        .SessionOutcome.applied();
-            }
-            if (r instanceof ac.haru.hikaricanvas.state.EditSession.OpResult.Error er) {
-                return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                        .SessionOutcome.failed(er.code() + ": " + er.message());
-            }
-            return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                    .SessionOutcome.failed("unexpected op result: "
-                            + r.getClass().getSimpleName());
+                    "x", StrictNumber.clampInt((long) curX + dx),
+                    "y", StrictNumber.clampInt((long) curY + dy));
+            EditSession.OpResult r = es.updateElement(elementId, patch);
+            return finishScriptElementStructuralOp(s, wallId, r, push, throttler,
+                    "applyScriptElementNudge");
         }
-        return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome.noSession();
+        return SessionOutcome.noSession();
     }
 
     /**
-     * 脚本 {@code cloneElement} 路径 A——墙开着编辑器时走
-     * {@link ac.haru.hikaricanvas.state.EditSession#cloneElement} 标准链，并照
-     * {@link #applyScriptElementPatch} 的收尾链：推 state.patch（前端实时多出副本）+
-     * ProjectionThrottler 脏区投影 + {@link #persistWall}。F10 配额由 session 自己的
-     * EditSession 在 open/confirm 时注入的 {@code maxElementsPerWall} 强制（超额 → FAILED）。
-     *
-     * <p>无活跃 session → {@code NO_SESSION}（调用方走 headless）。元素不存在 / 配额超限 →
-     * {@code FAILED}（不回退 headless，避免双路径语义分叉——同 patch 路径）。</p>
+     * 脚本 {@code cloneElement} 路径 A——墙开着编辑器时走 {@link EditSession#cloneElement}
+     * 标准链 + {@link #finishScriptElementStructuralOp} 收尾；单墙元素配额由 open/confirm 时注入的
+     * {@code maxElementsPerWall} 强制。
      */
-    public ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome
-    applyScriptElementClone(String wallId, String elementId, int offsetX, int offsetY,
-                            ac.haru.hikaricanvas.web.OpPushCallback push,
-                            ac.haru.hikaricanvas.render.ProjectionThrottler throttler) {
+    public SessionOutcome applyScriptElementClone(String wallId, String elementId, int offsetX, int offsetY,
+                                                  OpPushCallback push,
+                                                  ProjectionThrottler throttler) {
         if (wallId == null || elementId == null) {
-            return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                    .SessionOutcome.failed("invalid script element clone args");
+            return SessionOutcome.failed("invalid script element clone args");
         }
         for (Session s : byId.values()) {
             if (s.state() == SessionState.CLOSING) continue;
             if (!wallId.equals(s.wallId())) continue;
-            ac.haru.hikaricanvas.state.EditSession es = s.editSession();
+            EditSession es = s.editSession();
             if (es == null) continue;
-            ac.haru.hikaricanvas.state.EditSession.OpResult r =
-                    es.cloneElement(elementId, offsetX, offsetY);
+            EditSession.OpResult r = es.cloneElement(elementId, offsetX, offsetY);
             return finishScriptElementStructuralOp(s, wallId, r, push, throttler,
                     "applyScriptElementClone");
         }
-        return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome.noSession();
+        return SessionOutcome.noSession();
     }
 
     /**
-     * 脚本 {@code deleteElement} 路径 A——墙开着编辑器时走
-     * {@link ac.haru.hikaricanvas.state.EditSession#deleteElement} 标准链 + 收尾链（推
-     * state.patch 移除元素 + 投影 + persistWall）。无活跃 session → {@code NO_SESSION}；
-     * 元素不存在 → {@code FAILED}（不回退 headless，同 patch 路径）。
+     * 脚本 {@code deleteElement} 路径 A——墙开着编辑器时走 {@link EditSession#deleteElement}
+     * 标准链 + {@link #finishScriptElementStructuralOp} 收尾。
      */
-    public ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome
-    applyScriptElementDelete(String wallId, String elementId,
-                             ac.haru.hikaricanvas.web.OpPushCallback push,
-                             ac.haru.hikaricanvas.render.ProjectionThrottler throttler) {
+    public SessionOutcome applyScriptElementDelete(String wallId, String elementId,
+                                                   OpPushCallback push,
+                                                   ProjectionThrottler throttler) {
         if (wallId == null || elementId == null) {
-            return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                    .SessionOutcome.failed("invalid script element delete args");
+            return SessionOutcome.failed("invalid script element delete args");
         }
         for (Session s : byId.values()) {
             if (s.state() == SessionState.CLOSING) continue;
             if (!wallId.equals(s.wallId())) continue;
-            ac.haru.hikaricanvas.state.EditSession es = s.editSession();
+            EditSession es = s.editSession();
             if (es == null) continue;
-            ac.haru.hikaricanvas.state.EditSession.OpResult r = es.deleteElement(elementId);
+            EditSession.OpResult r = es.deleteElement(elementId);
             return finishScriptElementStructuralOp(s, wallId, r, push, throttler,
                     "applyScriptElementDelete");
         }
-        return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome.noSession();
+        return SessionOutcome.noSession();
     }
 
     /**
      * 脚本 {@code setElementLayer}（置顶/置底）路径 A——墙开着编辑器时走
-     * {@link ac.haru.hikaricanvas.state.EditSession#moveElementToFront}（{@code mode="front"}）/
-     * {@link ac.haru.hikaricanvas.state.EditSession#moveElementToBack}（其余视作 back）标准链 +
-     * 收尾链（推 reorder 的 state.patch〔remove + add 一对〕+ 投影脏区 + persistWall），与 clone /
-     * delete 路径 A 同档（前端实时可见 reorder，不再被 headless 临时 session 之后的 persist
-     * 静默覆盖）。无活跃 session → {@code NO_SESSION}（调用方走 headless）；元素不存在 / 所在层
-     * 锁住 → {@code FAILED}（不回退 headless，避免双路径语义分叉——同 clone / delete 路径）。
+     * {@link EditSession#moveElementToFront}（{@code mode="front"}）或
+     * {@link EditSession#moveElementToBack} 标准链 + {@link #finishScriptElementStructuralOp} 收尾。
      */
-    public ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome
-    applyScriptElementReorder(String wallId, String elementId, String mode,
-                              ac.haru.hikaricanvas.web.OpPushCallback push,
-                              ac.haru.hikaricanvas.render.ProjectionThrottler throttler) {
+    public SessionOutcome applyScriptElementReorder(String wallId, String elementId, String mode,
+                                                    OpPushCallback push,
+                                                    ProjectionThrottler throttler) {
         if (wallId == null || elementId == null) {
-            return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                    .SessionOutcome.failed("invalid script element reorder args");
+            return SessionOutcome.failed("invalid script element reorder args");
         }
         boolean front = "front".equals(mode);
         for (Session s : byId.values()) {
             if (s.state() == SessionState.CLOSING) continue;
             if (!wallId.equals(s.wallId())) continue;
-            ac.haru.hikaricanvas.state.EditSession es = s.editSession();
+            EditSession es = s.editSession();
             if (es == null) continue;
-            ac.haru.hikaricanvas.state.EditSession.OpResult r =
+            EditSession.OpResult r =
                     front ? es.moveElementToFront(elementId) : es.moveElementToBack(elementId);
             return finishScriptElementStructuralOp(s, wallId, r, push, throttler,
                     "applyScriptElementReorder");
         }
-        return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome.noSession();
+        return SessionOutcome.noSession();
     }
 
     /**
-     * clone / delete 路径 A 的共用收尾（照 {@link #applyScriptElementPatch} 的 Ok 分支）：
-     * Ok → 推 patch（非空）+ 投影脏区 + persistWall → APPLIED；Error → FAILED（含错误码）。
+     * 脚本元素操作路径 A 的共用收尾：Ok → 推 patch（非空）+ 投影脏区 + persistWall → APPLIED；
+     * Error → FAILED（含错误码）。
      */
-    private ac.haru.hikaricanvas.script.engine.ElementPropertyApplier.SessionOutcome
-    finishScriptElementStructuralOp(Session s, String wallId,
-            ac.haru.hikaricanvas.state.EditSession.OpResult r,
-            ac.haru.hikaricanvas.web.OpPushCallback push,
-            ac.haru.hikaricanvas.render.ProjectionThrottler throttler, String label) {
-        if (r instanceof ac.haru.hikaricanvas.state.EditSession.OpResult.Ok ok) {
+    private SessionOutcome finishScriptElementStructuralOp(Session s, String wallId,
+            EditSession.OpResult r, OpPushCallback push,
+            ProjectionThrottler throttler, String label) {
+        if (r instanceof EditSession.OpResult.Ok ok) {
             if (push != null && !ok.patch().ops().isEmpty()) {
                 try {
                     push.pushPatch(s.id(), ok.patch());
                 } catch (Exception e) {
-                    log.log(java.util.logging.Level.WARNING,
+                    log.log(Level.WARNING,
                             label + " push failed: session=" + s.id()
                                     + " wall=" + wallId + " err=" + e.getMessage(), e);
                 }
@@ -999,15 +908,12 @@ public final class SessionManager {
                 throttler.submit(s.id(), ok.dirty());
             }
             persistWall(s.id());
-            return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                    .SessionOutcome.applied();
+            return SessionOutcome.applied();
         }
-        if (r instanceof ac.haru.hikaricanvas.state.EditSession.OpResult.Error er) {
-            return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                    .SessionOutcome.failed(er.code() + ": " + er.message());
+        if (r instanceof EditSession.OpResult.Error er) {
+            return SessionOutcome.failed(er.code() + ": " + er.message());
         }
-        return ac.haru.hikaricanvas.script.engine.ElementPropertyApplier
-                .SessionOutcome.failed("unexpected op result: " + r.getClass().getSimpleName());
+        return SessionOutcome.failed("unexpected op result: " + r.getClass().getSimpleName());
     }
 
     /**
@@ -1025,16 +931,6 @@ public final class SessionManager {
     public enum IpBindResult { OK, BOUND, MISMATCH, NO_SESSION }
 
     /**
-     * 墙管理授权的<b>单一判据</b>：能否 {@code wall.lock} / {@code wall.unlock} / {@code wall.alias}。
-     *
-     * <p>后端三个 dispatcher 分支与 ready 帧的 {@code canManageWall} 字段共用本方法——
-     * 授权结论只允许有一个权威。前端此前自行比对 {@code selfUuid === ownerUuid}，
-     * 正是那种"在第二处重新推导授权"的做法导致控制台主体永远拿不到解锁按钮。</p>
-     *
-     * <p>注意 {@code wall.alias} 另有 {@code canvas.alias.any} 旁路（玩家用），
-     * 那条在 dispatcher 里单独判，不并进本方法——本方法只回答"是不是这面墙的管理者"。</p>
-     */
-    /**
      * 锁定墙的 open 准入判定（纯函数，便于单测；查权限那步由调用方先算好传进来）。
      *
      * <p>顺序即优先级：控制台主体 &gt; wall owner &gt; 持 {@code canvas.admin.bypass-lock}。</p>
@@ -1048,6 +944,13 @@ public final class SessionManager {
         return hasBypassPerm;
     }
 
+    /**
+     * 墙管理授权的<b>单一判据</b>：能否 {@code wall.lock} / {@code wall.unlock} / {@code wall.alias}。
+     *
+     * <p>后端 dispatcher 分支与 ready 帧的 {@code canManageWall} 字段共用本方法，
+     * 确保控制台主体与 wall owner 拥有一致的管理权限。注意 {@code wall.alias} 另有
+     * {@code canvas.alias.any} 旁路，在 dispatcher / 命令层单独判定。</p>
+     */
     public static boolean canManageWall(Session s, WallRepo.Wall w) {
         if (s == null || w == null) return false;
         return s.isConsole() || w.ownerUuid().equals(s.playerUuid());
@@ -1113,30 +1016,27 @@ public final class SessionManager {
         auditLog.record("SESSION_CANCEL", s.playerUuid().toString(), s.playerName(),
                 sessionId, null, Map.of("reason", reason == null ? "" : reason));
         runForgetHooks(sessionId);
-        // 锁外触发——编辑器关闭后让该 wall 的 LOOP 动画自动续播（refreshAutoPlay 内部
-        // 若 wall 不存在 / 非 LOOP / 已注册则 no-op；与上方 runForgetHooks 同样在 writeLock 外执行）。
-        ac.haru.hikaricanvas.render.AnimationTicker ticker = this.animationTicker;
+        // 锁外触发——编辑器关闭后让该 wall 的 LOOP 动画自动续播并重建触发绑定。
+        AnimationTicker ticker = this.animationTicker;
         if (ticker != null && closingWallId != null) {
             ticker.refreshAutoPlay(closingWallId);
         }
-        // 编辑器关闭后重建触发绑定（最终态落库；与 refreshAutoPlay 同源 hook）。
-        ac.haru.hikaricanvas.render.TimelineTriggerRegistry trig = this.timelineTriggerRegistry;
+        TimelineTriggerRegistry trig = this.timelineTriggerRegistry;
         if (trig != null && closingWallId != null) {
             trig.rebuildForWall(closingWallId);
         }
     }
 
     /**
-     * `/canvas delete <wall_id> confirm`：彻底删除 wall（释放 map → FREE，删 walls 行）。
-     * 调用方负责拆 ItemFrames 和 cancel 任何活跃 session。
+     * `/canvas delete <wall_id> confirm`：彻底删除 wall（先删 walls 行，成功后再释放 map → FREE）。
+     * 调用方负责拆 ItemFrames。
      *
-     * <p>map mutate 在 writeLock 内；MapPool / WallRepo / renderer / forgetHooks
+     * <p>map mutate 在 writeLock 内；WallRepo / MapPool / renderer / forgetHooks
      * 全部在锁外执行。</p>
      */
     public boolean deleteWall(String wallId) {
         assertMainThread();
         if (wallId == null) return false;
-        // 收集要 forget 的 session id（在锁外发 hook），map mutate 在锁内
         List<String> forgottenIds = new ArrayList<>();
         writeLock.lock();
         try {
@@ -1151,13 +1051,7 @@ public final class SessionManager {
         } finally {
             writeLock.unlock();
         }
-        // Bukkit / MapPool / WallRepo / renderer 全部在锁外。
-        //
-        // **顺序要紧**：先删 walls 行、再放地图。原来反着来——先 releaseWall 把地图还回
-        // FREE 池，再 wallRepo.delete；而 delete 是吞异常的 void，删行失败时地图已经进了
-        // 池子，下一次 confirm 会把它借给新 wall，可 walls 行还在、还指着同一批 mapId
-        // → 两面墙共用地图互相覆盖像素（跨墙串台）。删行失败就整个中止，宁可留一面删不掉
-        // 的墙（玩家可以重试），也不能留一批同时属于两面墙的地图。
+        // 必须先删 walls 行、再释放地图：若删行失败则保留 RESERVED，避免两面墙共用同一批 mapId。
         if (!wallRepo.delete(wallId)) {
             log.severe("SessionManager.deleteWall: walls row delete failed for " + wallId
                     + "; keeping its maps RESERVED to avoid handing them to another wall");
@@ -1165,20 +1059,17 @@ public final class SessionManager {
             return false;
         }
         List<Integer> released = mapPool.releaseWall(wallId);
-        // 清像素缓存，防 mapId 复用导致旧像素显示在新 wall。
         if (canvasRenderer != null && !released.isEmpty()) {
             canvasRenderer.invalidate(released);
         }
         auditLog.record("WALL_DELETE", null, null, null, null,
                 Map.of("wall_id", wallId, "released_maps", released.size()));
         for (String id : forgottenIds) runForgetHooks(id);
-        // wall 删除完成 → 触发监听（VariableStore.clearWallReferences 等）。
-        // 异常隔离避免单个 hook 抛拖垮主路径。
         for (Consumer<String> hook : wallDeleteHooks) {
             try {
                 hook.accept(wallId);
             } catch (Exception e) {
-                log.log(java.util.logging.Level.WARNING,
+                log.log(Level.WARNING,
                         "SessionManager.deleteWall: wallDeleteHook threw for " + wallId, e);
             }
         }
@@ -1232,86 +1123,45 @@ public final class SessionManager {
     }
 
     /**
-     * 对所有活跃 session 的 {@link ac.haru.hikaricanvas.state.EditSession#purgeStaleStrokes}
-     * 一并调用。由 {@link SessionReaper} 周期触发——确保用户永久离开后服务端
-     * 不会积压 stroke buffer 内存（brush 引入的潜在泄漏）。
+     * 对所有活跃 session 的 {@link EditSession#purgeStaleStrokes} 一并调用。
+     * 由 {@link SessionReaper} 周期触发，避免用户离开后积压 stroke buffer 内存。
      */
     public void purgeAllStaleStrokes() {
         for (Session s : byId.values()) {
-            ac.haru.hikaricanvas.state.EditSession es = s.editSession();
+            EditSession es = s.editSession();
             if (es != null) es.purgeStaleStrokes();
         }
     }
 
     /**
      * 找到所有绑定到 {@code wallId} 的活跃 session，对每个 submit 全画布 dirty
-     * 到 {@link ac.haru.hikaricanvas.render.ProjectionThrottler}。
+     * 到 {@link ProjectionThrottler}。
      *
-     * <p>用例：变量值变化（{@link ac.haru.hikaricanvas.variable.VariableStore} wallDirtyCallback）
-     * 触发引用该变量的所有 wall 重画。throttler 自动合并到下个 200ms 窗口（5fps 上限）。</p>
-     *
-     * <p>线程安全：只读 {@code byId} + per-session immutable getters；ProjectionThrottler.submit
-     * 自身线程安全。可以从任意线程调（VariableStore 的 setValue 多半在 async daemon 或 WS 线程）。</p>
+     * <p>用例：变量值变化（{@link VariableStore} wallDirtyCallback）触发引用该变量的所有 wall 重画。</p>
      */
-    public void submitFullCanvasDirtyByWall(String wallId,
-                                            ac.haru.hikaricanvas.render.ProjectionThrottler throttler) {
+    public void submitFullCanvasDirtyByWall(String wallId, ProjectionThrottler throttler) {
         submitFullCanvasDirtyByWallAndReport(wallId, throttler);
     }
 
     /**
-     * 同 {@link #submitFullCanvasDirtyByWall} 但返回是否找到任何
-     * 活跃 session 提交。{@code false} 表示该 wall 部署在游戏内但没人开编辑器，调用方应
-     * 走 deploy-only refresh 路径（{@link ac.haru.hikaricanvas.render.CanvasProjector#projectByWall}）
-     * 让外部变量驱动的渲染不丢更新。
-     *
-     * @return true = 至少一个活跃 session 已被 submit；false = 无活跃 session
+     * 同 {@link #submitFullCanvasDirtyByWall} 但返回是否找到任何活跃 session 提交。
+     * {@code false} 表示该 wall 部署在游戏内但无人打开编辑器，调用方应走 deploy-only refresh
+     * （{@link CanvasProjector#projectByWall}）避免丢失更新。
      */
-    public boolean submitFullCanvasDirtyByWallAndReport(String wallId,
-                                                       ac.haru.hikaricanvas.render.ProjectionThrottler throttler) {
+    public boolean submitFullCanvasDirtyByWallAndReport(String wallId, ProjectionThrottler throttler) {
         if (wallId == null || throttler == null) return false;
         boolean any = false;
         for (Session s : byId.values()) {
             if (s.state() == SessionState.CLOSING) continue;
             if (!wallId.equals(s.wallId())) continue;
-            ac.haru.hikaricanvas.state.ProjectState ps = s.projectState();
+            ProjectState ps = s.projectState();
             if (ps == null) continue;
-            throttler.submit(s.id(),
-                    ac.haru.hikaricanvas.render.DirtyRegion.fullCanvas(ps));
+            throttler.submit(s.id(), DirtyRegion.fullCanvas(ps));
             any = true;
         }
         return any;
     }
 
-    /**
-     * 把 {@link ac.haru.hikaricanvas.variable.VariableStore.VariableChangeEvent}
-     * 翻译成 {@code state.patch} 推给绑定到 {@code event.referencingWalls()} 的所有活跃 session。
-     *
-     * <p>用例：Provider（ManualScheduleProvider / SystemVariableProvider / PapiVariableBridge 等）
-     * 直接调 {@link ac.haru.hikaricanvas.variable.VariableStore#setValue} 写值时，EditSession 路径
-     * 不参与 → 前端 mirror 不更新。本方法由 HikariCanvas onEnable 注入的 ChangeListener 调用，
-     * 兜底主动推送。</p>
-     *
-     * <p>state.patch 形态与 {@link ac.haru.hikaricanvas.state.EditSession} 的 variable.* op
-     * 完全一致（见 {@code variablePath / variableToMap}）：
-     * <ul>
-     *   <li>CREATED → {@code add /variables/<encoded> <Variable JSON>}</li>
-     *   <li>VALUE_SET → {@code replace /variables/<encoded>/currentValue <string|null>}</li>
-     *   <li>UPDATED → {@code replace /variables/<encoded> <Variable JSON>}（type / defaultValue 改）</li>
-     *   <li>BOUND → {@code replace /variables/<encoded>/source <string|null>}</li>
-     *   <li>DELETED → {@code remove /variables/<encoded>}</li>
-     * </ul></p>
-     *
-     * <p><b>version 字段</b>：variable 变更不属于 ProjectState 像素层，<b>不 bump version</b>——
-     * 复用绑定到该 wall 的 session 当前 ProjectState.version（前端 wsClient.handleStatePatch 已按
-     * path 前缀分拣 /variables/ 走 VariableStore，version 仅用于 projectOps 路径，空 projectOps
-     * 时设 version=当前值不会引入 race）。</p>
-     *
-     * <p>线程安全：只读 {@code byId} + per-session immutable getters；push.pushPatch 自身线程安全。
-     * 单 session push 失败被吞掉（log 经由 OpPushCallback 实现层），不影响其他 session。</p>
-     *
-     * @param event 变更事件
-     * @param push  OpPushCallback（由 WebServer 实现）
-     */
     /**
      * 广播全局用户变量变更给<b>所有</b>活跃 session，不限 wall。
      *
@@ -1319,36 +1169,29 @@ public final class SessionManager {
      * session 推 patch；与按 {@link #broadcastVariableChangeToWall} 的 per-wall 倒排索引
      * 路由形成对比。详见 {@code docs/dynamic-data.md §17.7}。</p>
      *
-     * <p>HikariCanvas onEnable 注入的 ChangeListener 按 fullName 前缀分流（{@code userglobal/}
-     * 走此方法，其他走 broadcastToWall），所以这里不重判 namespace，<b>来什么广播什么</b>。</p>
-     *
      * @param event 变更事件
      * @param push  OpPushCallback（由 WebServer 实现）
      */
     public void broadcastVariableChangeToAll(
-            ac.haru.hikaricanvas.variable.VariableStore.VariableChangeEvent event,
-            ac.haru.hikaricanvas.web.OpPushCallback push) {
+            VariableStore.VariableChangeEvent event,
+            OpPushCallback push) {
         if (event == null || push == null) return;
-        // WALL_REFS_UPDATED 是 markWallReferences 的副产品，不该出现在全局 namespace 路径；
-        // 不过为防御性起见仍早返（同 broadcastVariableChangeToWall）
-        if (event.type()
-                == ac.haru.hikaricanvas.variable.VariableStore.ChangeType.WALL_REFS_UPDATED) {
+        if (event.type() == VariableStore.ChangeType.WALL_REFS_UPDATED) {
             return;
         }
-        ac.haru.hikaricanvas.state.PatchOp op = buildVariablePatchOp(event);
+        PatchOp op = buildVariablePatchOp(event);
         if (op == null) return;
-        java.util.List<ac.haru.hikaricanvas.state.PatchOp> ops = java.util.List.of(op);
+        List<PatchOp> ops = List.of(op);
         for (Session s : byId.values()) {
             if (s.state() == SessionState.CLOSING) continue;
-            if (s.wallId() == null) continue;  // 没绑 wall 的 session 不需要 mirror 更新
-            ac.haru.hikaricanvas.state.ProjectState ps = s.projectState();
+            if (s.wallId() == null) continue;
+            ProjectState ps = s.projectState();
             long version = ps == null ? 0L : ps.version();
-            ac.haru.hikaricanvas.state.StatePatch patch =
-                    new ac.haru.hikaricanvas.state.StatePatch(version, ops);
+            StatePatch patch = new StatePatch(version, ops);
             try {
                 push.pushPatch(s.id(), patch);
             } catch (Exception e) {
-                log.log(java.util.logging.Level.WARNING,
+                log.log(Level.WARNING,
                         "broadcastVariableChangeToAll push failed: session=" + s.id()
                                 + " event=" + event.type()
                                 + " fullName=" + event.fullName() + " err=" + e.getMessage(),
@@ -1357,50 +1200,54 @@ public final class SessionManager {
         }
     }
 
+    /**
+     * 把 {@link VariableStore.VariableChangeEvent} 翻译成 {@code state.patch} 推给绑定到
+     * {@code event.referencingWalls()}（及 per-wall 隐含归属 wall）的所有活跃 session。
+     *
+     * <p>用例：Provider（ManualScheduleProvider / SystemVariableProvider / PapiVariableBridge 等）
+     * 直接调 {@link VariableStore#setValue} 写值时，由 ChangeListener 调用主动推送前端 mirror。</p>
+     *
+     * <p>{@code state.patch} 形态与 {@link EditSession} 的 {@code variable.*} op 一致：</p>
+     * <ul>
+     *   <li>CREATED → {@code add /variables/<encoded> <Variable JSON>}</li>
+     *   <li>VALUE_SET → {@code replace /variables/<encoded>/currentValue <string|null>}</li>
+     *   <li>UPDATED → {@code replace /variables/<encoded> <Variable JSON>}</li>
+     *   <li>BOUND → {@code replace /variables/<encoded>/source <string|null>}</li>
+     *   <li>DELETED → {@code remove /variables/<encoded>}</li>
+     * </ul>
+     *
+     * <p>variable 变更不属于 {@link ProjectState} 像素层，不递增 {@code version}。</p>
+     *
+     * @param event 变更事件
+     * @param push  OpPushCallback（由 WebServer 实现）
+     */
     public void broadcastVariableChangeToWall(
-            ac.haru.hikaricanvas.variable.VariableStore.VariableChangeEvent event,
-            ac.haru.hikaricanvas.web.OpPushCallback push) {
+            VariableStore.VariableChangeEvent event,
+            OpPushCallback push) {
         if (event == null || push == null) return;
-        // 自适应渲染：WALL_REFS_UPDATED 事件由 markWallReferences 引发，
-        // variable 字段为 null + fullName 是占位符；该事件用于让自适应 listener 重新评估
-        // ProjectionThrottler 间隔，不需要推 state.patch。这里早返避免 buildVariablePatchOp
-        // 走 switch 时缺 case + NPE。
-        if (event.type()
-                == ac.haru.hikaricanvas.variable.VariableStore.ChangeType.WALL_REFS_UPDATED) {
+        if (event.type() == VariableStore.ChangeType.WALL_REFS_UPDATED) {
             return;
         }
-        // 路由 walls 集合：
-        //  1) referencingWalls — Compositor markWallReferences 写入的精确倒排索引
-        //     （含 Bug 2 反查注入；多 wall 共享插件 / system 全局变量必走这里）
-        //  2) 变量 namespace 形如 X:wallId（per-wall：user / system:<wall> / schedule:<wall>）
-        //     → 隐含归属该 wallId，必须广播给该 wall 的所有活跃 session，即便 Compositor 还
-        //     没机会 markWallReferences（典型：用户开 ScheduleManagerModal 加 entry → Provider
-        //     首次 create + setValue 时，wall 文本里可能还没写 ${var:schedule/X}，referencingWalls
-        //     为空——本路径兜底保证 modal preview 实时显值）。
-        java.util.Set<String> walls = new java.util.HashSet<>();
+        // 路由 walls 集合：referencingWalls 精确倒排索引 + per-wall namespace 隐含归属
+        Set<String> walls = new HashSet<>();
         if (event.referencingWalls() != null) walls.addAll(event.referencingWalls());
-        // 解析 per-wall namespace 隐含归属
         String ownerWallId = parseOwnerWallId(event.fullName());
         if (ownerWallId != null) walls.add(ownerWallId);
         if (walls.isEmpty()) return;
-        // 构造 PatchOp（仅一条；批量改值场景下每次 mutation 都触发独立 event，不批合并）
-        ac.haru.hikaricanvas.state.PatchOp op = buildVariablePatchOp(event);
+        PatchOp op = buildVariablePatchOp(event);
         if (op == null) return;
-        java.util.List<ac.haru.hikaricanvas.state.PatchOp> ops = java.util.List.of(op);
+        List<PatchOp> ops = List.of(op);
         for (Session s : byId.values()) {
             if (s.state() == SessionState.CLOSING) continue;
             String sWallId = s.wallId();
             if (sWallId == null || !walls.contains(sWallId)) continue;
-            ac.haru.hikaricanvas.state.ProjectState ps = s.projectState();
-            // version：variable 变更不动 ProjectState，复用当前 version（前端 applyPatch 收到
-            // 同 version 不会引入异常——空 projectOps 时仅是 version 字段重写自身）。
+            ProjectState ps = s.projectState();
             long version = ps == null ? 0L : ps.version();
-            ac.haru.hikaricanvas.state.StatePatch patch =
-                    new ac.haru.hikaricanvas.state.StatePatch(version, ops);
+            StatePatch patch = new StatePatch(version, ops);
             try {
                 push.pushPatch(s.id(), patch);
             } catch (Exception e) {
-                log.log(java.util.logging.Level.WARNING,
+                log.log(Level.WARNING,
                         "broadcastVariableChangeToWall push failed: session=" + s.id()
                                 + " wall=" + sWallId + " event=" + event.type()
                                 + " fullName=" + event.fullName() + " err=" + e.getMessage(),
@@ -1415,7 +1262,7 @@ public final class SessionManager {
      *
      * <p>规则：fullName 拆首个 '/' 得 namespace；namespace 含 ':' 则取冒号后到 '/' 之前的子串。</p>
      */
-    private static @org.jetbrains.annotations.Nullable String parseOwnerWallId(String fullName) {
+    private static @Nullable String parseOwnerWallId(String fullName) {
         if (fullName == null) return null;
         int slash = fullName.indexOf('/');
         if (slash <= 0) return null;
@@ -1429,33 +1276,25 @@ public final class SessionManager {
      * 注入 VariableStore 引用让 broadcast 路径能查 userglobal owner 信息。
      * HikariCanvas onEnable 装配后调用一次。
      */
-    public void setVariableStoreRef(
-            ac.haru.hikaricanvas.variable.VariableStore store) {
+    public void setVariableStoreRef(VariableStore store) {
         this.variableStoreRef = store;
     }
 
     /** {@code VariableChangeEvent} → RFC 6902 PatchOp。形态与 EditSession 一致。 */
-    private ac.haru.hikaricanvas.state.PatchOp buildVariablePatchOp(
-            ac.haru.hikaricanvas.variable.VariableStore.VariableChangeEvent event) {
+    private PatchOp buildVariablePatchOp(VariableStore.VariableChangeEvent event) {
         String path = "/variables/" + encodeJsonPointer(event.fullName());
         return switch (event.type()) {
-            case CREATED -> ac.haru.hikaricanvas.state.PatchOp.add(
-                    path, variableToMap(event.variable()));
-            case UPDATED -> ac.haru.hikaricanvas.state.PatchOp.replace(
-                    path, variableToMap(event.variable()));
+            case CREATED -> PatchOp.add(path, variableToMap(event.variable()));
+            case UPDATED -> PatchOp.replace(path, variableToMap(event.variable()));
             case VALUE_SET -> {
                 String cur = event.variable() == null ? null : event.variable().currentValue();
-                yield ac.haru.hikaricanvas.state.PatchOp.replace(
-                        path + "/currentValue", cur);
+                yield PatchOp.replace(path + "/currentValue", cur);
             }
             case BOUND -> {
                 String src = event.variable() == null ? null : event.variable().source();
-                yield ac.haru.hikaricanvas.state.PatchOp.replace(
-                        path + "/source", src);
+                yield PatchOp.replace(path + "/source", src);
             }
-            case DELETED -> ac.haru.hikaricanvas.state.PatchOp.remove(path);
-            // WALL_REFS_UPDATED 不构造 patch（broadcastVariableChangeToWall
-            // 已早返）。switch exhaustive 时此分支永不命中；返 null 上游也已处理。
+            case DELETED -> PatchOp.remove(path);
             case WALL_REFS_UPDATED -> null;
         };
     }
@@ -1466,16 +1305,12 @@ public final class SessionManager {
     }
 
     /**
-     * 把 Variable 序列化为 patch value Map。与 {@link ac.haru.hikaricanvas.state.EditSession#variableToMap}
-     * 形态完全一致 — 前端 wsClient.applyVariablePatches 路径已就位。
-     *
-     * <p>{@code userglobal/*} namespace 时，从 {@link #variableStoreRef}
-     * 查 owner 信息并注入 {@code ownerUuid} / {@code ownerName} 字段，让前端 Picker / Panel
-     * 区分"我的全局 / 其他全局"。store 未注入或 owner 不存在时跳过 owner 字段。</p>
+     * 把 Variable 序列化为 patch value Map（与 {@link EditSession#variableToMap} 形态一致）。
+     * {@code userglobal/*} namespace 时从 {@link #variableStoreRef} 查 owner 信息并注入
+     * {@code ownerUuid} / {@code ownerName}。
      */
-    private java.util.Map<String, Object> variableToMap(
-            ac.haru.hikaricanvas.variable.Variable v) {
-        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+    private Map<String, Object> variableToMap(Variable v) {
+        Map<String, Object> m = new LinkedHashMap<>();
         if (v == null) return m;
         m.put("namespace", v.namespace());
         m.put("key", v.key());
@@ -1485,11 +1320,9 @@ public final class SessionManager {
         m.put("updatedAt", v.updatedAt());
         m.put("ttl", v.ttl());
         if (v.source() != null) m.put("source", v.source());
-        // referencedByWalls 是服务端倒排索引细节，不下发（与 EditSession.variableToMap 一致）
 
-        // userglobal 注入 owner 信息
-        if (ac.haru.hikaricanvas.variable.VariableStore.USER_GLOBAL_NAMESPACE.equals(v.namespace())) {
-            ac.haru.hikaricanvas.variable.VariableStore store = variableStoreRef;
+        if (VariableStore.USER_GLOBAL_NAMESPACE.equals(v.namespace())) {
+            VariableStore store = variableStoreRef;
             if (store != null) {
                 store.getGlobalOwner(v.key()).ifPresent(info -> {
                     m.put("ownerUuid", info.ownerUuid().toString());

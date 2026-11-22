@@ -1,9 +1,11 @@
 package ac.haru.hikaricanvas.state;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -26,8 +28,6 @@ import java.util.UUID;
  * <p><b>mutation 范式：</b>{@link Timeline} 不可变，所有改动重建 record 后 {@code replaceTimelineAt}
  * （与 Element / Layer「重建 record 再置换」一致），保证 {@link ProjectSnapshot} 可按引用共享、
  * undo/redo 不互相污染。</p>
- *
- * @since 0.6
  */
 final class TimelineOperations {
 
@@ -120,7 +120,7 @@ final class TimelineOperations {
     }
 
     /** 生成不与现有集合碰撞的 id（前缀 {@code tl-} / {@code kf-}）。 */
-    private static String freshId(String prefix, java.util.Set<String> existing) {
+    private static String freshId(String prefix, Set<String> existing) {
         String id;
         do {
             id = prefix + UUID.randomUUID().toString().substring(0, 8);
@@ -129,15 +129,15 @@ final class TimelineOperations {
     }
 
     /** 所有现存 timeline id（id 碰撞检测用）。 */
-    private java.util.Set<String> timelineIds() {
-        java.util.Set<String> ids = new java.util.HashSet<>();
+    private Set<String> timelineIds() {
+        Set<String> ids = new HashSet<>();
         for (Timeline t : state.timelines()) ids.add(t.id());
         return ids;
     }
 
     /** 所有现存 keyframe id（跨所有 timeline 全部轨道；id 碰撞检测用）。 */
-    private java.util.Set<String> allKeyframeIds() {
-        java.util.Set<String> ids = new java.util.HashSet<>();
+    private Set<String> allKeyframeIds() {
+        Set<String> ids = new HashSet<>();
         for (Timeline t : state.timelines()) {
             for (List<Keyframe> track : t.tracks().values()) {
                 for (Keyframe kf : track) ids.add(kf.id());
@@ -312,9 +312,7 @@ final class TimelineOperations {
                     throw new ValidationException("INVALID_PAYLOAD",
                             "numeric keyframe string must be a number or ${var:...}: " + property);
                 }
-                // 字面数值串走与 Number 分支同一道 MAX_DIM 闸。上面那道只覆盖了 JSON number 形态，
-                // 于是 {"value": "999999999"} 这种字符串形态可以照样把 w/h 顶上天，
-                // 插值出来的巨大 w×h 会流到未裁剪的分配路径（如 IconRenderer）。
+                // 字面数值串走与 Number 分支同一道 MAX_DIM 闸，避免字符串形态越界 w/h 流向渲染分配。
                 if (!isVarTemplate(s)) {
                     checkDimBound(property, Double.parseDouble(s.trim()));
                 }
@@ -476,7 +474,7 @@ final class TimelineOperations {
                 .add(timelinePath(idx), t)
                 .replace("/activeTimelineId", id)
                 .build(v);
-        // timeline op 不产生像素变化（P3 起动画 ticker 才驱动重绘）
+        // timeline 元数据编辑不直接产生静态画布脏区域（播放期间由 AnimationTicker 驱动出帧）
         return new EditSession.OpResult.Ok(patch, null);
     }
 
@@ -624,7 +622,7 @@ final class TimelineOperations {
         int trackSize = newTrack ? 0 : existing.size();
 
         // 唯一性不变量（docs/timeline.md §2.1）：一个 (element, property, timeMs) 只允许一帧。
-        // 撞上已有帧就**覆盖**它的 value + easing，不追加。
+        // 撞上已有帧就覆盖它的 value + easing，不追加。
         // 允许重合的话同一时刻会堆出多个帧、UI 上重叠成一个点，用户改的是被遮住的那个 ——
         // 症状就是「这个时刻怎么调都不动」，而且没有任何正常入口能删掉压在下面的那一帧。
         // 双击 / 连拖 / 整体帧批量加帧都能轻易造出来，必须堵在写入侧。
@@ -751,7 +749,7 @@ final class TimelineOperations {
      * keyframe.update / keyframe.move 的共用实现。允许键 {@code timeMs / value / easing}。
      * timeMs 变化 → 重排该轨 → 整轨 replace patch；否则单帧 replace。
      * coalesce key：前端传 {@code coalesceKey}（整体帧批量 op 共享一步撤销）优先；缺省回退
-     * 单帧键 {@code elementId:keyframeId:property}（单属性连续拖 / 滑块，D7，timeline.md §7.2）。
+     * 单帧键 {@code elementId:keyframeId:property}（单属性连续拖 / 滑块，{@code docs/timeline.md §7.2}）。
      */
     private EditSession.OpResult mutateKeyframe(String timelineId, String keyframeId,
                                                Map<String, Object> patch, String coalesceKey) {
@@ -800,11 +798,7 @@ final class TimelineOperations {
         int newIndex = loc.index();
         if (timeChanged) {
             // 唯一性不变量（docs/timeline.md §2.1）：拖到同 (property, timeMs) 已有帧上时，
-            // **被拖过来的这一帧胜出**，原地那一帧删掉。
-            //
-            // 老写法是 List.sort 靠稳定排序，注释还写着「相等排在已有之后」—— 稳定排序做不到
-            // 这件事，它只保持原相对顺序：把左边的帧拖到右边同 timeMs 的帧上，被拖的那个仍排在前面，
-            // 而取值按「重合取后」拿的是后面那个 —— 用户刚拖进去的值直接被遮掉，画面纹丝不动。
+            // 被移动帧覆盖目标时刻的原帧，并按 timeMs 升序插入到同 timeMs 其它属性帧末尾。
             int dup = indexOfKeyframeAt(newTrack, orig.property(), timeMs, loc.index());
             if (dup >= 0) newTrack.remove(dup);
             newTrack.remove(newTrack.indexOf(updatedKf));
@@ -822,8 +816,8 @@ final class TimelineOperations {
 
         ProjectSnapshot pre = history.snapshotNow();
         state.replaceTimelineAt(idx, updated);
-        // D7：keyframe 拖动高频合并。整体帧批量 op（整体块拖动 / 拉就设的 update 分支）由前端传
-        //   coalesceKey 让多帧共享一步撤销；缺省回退单帧键 elementId:keyframeId:property（单属性拖 / 滑块）。
+        // keyframe 拖动高频合并：整体帧批量 op 由前端传 coalesceKey 共享一步撤销；
+        // 缺省回退单帧键 elementId:keyframeId:property（单属性拖动 / 滑块）。
         history.commitHistoryCoalesced(pre, coalesceKey != null ? coalesceKey
                 : loc.elementId() + ":" + orig.id() + ":" + orig.property());
         long v = state.bumpVersion();

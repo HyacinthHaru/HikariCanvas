@@ -15,8 +15,7 @@ import java.util.UUID;
  *
  * <p><b>载体：</b> {@code packBytes} 是 {@code .canvas} pack（{@code manifest.kind="pack"}）原始字节；
  * {@code spec} 是仅供 Gallery / list / preview 统一按 {@link #spec()} 读的<b>合成 spec</b>
- * （id / name / spec / canvas / params），套用走 {@code ProjectImporter.applyPack} 拿这份字节现解。
- * {@code packBytes} 为 null 的退化条目（{@link #isPack()} 返 false）仅供防御判定，正常注册不产出。</p>
+ * （id / name / spec / canvas / params），套用走 {@code ProjectImporter.applyPack} 拿这份字节现解。</p>
  *
  * <p><b>关于 {@code byte[]} 的 record 语义：</b> record 自动生成的
  * {@code equals/hashCode/toString} 对 {@code byte[]} 走引用（identity）语义而非
@@ -28,20 +27,9 @@ public record TemplateEntry(
         TemplateSource source,
         String sourceLabel,
         Optional<UUID> ownerUuid,
-        /** pack 原始字节（套用时喂 {@code ProjectImporter.applyPack}）；null = 退化空条目。 */
+        /** pack 原始字节（套用时喂 {@code ProjectImporter.applyPack}）。 */
         byte[] packBytes
 ) {
-    /** 退化条目（无 owner、无 pack 字节）；{@link #isPack()} 返 false。 */
-    public TemplateEntry(TemplateSpec spec, TemplateSource source, String sourceLabel) {
-        this(spec, source, sourceLabel, Optional.empty(), null);
-    }
-
-    /** 退化条目（带 owner、无 pack 字节）；{@link #isPack()} 返 false。 */
-    public TemplateEntry(TemplateSpec spec, TemplateSource source, String sourceLabel,
-                         Optional<UUID> ownerUuid) {
-        this(spec, source, sourceLabel, ownerUuid, null);
-    }
-
     /**
      * 构造一个 {@code .canvas} pack 条目：{@code syntheticSpec} 供 UI 统一读，{@code packBytes}
      * 为 pack 原始字节（套用时经 {@code ProjectImporter.applyPack} 现解）。

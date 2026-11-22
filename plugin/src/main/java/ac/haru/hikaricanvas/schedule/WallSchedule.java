@@ -3,6 +3,7 @@ package ac.haru.hikaricanvas.schedule;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 一面 wall 的时刻表完整视图——元数据 + entries 列表。
@@ -35,7 +36,7 @@ public record WallSchedule(
     /** 规范化 precision 输入：null / 非法值 → "minute"；大小写不敏感。 */
     public static String normalizePrecision(@Nullable String raw) {
         if (raw == null) return PRECISION_MINUTE;
-        String lower = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        String lower = raw.trim().toLowerCase(Locale.ROOT);
         if (PRECISION_SECOND.equals(lower)) return PRECISION_SECOND;
         return PRECISION_MINUTE;
     }

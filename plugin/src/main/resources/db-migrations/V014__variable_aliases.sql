@@ -1,4 +1,4 @@
--- 0.4.2：变量别名（per-wall，全 namespace 通用）。详见 docs/variables.md §1.12。
+-- 变量别名（每面墙独立，全命名空间通用）。详见 docs/dynamic-data.md。
 --
 -- 每个 wall 给某个 fullName 可起一个别名（短易记名），让 VariablePicker / VariablePanel /
 -- VariableChipEditor 展示时优先用 alias 代替原始 fullName。

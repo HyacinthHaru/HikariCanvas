@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code build/test-results/snapshot/diff}（红点标差异），确认无误后把 actual 覆盖到
  * {@code src/test/resources/expected}，git commit。
  *
- * <h2>平台脆弱 fixture（0.4.7 起）</h2>
+ * <h2>平台脆弱 fixture</h2>
  * 4 个 fixture（02-chinese-text / 03-effects-stroke / 04-effects-shadow / 05-effects-glow）
  * 在 Linux + macOS AWT 渲染输出差异 > 0.5%，CI Linux 跑会 fail。拆出 {@link #snapshotPlatformSensitive}
  * 方法 + {@code @DisabledIfEnvironmentVariable(GITHUB_ACTIONS=true)} 让 CI 跳过；本地 macOS
@@ -87,7 +87,7 @@ class RendererSnapshotTest {
     }
 
     /**
-     * 平台脆弱 fixture（中文文本 + 文字 effects stroke / shadow / glow）—— 0.4.7 发现
+     * 平台脆弱 fixture（中文文本 + 文字 effects stroke / shadow / glow）——
      * 这些 fixture 在 Linux + macOS AWT 渲染差异 > 0.5%（中文字体度量微差 +
      * effects 内部 AWT 实现细节差异），CI Linux 跑会 fail。
      *
@@ -98,8 +98,7 @@ class RendererSnapshotTest {
     @DisabledIfEnvironmentVariable(
             named = "GITHUB_ACTIONS",
             matches = "true",
-            disabledReason = "AWT 字体渲染跨平台差异 — Linux/macOS 在中文 + effects 路径下输出超过 0.5% 容差。"
-                    + " baseline 用 macOS 生成。0.4.7 hotfix 后引入。"
+            disabledReason = "AWT 字体渲染跨平台差异 — Linux/macOS 在中文 + effects 路径下输出超过 0.5% 容差；baseline 在 macOS 生成。"
     )
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {

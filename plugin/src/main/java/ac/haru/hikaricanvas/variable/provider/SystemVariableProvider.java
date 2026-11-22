@@ -18,8 +18,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -80,8 +83,7 @@ public final class SystemVariableProvider implements VariableProvider {
     static final int TTL_GRACE_FACTOR = 2;
 
     /** wall ID 形态（{@code w-<8位小写十六进制>}，与 {@code WallRepo.generateWallId} 对齐）。 */
-    private static final java.util.regex.Pattern WALL_ID_PATTERN =
-            java.util.regex.Pattern.compile("w-[0-9a-f]{8}");
+    private static final Pattern WALL_ID_PATTERN = Pattern.compile("w-[0-9a-f]{8}");
 
     /** server.time 格式化器（24h HH:mm）。 */
     private static final DateTimeFormatter TIME_FMT =
@@ -111,16 +113,15 @@ public final class SystemVariableProvider implements VariableProvider {
     private final DataSource dataSource;
 
     /** 每个全局 key 的下次刷新时刻（ms epoch）。 */
-    private final Map<String, Long> nextRefreshAt = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Long> nextRefreshAt = new ConcurrentHashMap<>();
     /** 已注册的 per-wall（wallId set）。Concurrent 让 registerWall / unregisterWall / refresh 共用。 */
-    private final java.util.Set<String> registeredWalls =
-            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final Set<String> registeredWalls = ConcurrentHashMap.newKeySet();
     /**
      * per-wall alias 上次 push 时刻（ms epoch）。refresh() 每 1s 跑一次（与 server.tick 同
      * 公约），但 wall.alias TTL=5s + 极少变 —— 用此表把每 wall 的 DB 查询/刷新收到 5s 一次，
      * 避免 N 个 wall × 1 SELECT/s 永续浪费 HikariCP 连接池。
      */
-    private final Map<String, Long> lastAliasPushAt = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Long> lastAliasPushAt = new ConcurrentHashMap<>();
 
     /**
      * 生产构造：注入 plugin + WallRepo。内部组装 {@link DataSource} 默认 Bukkit 实现。
@@ -144,7 +145,7 @@ public final class SystemVariableProvider implements VariableProvider {
 
     @Override
     public String displayName() {
-        return "系统变量";
+        return "System Variables";
     }
 
     @Override
@@ -302,8 +303,8 @@ public final class SystemVariableProvider implements VariableProvider {
     }
 
     /** 当前已注册的 per-wall 集合快照（测试 / 调试用，照两个 Schedule Provider 的同名方法）。 */
-    java.util.Set<String> registeredWallsSnapshot() {
-        return java.util.Set.copyOf(registeredWalls);
+    Set<String> registeredWallsSnapshot() {
+        return Set.copyOf(registeredWalls);
     }
 
     /** 注销 wall（删 4 个 wall.* 变量）。同 wall 重复或未注册幂等。 */

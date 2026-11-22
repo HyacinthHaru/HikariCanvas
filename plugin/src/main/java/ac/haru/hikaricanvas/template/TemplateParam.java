@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
 /**
- * 单个参数声明。契约见 {@code docs/template-spec.md §5}。
+ * 单个参数声明。契约见 {@code docs/template-pack.md §3.3}。
  *
  * <p>共享字段池：不是每种 {@code type} 都用到全部字段。多余字段在 v1 静默忽略。
  * 详细类型→字段对应见 §5.1 表。</p>

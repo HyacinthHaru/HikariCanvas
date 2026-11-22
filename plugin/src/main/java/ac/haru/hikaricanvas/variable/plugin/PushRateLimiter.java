@@ -116,10 +116,9 @@ public final class PushRateLimiter {
      *
      * <p>"超大单批预拦截"——当单次 batch 的 {@code count} 本身就超过
      * per-plugin 限额（默 100）时，直接按 per-plugin drop tail 拒绝，<b>不</b>计入全局窗口、
-     * <b>不</b>触发全服 10s 熔断。原实现先加全局：一个插件推一个超 global（默 1000）的大批
-     * 会无辜熔断全服所有插件的 push。本拦截仍把 count 记进 per-plugin 窗口（保持"同窗口后续
-     * 也 drop"语义）。注意：当 per-plugin 限额被配得 ≥ batch（如测试用 100_000）时，该批
-     * 不触发本拦截，仍会按正常流程计入全局并可能触发全局熔断——这是预期（真·全服总量超标）。</p>
+     * <b>不</b>触发全服 10s 熔断，避免单个插件的大批请求误伤其他插件。本拦截仍把 count 记进
+     * per-plugin 窗口（保持"同窗口后续也 drop"语义）。当 per-plugin 限额被配得 ≥ batch 时，
+     * 该批仍按正常流程计入全局并可能触发全局熔断。</p>
      *
      * @param plugin 调用方插件（非 null）
      * @param count  请求 token 数（必须 &gt; 0）
@@ -222,12 +221,7 @@ public final class PushRateLimiter {
      *
      * <p><b>线程安全：</b> {@code (windowSec, count)} 打包进<b>一个</b> {@link AtomicLong}
      * （高 32 位 = 窗口秒数截断，低 32 位 = 计数）走单次 CAS，窗口切换与计数是同一个原子动作，
-     * 真正做到跨窗口零丢失。</p>
-     *
-     * <p>此前是两个独立 AtomicLong：先 CAS 换 windowSec、赢家 {@code count.set(0)}，
-     * 输家直接 {@code count.addAndGet}。注释写着「输家的 add 落到新 window，无丢失」——
-     * 实际交错是输家先 add、赢家随后 set(0) 把它抹掉。窗口切换那一瞬计数会少算，
-     * 限流器允许一小撮突发溢出，而注释还告诉你这里没有丢失，将来谁拿它做配额审计就会栽。</p>
+     * 跨窗口零丢失。</p>
      *
      * <p>窗口秒数截断成 int 不影响判定：只比相等，2038 之后回绕仍是「同一秒相等、不同秒不等」。</p>
      */

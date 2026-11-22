@@ -9,40 +9,55 @@ import ac.haru.hikaricanvas.storage.WallRepo;
 import ac.haru.hikaricanvas.variable.VariableException;
 import ac.haru.hikaricanvas.variable.VariableInterpolator;
 import ac.haru.hikaricanvas.variable.VariableStore;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.NamespacedKey;
+import org.bukkit.Particle;
+import org.bukkit.Registry;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.Nullable;
 
+import java.time.Duration;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.random.RandomGenerator;
 
 /**
- * 脚本动作执行器（{@code docs/scripting.md §2.3 / §3}）。8 动作落地：
+ * 脚本动作执行器（{@code docs/scripting.md §2.3 / §3}），覆盖全部 29 种 {@link Action} 子类
+ * （21 种副作用动作由本类执行，8 种控制流与挂起动作由 {@link ScriptRunner} 处理）：
  *
  * <ul>
- *   <li>{@code setVariable / incrementVariable / log} → VariableStore / logger（async 安全；
- *       value / message 过 {@code ${var:X}} 插值——复用 {@link VariableInterpolator}，
- *       与 Compositor 渲染期同一实现）</li>
- *   <li>{@code setElementProperty} → {@link ElementPropertyApplier} 双路径</li>
- *   <li>{@code playTimeline} → {@link TickerControl}（AnimationTicker 线程安全入口直调）</li>
- *   <li>{@code playSound} → 同步解析（wall 坐标 / scope / soundId）后主线程 hop
- *       {@code Bukkit.getScheduler().runTask}；plugin == null（测试路径）直跑</li>
+ *   <li>变量族（{@code setVariable / incrementVariable / scaleVariable / setRandomVariable /
+ *       roundVariable / copyVariable / appendVariable}）→ {@link VariableStore}（async 安全；
+ *       文本类参数过 {@code ${var:X}} 插值，复用 {@link VariableInterpolator}）</li>
+ *   <li>元素族（{@code setElementProperty / setElementProperties / nudgeElement /
+ *       cloneElement / deleteElement / setElementLayer}）→ {@link ElementPropertyApplier} 双路径</li>
+ *   <li>时间轴族（{@code playTimeline / playTimelineAwait}）→ {@link TickerControl}
+ *       （{@code playTimelineAwait} 由本类触发播放、{@link ScriptRunner} 挂起等待一轮时长）</li>
+ *   <li>音视与玩家反馈（{@code playSound / playParticle / sendMessage / showTitle}）→ 主线程 hop
+ *       {@code Bukkit.getScheduler().runTask}（Adventure {@link Component} / {@link Title}）；
+ *       {@code plugin == null}（测试路径）直跑</li>
  *   <li>{@code runCommand} → {@link CommandTemplateEngine} 渲染（转义 /
  *       校验全在纯函数侧）→ 主线程 hop {@code Bukkit.dispatchCommand(console, cmd)} +
  *       audit {@code SCRIPT_COMMAND_EXECUTED}；模板未配置 → blocked step，参数校验失败
  *       → error step</li>
- *   <li>{@code log} → {@code logger.info}；<b>不进 audit</b>（玩家级高频会刷库）</li>
- *   <li>{@code wait / if} 由 {@link ScriptRunner} 处理；进到这里是防御 → error step</li>
+ *   <li>{@code log} → {@code log.fine}；<b>不进 audit</b>（玩家级高频会刷库）</li>
+ *   <li>控制流与挂起（{@code wait / if / repeat / repeatUntil / randomBranch / stopScript /
+ *       waitUntil / tweenBlock}）由 {@link ScriptRunner} 处理；进到这里是防御 → error step</li>
  * </ul>
  *
  * <p><b>三层异常隔离</b>（照 Provider daemon 范式）：单动作 throw → error step +
@@ -88,8 +103,7 @@ public final class ActionExecutor implements ActionSink {
      * setRandomVariable 的随机源。生产默认 {@code ThreadLocalRandom.current()}
      * （runner 单线程，无竞争）；单测经 {@link #setRngForTest} 注 seeded {@code Random} 确定性。
      */
-    private volatile java.util.random.RandomGenerator rng =
-            java.util.concurrent.ThreadLocalRandom.current();
+    private volatile RandomGenerator rng = ThreadLocalRandom.current();
 
     /** 兼容旧 6 参形态（既有单测沿用）：无命令模板 / 无 audit → runCommand 恒 blocked。 */
     public ActionExecutor(@Nullable VariableStore store,
@@ -124,7 +138,7 @@ public final class ActionExecutor implements ActionSink {
     }
 
     /** 测试 seam：注入确定性随机源（生产不调用）。 */
-    void setRngForTest(java.util.random.RandomGenerator r) {
+    void setRngForTest(RandomGenerator r) {
         this.rng = r;
     }
 
@@ -167,10 +181,10 @@ public final class ActionExecutor implements ActionSink {
                 case Action.WaitUntil a -> TraceStep.error(blockId, "waitUntil must be handled by ScriptRunner");
                 // repeatUntil 真实现在 ScriptRunner（动态循环 + RunState 轮数）；
                 // 进到这里是 Runner 实现 bug → 防御 error。
-                case Action.RepeatUntil a -> TraceStep.error(blockId, "repeatUntil is handled by ScriptRunner (placeholder)");
+                case Action.RepeatUntil a -> TraceStep.error(blockId, "repeatUntil is handled by ScriptRunner");
                 // TweenBlock 由 ScriptRunner / TweenScheduler 处理；
                 // 进到这里是 Runner 实现 bug → 防御 error。
-                case Action.TweenBlock a -> TraceStep.error(blockId, "tweenBlock is handled by ScriptRunner (replaced by TweenScheduler in P2)");
+                case Action.TweenBlock a -> TraceStep.error(blockId, "tweenBlock is handled by ScriptRunner");
                 // RandomBranch 由 ScriptRunner 处理（控制流）；进到这里是 Runner 实现 bug。
                 case Action.RandomBranch a -> TraceStep.error(blockId, "randomBranch must be handled by ScriptRunner");
             };
@@ -222,7 +236,7 @@ public final class ActionExecutor implements ActionSink {
     private @Nullable String checkUserGlobalWritable(String wallId, String fullName) {
         if (store == null) return "VariableStore not wired";
         String key = fullName.substring(VariableStore.USER_GLOBAL_NAMESPACE.length() + 1);
-        java.util.UUID varOwner = store.getGlobalOwner(key)
+        UUID varOwner = store.getGlobalOwner(key)
                 .map(VariableStore.GlobalOwnerInfo::ownerUuid).orElse(null);
         if (varOwner == null) {
             return "全服变量无主，拒绝脚本改写: " + fullName;
@@ -419,8 +433,8 @@ public final class ActionExecutor implements ActionSink {
         Sound sound;
         try {
             NamespacedKey key = NamespacedKey.fromString(
-                    a.soundId().toLowerCase(java.util.Locale.ROOT));
-            sound = key == null ? null : org.bukkit.Registry.SOUNDS.get(key);
+                    a.soundId().toLowerCase(Locale.ROOT));
+            sound = key == null ? null : Registry.SOUNDS.get(key);
         } catch (RuntimeException | NoClassDefFoundError | ExceptionInInitializerError e) {
             // 无 Bukkit server 环境（纯单测路径）Registry 静态初始化会失败——归为解析失败
             return TraceStep.error(blockId, "sound parse failed: " + a.soundId()
@@ -476,12 +490,12 @@ public final class ActionExecutor implements ActionSink {
         if (wall == null || wall.key() == null) {
             return TraceStep.error(blockId, "wall not found: " + wallId);
         }
-        // 解析 particle → Particle（Registry 只读表，任意线程读安全；同 playSound 的 Registry.SOUNDS 范式）
-        org.bukkit.Particle particle;
+        // 解析 particle → Particle（Registry 只读表，任意线程读安全）
+        Particle particle;
         try {
             NamespacedKey key = NamespacedKey.fromString(
-                    a.particle().toLowerCase(java.util.Locale.ROOT));
-            particle = key == null ? null : org.bukkit.Registry.PARTICLE_TYPE.get(key);
+                    a.particle().toLowerCase(Locale.ROOT));
+            particle = key == null ? null : Registry.PARTICLE_TYPE.get(key);
         } catch (RuntimeException | NoClassDefFoundError | ExceptionInInitializerError e) {
             // 无 Bukkit server 环境（纯单测路径）Registry 静态初始化会失败——归为解析失败
             return TraceStep.error(blockId, "particle parse failed: " + a.particle()
@@ -491,7 +505,7 @@ public final class ActionExecutor implements ActionSink {
             return TraceStep.error(blockId, "particle not found: " + a.particle());
         }
         WallRepo.Wall w = wall;
-        org.bukkit.Particle p = particle;
+        Particle p = particle;
         Runnable work = () -> {
             try {
                 World world = Bukkit.getWorld(w.key().world());
@@ -522,7 +536,7 @@ public final class ActionExecutor implements ActionSink {
     private TraceStep doRunCommand(String wallId, String blockId, Action.RunCommand a) {
         Map<String, HikariCanvasConfig.CommandTemplate> tpls =
                 templates == null ? Map.of() : templates.get();
-        Collection<String> names = onlineNames == null ? java.util.List.of() : onlineNames.get();
+        Collection<String> names = onlineNames == null ? List.of() : onlineNames.get();
         CommandTemplateEngine.Result r = CommandTemplateEngine.render(
                 a.templateId(), a.params(), tpls, names);
         switch (r) {
@@ -683,11 +697,11 @@ public final class ActionExecutor implements ActionSink {
     /** 按 channel 把已插值的 msg 发给单个玩家（chat/actionbar/title）。须在主线程调用。 */
     private static void sendTo(Player p, String channel, String msg) {
         switch (channel) {
-            case "actionbar" -> p.sendActionBar(net.kyori.adventure.text.Component.text(msg));
-            case "title" -> p.showTitle(net.kyori.adventure.title.Title.title(
-                    net.kyori.adventure.text.Component.text(msg),
-                    net.kyori.adventure.text.Component.empty()));
-            default -> p.sendMessage(net.kyori.adventure.text.Component.text(msg));
+            case "actionbar" -> p.sendActionBar(Component.text(msg));
+            case "title" -> p.showTitle(Title.title(
+                    Component.text(msg),
+                    Component.empty()));
+            default -> p.sendMessage(Component.text(msg));
         }
     }
 
@@ -808,24 +822,24 @@ public final class ActionExecutor implements ActionSink {
     }
 
     /**
-     * 标题弹窗（主线程 hop + target 分流，照 {@link #doSendMessage}）。
-     * title / subtitle 过 {@code ${var:X}} 插值；ms → tick = ms/50（整除，向下截断）。
-     * target=all → 全服广播；target=trigger → 触发玩家（{@link ScriptRunner#TRIGGER_DETAIL}）。
+     * 标题弹窗（主线程 hop + target 分流，与 {@link #doSendMessage} 对齐）。
+     * title / subtitle 过 {@code ${var:X}} 插值，经 Paper Adventure {@link Title} 发送；
+     * {@code target=all} → 全服广播；{@code target=trigger} → 触发玩家（{@link ScriptRunner#currentTriggerPlayer()}）。
      */
     private TraceStep doShowTitle(String wallId, String blockId, Action.ShowTitle a) {
-        String titleText = interpolator == null ? (a.title() == null ? "" : a.title())
-                : interpolator.interpolate(a.title() == null ? "" : a.title(), wallId).text();
-        String subtitleText = interpolator == null ? (a.subtitle() == null ? "" : a.subtitle())
-                : interpolator.interpolate(a.subtitle() == null ? "" : a.subtitle(), wallId).text();
-        int fadeInTicks = a.fadeInMs() / 50;
-        int stayTicks = a.stayMs() / 50;
-        int fadeOutTicks = a.fadeOutMs() / 50;
+        String titleRaw = a.title() == null ? "" : a.title();
+        String subtitleRaw = a.subtitle() == null ? "" : a.subtitle();
+        String titleText = interpolator == null ? titleRaw
+                : interpolator.interpolate(titleRaw, wallId).text();
+        String subtitleText = interpolator == null ? subtitleRaw
+                : interpolator.interpolate(subtitleRaw, wallId).text();
 
         if ("all".equals(a.target())) {
             Runnable work = () -> {
                 try {
                     for (Player p : Bukkit.getOnlinePlayers()) {
-                        p.sendTitle(titleText, subtitleText, fadeInTicks, stayTicks, fadeOutTicks);
+                        showTitleTo(p, titleText, subtitleText,
+                                a.fadeInMs(), a.stayMs(), a.fadeOutMs());
                     }
                 } catch (Throwable t) {
                     log.log(Level.WARNING, "[script] showTitle broadcast failed: " + t.getMessage(), t);
@@ -839,7 +853,7 @@ public final class ActionExecutor implements ActionSink {
             return TraceStep.ok(blockId, "action", "title -> broadcast");
         }
         // target=trigger：发给触发玩家
-        String who = ScriptRunner.currentTriggerDetail();
+        String who = ScriptRunner.currentTriggerPlayer();
         if (who == null || who.isBlank()) {
             return TraceStep.ok(blockId, "action", "no trigger player; showTitle skipped");
         }
@@ -847,7 +861,8 @@ public final class ActionExecutor implements ActionSink {
             try {
                 Player p = Bukkit.getPlayerExact(who);
                 if (p == null) return; // 离线
-                p.sendTitle(titleText, subtitleText, fadeInTicks, stayTicks, fadeOutTicks);
+                showTitleTo(p, titleText, subtitleText,
+                        a.fadeInMs(), a.stayMs(), a.fadeOutMs());
             } catch (Throwable t) {
                 log.log(Level.WARNING, "[script] showTitle failed: " + t.getMessage(), t);
             }
@@ -858,6 +873,18 @@ public final class ActionExecutor implements ActionSink {
             Bukkit.getScheduler().runTask(plugin, work);
         }
         return TraceStep.ok(blockId, "action", "title -> " + who);
+    }
+
+    /** 构建 Adventure {@link Title} 并展示给单个玩家。须在主线程调用。 */
+    static void showTitleTo(Player p, String titleText, String subtitleText,
+                            int fadeInMs, int stayMs, int fadeOutMs) {
+        p.showTitle(Title.title(
+                Component.text(titleText),
+                Component.text(subtitleText),
+                Title.Times.times(
+                        Duration.ofMillis(fadeInMs),
+                        Duration.ofMillis(stayMs),
+                        Duration.ofMillis(fadeOutMs))));
     }
 
     /**

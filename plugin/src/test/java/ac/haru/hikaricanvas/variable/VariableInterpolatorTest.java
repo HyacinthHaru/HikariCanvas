@@ -1,11 +1,16 @@
 package ac.haru.hikaricanvas.variable;
 
-import ac.haru.hikaricanvas.storage.UserVariableDao;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -16,21 +21,19 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P1-C：{@link VariableInterpolator} 单测。
+ * {@link VariableInterpolator} 文本插值与数值关键帧轨求值单测。
  *
- * <p>覆盖 fallback 链 4 档（cached → inline fallback → defaultValue → "???"）+ user namespace
- * wallId 注入 + 多占位符 + {@code $} / {@code \} 转义防注入 + referenced 集合正确性。</p>
+ * <p>覆盖 fallback 链 4 档（cached → inline fallback → defaultValue → "???"）、user namespace
+ * wallId 注入、多占位符、{@code $} / {@code \} 转义防注入、referenced 集合与 {@code resolveAsNumber}。</p>
  */
 class VariableInterpolatorTest {
 
-    private FakeUserVariableDao fakeDao;
     private VariableStore store;
     private VariableInterpolator interp;
 
     @BeforeEach
     void setUp() {
-        fakeDao = new FakeUserVariableDao();
-        store = new VariableStore(fakeDao, w -> { });
+        store = new VariableStore(new NoopUserVariableDao(), w -> { });
         interp = new VariableInterpolator(store);
     }
 
@@ -99,18 +102,14 @@ class VariableInterpolatorTest {
 
     @Test
     void systemDottedAlias_literalLookup() {
-        // 点分号 alias 视为字面 fullName 查 store——P3 Provider 注册同名 fullName
         store.create("server", "time", VarType.STRING, "00:00:00", "system");
         store.setValue("server/time", "14:30:00", null);
 
-        // ${var:server.time} 字面 → "server.time" namespace 不存在
-        // 但项目语义上点分号是 alias；P1 阶段我们按字面 fullName 查（store 里没有 "server.time"）
         var r1 = interp.interpolate("${var:server.time}", "w-1");
         assertEquals(VariableInterpolator.UNRESOLVED, r1.text(),
-                "点分号 alias 在 P1 按字面查；未注册则走兜底");
+                "未匹配内置别名规则的点分号按字面查；未注册则走兜底");
         assertTrue(r1.referencedFullNames().contains("server.time"));
 
-        // ${var:server/time} 走 fullName 路径 → 命中
         var r2 = interp.interpolate("${var:server/time}", "w-1");
         assertEquals("14:30:00", r2.text());
         assertTrue(r2.referencedFullNames().contains("server/time"));
@@ -278,7 +277,7 @@ class VariableInterpolatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  P3-J：wall.* 注入
+    //  wall.* 注入
     // ──────────────────────────────────────────────────────────
 
     @Test
@@ -327,7 +326,7 @@ class VariableInterpolatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  P3-L：schedule.* 注入
+    //  schedule.* 注入
     // ──────────────────────────────────────────────────────────
 
     @Test
@@ -368,8 +367,7 @@ class VariableInterpolatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.4.0 bugfix3（Bug A）：schedule/X、wall/X 斜杠语法
-    //  (与 ${var:user/X} 同款 namespace/key 风格)
+    //  schedule/X、wall/X 斜杠语法（与 ${var:user/X} 同款 namespace/key 风格）
     // ──────────────────────────────────────────────────────────
 
     @Test
@@ -422,13 +420,13 @@ class VariableInterpolatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  P3-J：notifyDynamicLookup 触发
+    //  notifyDynamicLookup 触发
     // ──────────────────────────────────────────────────────────
 
     @Test
     void miss_triggersDynamicLookupHook_withNamespace() {
-        java.util.List<String> calledNs = new java.util.concurrent.CopyOnWriteArrayList<>();
-        java.util.List<String> calledFullName = new java.util.concurrent.CopyOnWriteArrayList<>();
+        List<String> calledNs = new CopyOnWriteArrayList<>();
+        List<String> calledFullName = new CopyOnWriteArrayList<>();
         store.registerDynamicLookupHook((fn, ns) -> {
             calledFullName.add(fn);
             calledNs.add(ns);
@@ -522,7 +520,7 @@ class VariableInterpolatorTest {
 
     @Test
     void hit_doesNotTriggerDynamicLookupHook() {
-        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        AtomicInteger calls = new AtomicInteger();
         store.registerDynamicLookupHook((fn, ns) -> calls.incrementAndGet());
 
         store.create("bedwars", "score", VarType.NUMBER, null, null);
@@ -533,7 +531,7 @@ class VariableInterpolatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.4.2 bugfix（Bug 1）：二次扫描兜底
+    //  嵌套二次扫描兜底
     // ──────────────────────────────────────────────────────────
 
     @Test
@@ -654,16 +652,15 @@ class VariableInterpolatorTest {
 
     @Test
     void unclosedPlaceholder_doesNotWarnEveryCall() {
-        java.util.List<java.util.logging.LogRecord> records = new ArrayList<>();
+        List<LogRecord> records = new ArrayList<>();
         Logger interpLog = Logger.getLogger(VariableInterpolator.class.getName());
-        java.util.logging.Handler handler = new java.util.logging.Handler() {
-            @Override public void publish(java.util.logging.LogRecord r) { records.add(r); }
+        Handler handler = new Handler() {
+            @Override public void publish(LogRecord r) { records.add(r); }
             @Override public void flush() { }
             @Override public void close() { }
         };
         interpLog.addHandler(handler);
         try {
-            // 行尾缺 } 的残缺占位符：正则匹配不上 → 二次扫描没有任何进展
             for (int i = 0; i < 5; i++) {
                 interp.interpolate("下一班 ${var:schedule.next_departure", "w-mine0001");
             }
@@ -671,34 +668,106 @@ class VariableInterpolatorTest {
             interpLog.removeHandler(handler);
         }
         assertTrue(records.stream().noneMatch(
-                        r -> r.getLevel().intValue() >= java.util.logging.Level.WARNING.intValue()),
-                "匹配不上的残缺占位符不该每帧打 WARNING（动画墙上就是每秒几十条）: " + records.size());
+                        r -> r.getLevel().intValue() >= Level.WARNING.intValue()),
+                "匹配不上的残缺占位符不该每帧打 WARNING: " + records.size());
     }
 
     // ──────────────────────────────────────────────────────────
-    //  Helper：与 VariableStoreTest 同构的 fake DAO
+    //  resolveAsNumber（rendering.md §9.5）
     // ──────────────────────────────────────────────────────────
 
-    private static final class FakeUserVariableDao extends UserVariableDao {
-        FakeUserVariableDao() {
-            super(Logger.getLogger("test"), null);
+    @Nested
+    class ResolveAsNumber {
+
+        @Test
+        void plainNumberString() {
+            assertEquals(42.0, interp.resolveAsNumber("42", "w-1"), 1e-9, "纯整数字符串");
+            assertEquals(-3.5, interp.resolveAsNumber("-3.5", "w-1"), 1e-9, "负小数字符串");
+            assertEquals(7.0, interp.resolveAsNumber("  7  ", "w-1"), 1e-9, "带空白 → trim 后解析");
         }
 
-        @Override
-        public void upsert(String wallId, String name, VarType type,
-                           String defaultValue, String currentValue, String boundTo,
-                           long createdAt, long updatedAt) {
-            // no-op
+        @Test
+        void variableCachedNumericValue() {
+            store.create("bedwars", "score", VarType.NUMBER, null, null);
+            store.setValue("bedwars/score", "123", null);
+            assertEquals(123.0, interp.resolveAsNumber("${var:bedwars/score}", "w-1"), 1e-9,
+                    "cached 命中数值 → 该值");
         }
 
-        @Override
-        public void delete(String wallId, String name) {
-            // no-op
+        @Test
+        void variableCachedNonNumericFallsToZero() {
+            store.create("bedwars", "phase", VarType.STRING, null, null);
+            store.setValue("bedwars/phase", "RUNNING", null);
+            assertEquals(0.0, interp.resolveAsNumber("${var:bedwars/phase}", "w-1"), 0.0,
+                    "cached 命中非数值 → 链终点 0");
         }
 
-        @Override
-        public List<Row> loadAll() {
-            return new ArrayList<>();
+        @Test
+        void inlineFallbackNumeric() {
+            assertEquals(9.0, interp.resolveAsNumber("${var:bedwars/missing|fallback=9}", "w-1"), 1e-9,
+                    "变量不存在 → inline fallback 数值");
+        }
+
+        @Test
+        void missingNoFallbackResolvesToUnresolvedThenZero() {
+            assertEquals(0.0, interp.resolveAsNumber("${var:bedwars/missing}", "w-1"), 0.0,
+                    "变量不存在无 fallback → ??? → 0");
+        }
+
+        @Test
+        void nullAndEmptyToZero() {
+            assertEquals(0.0, interp.resolveAsNumber(null, "w-1"), 0.0, "null → 0");
+            assertEquals(0.0, interp.resolveAsNumber("", "w-1"), 0.0, "空串 → 0");
+        }
+
+        @Test
+        void infinityAndNanStringsToZero() {
+            assertEquals(0.0, interp.resolveAsNumber("Infinity", "w-1"), 0.0, "Infinity 字符串 → 0");
+            assertEquals(0.0, interp.resolveAsNumber("-Infinity", "w-1"), 0.0, "-Infinity 字符串 → 0");
+            assertEquals(0.0, interp.resolveAsNumber("NaN", "w-1"), 0.0, "NaN 字符串 → 0");
+        }
+
+        @Test
+        void strictGrammarRejectsHostLenientForms() {
+            store.create("bedwars", "raw", VarType.STRING, null, null);
+            store.setValue("bedwars/raw", "0x1p4", null);
+            assertEquals(0.0, interp.resolveAsNumber("${var:bedwars/raw}", "w-1"), 0.0,
+                    "变量 resolve 出 0x1p4 → 严格文法拒 → 0");
+            store.setValue("bedwars/raw", "5d", null);
+            assertEquals(0.0, interp.resolveAsNumber("${var:bedwars/raw}", "w-1"), 0.0,
+                    "尾随 d → 0");
+            assertEquals(0.0, interp.resolveAsNumber("0x1p4", "w-1"), 0.0, "字面 0x1p4 → 0");
+            assertEquals(0.0, interp.resolveAsNumber("12abc", "w-1"), 0.0, "字面 12abc → 0");
+        }
+
+        @Test
+        void trimStripsOnlyAsciiWhitespace() {
+            assertEquals(0.0, interp.resolveAsNumber("\u00A012", "w-1"), 0.0, "NBSP+12 → 0");
+            assertEquals(5.0, interp.resolveAsNumber("\t5\n", "w-1"), 1e-9, "ASCII 制表/换行 → 5");
+        }
+
+        @Test
+        void mixedTemplateNonNumericToZero() {
+            store.create("bedwars", "x", VarType.NUMBER, null, null);
+            store.setValue("bedwars/x", "5", null);
+            assertEquals(0.0, interp.resolveAsNumber("abc${var:bedwars/x}", "w-1"), 0.0,
+                    "混合串 resolve 出 abc5 非纯数值 → 0");
+        }
+
+        @Test
+        void mixedTemplateResolvingToPureNumberParses() {
+            store.create("bedwars", "tens", VarType.NUMBER, null, null);
+            store.setValue("bedwars/tens", "1", null);
+            assertEquals(10.0, interp.resolveAsNumber("${var:bedwars/tens}0", "w-1"), 1e-9,
+                    "resolve 后恰为纯数值串 → 解析");
+        }
+
+        @Test
+        void userNamespaceWallIdInjectedNumeric() {
+            store.create("user:w-7", "hp", VarType.NUMBER, null, null);
+            store.setValue("user:w-7/hp", "88", null);
+            assertEquals(88.0, interp.resolveAsNumber("${var:user/hp}", "w-7"), 1e-9,
+                    "user/X wallId 注入后数值命中");
         }
     }
 }

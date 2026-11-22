@@ -4,9 +4,11 @@ import ac.haru.hikaricanvas.state.Easing;
 import ac.haru.hikaricanvas.state.EasingType;
 import org.junit.jupiter.api.Test;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -72,7 +74,7 @@ class ScriptRuleValidatorTest {
         assertTrue(ScriptRuleValidator.validate(rule(new Trigger.PlayerNear(33), okActions())).isPresent());
     }
 
-    // ---------- 0.7.1：3 个新触发器 ----------
+    // ---------- 触发器补充校验 ----------
 
     @Test
     void leave_range_ok() {
@@ -142,8 +144,8 @@ class ScriptRuleValidatorTest {
 
     @Test
     void total_actions_50_ok() {
-        // if 自身计 1 + then 内 49 个 Log = 50,恰在上限内
-        List<Action> logs = java.util.stream.IntStream.range(0, 49)
+        // if 自身计 1 + then 内 49 个 Log = 50，恰在上限内
+        List<Action> logs = IntStream.range(0, 49)
                 .mapToObj(i -> (Action) new Action.Log("l" + i)).toList();
         Action iff = new Action.If("1 > 0", logs, List.of());
         assertEquals(Optional.empty(),
@@ -152,7 +154,7 @@ class ScriptRuleValidatorTest {
 
     @Test
     void total_actions_51_rejected() {
-        List<Action> logs = java.util.stream.IntStream.range(0, 50)
+        List<Action> logs = IntStream.range(0, 50)
                 .mapToObj(i -> (Action) new Action.Log("l" + i)).toList();
         Action iff = new Action.If("1 > 0", logs, List.of());
         Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(iff)));
@@ -208,7 +210,7 @@ class ScriptRuleValidatorTest {
                 List.of(new Action.PlaySound("ui.button.click", 1.0, 2.1, "near")))).isPresent());
     }
 
-    // —— 补充边界（可补不可删之外的防御覆盖） ——
+    // ---------- 补充边界覆盖 ----------
 
     @Test
     void blocklayout_null_is_ok() {
@@ -250,7 +252,7 @@ class ScriptRuleValidatorTest {
 
     @Test
     void increment_delta_infinite_rejected() {
-        // I-2 回归：累加步长非有限数值（Infinity / NaN）被拒
+        // 累加步长非有限数值（Infinity / NaN）被拒
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.IncrementVariable("user/x", Double.POSITIVE_INFINITY)))).isPresent());
     }
@@ -261,7 +263,7 @@ class ScriptRuleValidatorTest {
                 List.of(new Action.RunCommand("announce", Map.of("msg", "x".repeat(257)))))).isPresent());
     }
 
-    // ---------- 0.7.1：6 个新 Action 子类校验 ----------
+    // ---------- 友好属性 / 消息 / 随机 / 缩放 / 等待时间轴校验 ----------
 
     @Test
     void set_element_properties_ok() {
@@ -291,7 +293,7 @@ class ScriptRuleValidatorTest {
 
     @Test
     void set_element_properties_too_many_keys_rejected() {
-        Map<String, String> tooMany = new java.util.LinkedHashMap<>();
+        Map<String, String> tooMany = new LinkedHashMap<>();
         for (int i = 0; i < 9; i++) tooMany.put("k" + i, "1"); // 9 > PATCH_MAX_KEYS(8)
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.SetElementProperties("e-1", tooMany, "moveTo")))).isPresent());
@@ -432,7 +434,7 @@ class ScriptRuleValidatorTest {
                 List.of(new Action.PlayTimelineAwait(" ")))).isPresent());
     }
 
-    // ---------- 0.7.1：Repeat 有界循环 ----------
+    // ---------- Repeat 有界循环 ----------
 
     @Test
     void repeat_ok() {
@@ -476,13 +478,13 @@ class ScriptRuleValidatorTest {
     @Test
     void repeat_body_counts_toward_total_blocks_notMultiplied() {
         // countBlocks 计 body 节点（不乘 count）：repeat(1) + 48 body 动作 = 49 ≤ 50 合法
-        List<Action> body = java.util.stream.IntStream.range(0, 48)
+        List<Action> body = IntStream.range(0, 48)
                 .mapToObj(i -> (Action) new Action.Log("l" + i)).toList();
         assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.Repeat(100, body)))),
                 "repeat count=100 但 countBlocks 不乘 count：1 + 48 = 49 ≤ 50");
         // body 50 节点 → repeat(1) + 50 = 51 > 50 拒
-        List<Action> body51 = java.util.stream.IntStream.range(0, 50)
+        List<Action> body51 = IntStream.range(0, 50)
                 .mapToObj(i -> (Action) new Action.Log("l" + i)).toList();
         Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.Repeat(2, body51))));
@@ -491,7 +493,7 @@ class ScriptRuleValidatorTest {
         assertEquals("50", err.get().params().get("max"));
     }
 
-    // ---------- 0.7.1-P5：停止 / 粒子 / 等待直到 ----------
+    // ---------- 停止 / 粒子 / 等待直到 ----------
 
     @Test
     void stop_script_always_valid() {
@@ -547,7 +549,7 @@ class ScriptRuleValidatorTest {
                 List.of(new Action.WaitUntil("var(\"user/x\")>0", 999999)))).isPresent()); // > MAX
     }
 
-    // ---------- 0.7.2-P2：copy / append / clone / delete ----------
+    // ---------- copy / append / clone / delete ----------
 
     @Test
     void copyVariable_rejects_blank() {
@@ -597,7 +599,7 @@ class ScriptRuleValidatorTest {
                 List.of(new Action.DeleteElement("e-1")))));
     }
 
-    // ---------- 0.7.2-P3：repeatUntil + sendMessage target 白名单 ----------
+    // ---------- repeatUntil + sendMessage target 白名单 ----------
 
     @Test
     void repeatUntil_ok() {
@@ -727,14 +729,38 @@ class ScriptRuleValidatorTest {
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))).isPresent());
     }
 
-    // ---------- 0.7.3-ultrareview：RandomBranch ifDepth 双端对齐 ----------
+    // ---------- RandomBranch 概率范围与嵌套深度 ----------
 
     @Test
     void randomBranch_ok_valid_probability() {
-        // RandomBranch 合法：概率 50%，then/else 有简单动作
         Action a = new Action.RandomBranch(50,
                 List.of(new Action.Log("yes")), List.of(new Action.Log("no")));
         assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))));
+    }
+
+    @Test
+    void randomBranch_empty_branches_and_bounds_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.RandomBranch(50, List.of(), List.of())))));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.RandomBranch(0, List.of(), List.of())))));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.RandomBranch(100, List.of(), List.of())))));
+    }
+
+    @Test
+    void randomBranch_probability_out_of_range_rejected() {
+        assertTrue(ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.RandomBranch(101, List.of(), List.of())))).isPresent());
+        assertTrue(ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.RandomBranch(-1, List.of(), List.of())))).isPresent());
+    }
+
+    @Test
+    void randomBranch_nested_invalid_action_rejected() {
+        Action inner = new Action.Wait(1);
+        Action a = new Action.RandomBranch(50, List.of(inner), List.of());
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))).isPresent());
     }
 
     @Test
@@ -804,20 +830,17 @@ class ScriptRuleValidatorTest {
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))).isPresent());
     }
 
-    // ---------- 0.7.3 D3：setColor 友好积木 patch 键修复（color 不是 fill）----------
+    // ---------- setColor 友好积木 patch 键（color） ----------
 
-    /** 0.7.3 D3：SetElementProperties patch 含 "color" 键合法（setColor 友好积木目标格式）。 */
+    /** SetElementProperties patch 含 "color" 键合法（setColor 友好积木目标格式）。 */
     @Test
     void set_element_properties_color_key_is_whitelisted() {
-        // 回归：旧版 ELEMENT_PROPERTIES 不含 "color"，setColor 友好积木 defaultPatch={color:'#FFF'}
-        // 在 tweenBlock body 里走 validateAction→ELEMENT_PROPERTIES check → "元素属性不在允许范围：color"
-        // 修复：ELEMENT_PROPERTIES 加入 "color"，校验放行，TweenScheduler color 分支端到端可达。
         assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.SetElementProperties("e-1",
                         Map.of("color", "#FF0000"), "setColor")))));
     }
 
-    /** 0.7.3 D3：setColor 在 tweenBlock body 里合法（kind=setColor ∈ TWEENABLE_KINDS + color 已白名单）。 */
+    /** setColor 在 tweenBlock body 里合法（kind=setColor ∈ TWEENABLE_KINDS + color 已白名单）。 */
     @Test
     void tween_body_setColor_with_color_key_ok() {
         Action a = new Action.TweenBlock(500L, Easing.LINEAR,
@@ -825,5 +848,77 @@ class ScriptRuleValidatorTest {
                         Map.of("color", "#000000"), "setColor")));
         assertEquals(Optional.empty(),
                 ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))));
+    }
+
+    // ---------- SetElementLayer / RoundVariable / ShowTitle 校验 ----------
+
+    @Test
+    void setElementLayer_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.SetElementLayer("el-1", "front")))));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.SetElementLayer("el-1", "back")))));
+    }
+
+    @Test
+    void setElementLayer_emptyId_rejected() {
+        assertTrue(ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.SetElementLayer("", "front")))).isPresent());
+    }
+
+    @Test
+    void setElementLayer_invalidMode_rejected() {
+        assertTrue(ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.SetElementLayer("el-1", "top")))).isPresent());
+    }
+
+    @Test
+    void roundVariable_ok() {
+        for (String mode : new String[]{"round", "floor", "ceil"}) {
+            assertEquals(Optional.empty(),
+                    ScriptRuleValidator.validate(rule(okTrigger(),
+                            List.of(new Action.RoundVariable("user/x", mode)))),
+                    "mode=" + mode);
+        }
+    }
+
+    @Test
+    void roundVariable_emptyName_rejected() {
+        assertTrue(ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.RoundVariable("", "round")))).isPresent());
+    }
+
+    @Test
+    void roundVariable_invalidMode_rejected() {
+        assertTrue(ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.RoundVariable("user/x", "truncate")))).isPresent());
+    }
+
+    @Test
+    void showTitle_ok_and_single_field_variants() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.ShowTitle("Hello", "World", 500, 2000, 500, "trigger")))));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.ShowTitle("Only title", "", 0, 1000, 0, "trigger")))));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.ShowTitle("", "Only sub", 0, 1000, 0, "all")))));
+    }
+
+    @Test
+    void showTitle_bothEmpty_rejected() {
+        assertTrue(ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.ShowTitle("", "", 500, 2000, 500, "all")))).isPresent());
+    }
+
+    @Test
+    void showTitle_timing_and_target_bounds_rejected() {
+        assertTrue(ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.ShowTitle("Hi", "s", 10_001, 2000, 500, "trigger")))).isPresent());
+        assertTrue(ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.ShowTitle("Hi", "s", 500, 60_001, 500, "trigger")))).isPresent());
+        assertTrue(ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.ShowTitle("Hi", "s", 500, 2000, -1, "trigger")))).isPresent());
+        assertTrue(ScriptRuleValidator.validate(
+                rule(okTrigger(), List.of(new Action.ShowTitle("Hi", "s", 500, 2000, 500, "server")))).isPresent());
     }
 }

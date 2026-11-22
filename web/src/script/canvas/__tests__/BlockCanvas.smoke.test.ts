@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P4-C：BlockCanvas 真规则上画布 smoke。
+ * BlockCanvas 真规则上画布 smoke。
  *
  * <p>验证：scripts.listSorted 有 N 规则 → 渲染 N 个 BlockStack；坐标来自各规则
  * blockLayout（命中显式坐标）或 autoLayout 兜底（缺坐标纵向排布）。</p>

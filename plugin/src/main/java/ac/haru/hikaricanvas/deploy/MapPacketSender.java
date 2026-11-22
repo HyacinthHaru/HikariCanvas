@@ -9,10 +9,9 @@ import java.util.Objects;
 /**
  * 所有 {@code ClientboundMapItemDataPacket} 级别的发包必须走这个类。
  *
- * <p>这是 CLAUDE.md / PROPOSAL §5.2.6 规定的架构纪律之一：
- * 把 PacketEvents API 调用集中在单一 sender，
- * 让将来 PacketEvents 2.12.x（for Paper 26.x）的 wrapper 签名变动
- * 只需要修改这一个文件。</p>
+ * <p>这是 {@code docs/architecture.md §1.3} 规定的架构纪律之一：
+ * 把 PacketEvents API 调用集中在单一 sender（当前锁定 PacketEvents 2.13.0，支持 1.21.x + 26.x），
+ * 让未来 wrapper 签名变动只需修改这一个文件。</p>
  */
 public final class MapPacketSender {
 
@@ -27,9 +26,6 @@ public final class MapPacketSender {
      * @param pixels128x128 128×128 = 16384 字节，每字节是 MC map palette 索引
      */
     public void sendFullMap(Player player, int mapId, byte[] pixels128x128) {
-        // 唯一发包入口的入参校验。null pixels 之前会在 .length 抛不可读的 NPE，
-        // 被上游 CanvasProjector.pushToViewers 的 catch(Exception) 吞成泛化日志；这里转为
-        // 明确的 IllegalArgumentException + 对 player 做 null 防御，保护新接入点。
         Objects.requireNonNull(player, "player must not be null");
         if (pixels128x128 == null || pixels128x128.length != MAP_PIXELS) {
             throw new IllegalArgumentException(

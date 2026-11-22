@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ExpressionEvaluatorTest {
 
     private final ExpressionParser parser = new ExpressionParser();
-    private final ExpressionEvaluator eval = new ExpressionEvaluator();
+    private final ExpressionEvaluator eval = new ExpressionEvaluator(null);
 
     private static Map<String, Object> of(Object... kv) {
         var m = new LinkedHashMap<String, Object>();
@@ -110,12 +110,12 @@ class ExpressionEvaluatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.7.0-P2(K2/K3)：比较 / 算术 / var() 求值语义
+    //  比较 / 算术 / var() 求值语义
     // ──────────────────────────────────────────────────────────
 
-    /** 带 resolver 的求值器（K3 注入;map miss → null）。 */
+    /** 带 resolver 的求值器（map miss → null）。 */
     private boolean runVar(String src, Map<String, String> vars) {
-        ExpressionEvaluator withResolver = new ExpressionEvaluator(vars::get, null);
+        ExpressionEvaluator withResolver = new ExpressionEvaluator(vars::get);
         return withResolver.evalBoolean(parser.parse(src), of());
     }
 
@@ -138,8 +138,7 @@ class ExpressionEvaluatorTest {
 
     @Test
     void varWithoutResolverThrows() {
-        // 模板路径(无 resolver)不该出现 var()
-        assertThrows(ExpressionEvaluator.VarUnsupportedException.class,
+        assertThrows(IllegalStateException.class,
                 () -> eval.evalBoolean(parser.parse("var(\"x\")"), of()));
     }
 
@@ -168,7 +167,6 @@ class ExpressionEvaluatorTest {
 
     @Test
     void divisionByZeroYieldsZeroNotThrow() {
-        // K2:除零 → 0.0,不抛;0.0 falsy
         assertFalse(run("1 / 0", of()));
         assertTrue(run("1 / 0 == 0", of()));
         assertTrue(run("10 / n == 0", of("n", 0)));
@@ -176,7 +174,6 @@ class ExpressionEvaluatorTest {
 
     @Test
     void plusCoercesToNumberNeverConcatenates() {
-        // K2:+ 恒数值,非数字侧 StrictNumber 强转为 0("a"+5 = 5,不是 "a5")
         assertTrue(run("s + 5 == 5", of("s", "abc")));
         assertTrue(runVar("var(\"x\") + 1 == 13", Map.of("x", "12")));
     }
@@ -200,17 +197,12 @@ class ExpressionEvaluatorTest {
 
     @Test
     void equalityNumericFormUsesNumericEquals() {
-        // 0.7.0-P2-2b 契约修订:== / != 对双侧均为数值形态(Number 或整串匹配
-        // StrictNumber 文法的字符串)走数值等值;其余链(Boolean truthy / toString)不动。
-        // "3.50" == 3.5 由旧 toString 等值的 false 变为数值等值的 true
+        // == / != 对双侧均为数值形态（Number 或整串匹配 StrictNumber 文法的字符串）走数值等值；
+        // 其余链（Boolean truthy / toString）不变。
         assertTrue(run("s == 3.5", of("s", "3.50")));
-        // resolver 给 "42" 的变量直接可与数字字面量等值——核心可用性诉求
         assertTrue(runVar("var(\"score\") == 42", Map.of("score", "42")));
-        // 必须双侧数值形态:"abc" 非数值形态,不强转 0,仍走 toString 等值 → false
         assertFalse(run("s == 0", of("s", "abc")));
-        // 空串也非数值形态(StrictNumber 不匹配空串),不与 0 等值
         assertFalse(run("s == 0", of("s", "")));
-        // 回归红线:Number 等值 / Boolean truthy 等值 / 字符串等值链不动
         assertTrue(run("a == b", of("a", 3, "b", 3.0)));
         assertTrue(run("flag == true", of("flag", true)));
         assertTrue(run("s == \"yes\"", of("s", "yes")));
@@ -219,13 +211,8 @@ class ExpressionEvaluatorTest {
 
     @Test
     void numericNormalizationSinglePoint() {
-        // M-1:四则结果统一归一 -0.0 → 0.0(-1 * 0 在 IEEE 754 下产 -0.0,
-        // 不归一会让 Double.compare 把它与 0 分出大小)
         assertTrue(run("-1 * 0 == 0", of()));
         assertFalse(run("-1 * 0 < 0", of()));
-        // M-2:超长数字字面量(400 个 9)parser 不拒——Double.parseDouble 溢出
-        // 不抛 NumberFormatException 而是返 Infinity;toNumber/norm 把非有限值
-        // 收敛 0.0(与 StrictNumber.parse fallback 终点一致),不外泄 Infinity
         String huge = "9".repeat(400);
         assertTrue(run(huge + " + 1 == 1", of()));
         assertFalse(run(huge + " * 2", of()));

@@ -1,14 +1,18 @@
 package ac.haru.hikaricanvas.web;
 
-import org.bukkit.Bukkit;
 import ac.haru.hikaricanvas.session.Session;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
+import java.util.Arrays;
+import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BiFunction;
 
 /**
  * WS op dispatcher 的主线程权限解析助手。
@@ -17,10 +21,8 @@ import java.util.concurrent.TimeoutException;
  * {@code Player.hasPermission}（读 attachment / LuckPerms reload 时主线程重算的
  * {@code PermissibleBase}）都是主线程专用 API。各 {@code *OpDispatcher.dispatch} 跑在
  * Jetty WS worker 线程（{@link WebServer#handleMessage} 同步派发，无主线程 hop），
- * 此前直接裸调这两个 API，与 {@link WebServer#handleAuth} 已有的
- * {@code callSyncMethod(...).get(2,SECONDS)} 修复自相矛盾，并发玩家上下线 / 权限重算时
- * 可能读到不一致在线表或半构造 PermissibleBase。本助手把两步收敛到一次主线程 hop，复用
- * auth 路径同款 {@code callSyncMethod} + 2s 超时。</p>
+ * 本助手把两步收敛到一次主线程 hop，复用 {@link WebServer#handleAuth} 同款
+ * {@code callSyncMethod} + 2s 超时。</p>
  *
  * <p><b>语义</b>（与各 dispatcher 旧 {@code player != null && player.hasPermission(node)}
  * 等价）：</p>
@@ -52,22 +54,12 @@ final class MainThreadPerms {
      *
      * <p>生产路径 seam 恒 null，仅一次 volatile 读零开销；测试 @AfterEach 必须复位 null。</p>
      */
-    static volatile java.util.function.BiFunction<java.util.UUID, String[], Resolved>
-            testResolver;
+    static volatile BiFunction<UUID, String[], Resolved> testResolver;
 
     /**
-     * 在主线程解析 {@code callerUuid} 对应在线玩家是否持 {@code node}。
+     * 主体版：控制台直接放行，玩家走 {@link #hasPermission(Plugin, UUID, String)}。
      *
-     * @return {@code true} = 在线且持权限；其余（离线 / 无权限 / 超时 / 异常）= {@code false}
-     */
-    /**
-     * 主体版：控制台直接放行，玩家走原路径。
-     *
-     * <p><b>为什么吃 {@link Session} 而不是多加一个 {@code Principal} 形参</b>：
-     * 14 个调用点全都已经持有 session，传它不可能传错；而多一个形参，任何一处手滑写成
-     * {@code PLAYER} 都会静默退化成"控制台被当普通玩家"，表现与本次要修的 bug 一模一样、
-     * 不会有人发现。0.9.17 刚因同型的复制粘贴分叉修过一次
-     * （{@code grantedWithDefaultTrueFallback} 在 4 处各写一份且全写错），不给第二次机会。</p>
+     * <p>直接接收 {@link Session}（所有调用点均已持有），避免额外传入 {@code Principal} 形参导致误传。</p>
      */
     static boolean hasPermission(Plugin plugin, Session session, String node) {
         if (session == null) return false;
@@ -75,7 +67,12 @@ final class MainThreadPerms {
         return hasPermission(plugin, session.playerUuid(), node);
     }
 
-    static boolean hasPermission(Plugin plugin, java.util.UUID callerUuid, String node) {
+    /**
+     * 在主线程解析 {@code callerUuid} 对应在线玩家是否持 {@code node}。
+     *
+     * @return {@code true} = 在线且持权限；其余（离线 / 无权限 / 超时 / 异常）= {@code false}
+     */
+    static boolean hasPermission(Plugin plugin, UUID callerUuid, String node) {
         if (callerUuid == null) return false;
         if (plugin == null) {
             // 测试装配（MockBukkit 单线程）：直接调，无主线程纪律风险。
@@ -86,7 +83,7 @@ final class MainThreadPerms {
             Boolean granted = Bukkit.getScheduler().callSyncMethod(plugin, () -> {
                 Player p = Bukkit.getPlayer(callerUuid);
                 return p != null && p.hasPermission(node);
-            }).get(TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+            }).get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             return Boolean.TRUE.equals(granted);
         } catch (InterruptedException ie) {
             // 复位中断标志后 fail-closed。
@@ -102,6 +99,16 @@ final class MainThreadPerms {
     }
 
     /**
+     * 主体版：控制台直接全授予（不查任何节点，也不 hop 主线程），玩家走 {@link #resolve(Plugin, UUID, String...)}。
+     * 理由同 {@link #hasPermission(Plugin, Session, String)}。
+     */
+    static Resolved resolve(Plugin plugin, Session session, String... nodes) {
+        if (session == null) return new Resolved(false, new boolean[nodes.length]);
+        if (session.isConsole()) return Resolved.allGranted(nodes.length);
+        return resolve(plugin, session.playerUuid(), nodes);
+    }
+
+    /**
      * 一次主线程 hop 解析在线玩家 + 多个节点的授权结果。
      *
      * <p>用于一个 op 需要查多个权限节点（如 {@code template.save} 同时查
@@ -112,17 +119,7 @@ final class MainThreadPerms {
      * @param nodes 待查节点；返回的 {@code granted[i]} 对应 {@code nodes[i]}
      * @return {@link Resolved}：{@code online} = 玩家是否在线；{@code granted[i]} = 是否持 {@code nodes[i]}
      */
-    /**
-     * 主体版：控制台直接全授予（不查任何节点，也不 hop 主线程），玩家走原路径。
-     * 理由同 {@link #hasPermission(Plugin, Session, String)}。
-     */
-    static Resolved resolve(Plugin plugin, Session session, String... nodes) {
-        if (session == null) return new Resolved(false, new boolean[nodes.length]);
-        if (session.isConsole()) return Resolved.allGranted(nodes.length);
-        return resolve(plugin, session.playerUuid(), nodes);
-    }
-
-    static Resolved resolve(Plugin plugin, java.util.UUID callerUuid, String... nodes) {
+    static Resolved resolve(Plugin plugin, UUID callerUuid, String... nodes) {
         // 测试 seam 优先（生产恒 null，单次 volatile 读）
         var seam = testResolver;
         if (seam != null) return seam.apply(callerUuid, nodes);
@@ -135,7 +132,7 @@ final class MainThreadPerms {
         try {
             return Bukkit.getScheduler().callSyncMethod(plugin,
                     () -> resolveDirect(callerUuid, nodes))
-                    .get(TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+                    .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             return new Resolved(false, denied);
@@ -148,7 +145,7 @@ final class MainThreadPerms {
     }
 
     /** 主线程内（或测试单线程内）直接解析在线 + 各节点。 */
-    private static Resolved resolveDirect(java.util.UUID callerUuid, String[] nodes) {
+    private static Resolved resolveDirect(UUID callerUuid, String[] nodes) {
         Player p = Bukkit.getPlayer(callerUuid);
         boolean online = p != null;
         boolean[] granted = new boolean[nodes.length];
@@ -178,23 +175,20 @@ final class MainThreadPerms {
          */
         static Resolved allGranted(int n) {
             boolean[] all = new boolean[n];
-            java.util.Arrays.fill(all, true);
+            Arrays.fill(all, true);
             return new Resolved(true, all);
         }
     }
 
     /**
      * {@code default=true} 节点（{@code .own} / {@code .create}）的放行判定，
-     * 供 Variable / VariableAlias / Schedule / Rail 四个 dispatcher <b>共用一份</b>。
+     * 供 Variable / VariableAlias / Schedule / Rail 四个 dispatcher 共用。
      *
-     * <p><b>为什么必须共用</b>：这条规则此前在 4 处各写一份，全部写成了
-     * {@code if (!granted && isDefaultTrue) granted = true;}——无条件兜底，不区分
-     * 「玩家离线 / 解析超时」与「在线且被服主显式收回」。于是服主用 LuckPerms 负权限
-     * 收回 {@code canvas.var.write.own} / {@code canvas.schedule.own} /
-     * {@code canvas.rail.*} 全部形同虚设，且无从察觉。{@code ScriptOpDispatcher} 早已
-     * 修成正确写法，那 4 处没跟进——典型的复制粘贴分叉。收敛成一个函数以根除复发。</p>
+     * <p>区分「玩家离线 / 解析超时」与「在线且被服主显式收回」：若玩家在线且节点明确为
+     * {@code false}（如通过负权限收回 {@code canvas.var.write.own}），必须拒绝；仅当离线或超时时
+     * 对 {@code default: true} 节点放行。</p>
      *
-     * @param resolved         {@link #resolve} 的结果（只看 idx 0）
+     * @param resolved          {@link #resolve} 的结果（只看 idx 0）
      * @param nodeIsDefaultTrue 该节点在 {@code paper-plugin.yml} 里是否 {@code default: true}
      * @return true = 放行
      */

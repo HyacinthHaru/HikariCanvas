@@ -8,7 +8,7 @@ import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
- * HikariCanvas 0.4.0 Push API 示例：事件 + 命令 push 范型。
+ * HikariCanvas Push API 示例：事件 + 命令 push 范型。
  *
  * <p>玩家进服更新 {@code mvp}（PlayerJoinEvent 触发）；通过 {@code /demoscore add red 1}
  * 命令累加红/蓝队比分。所有变化即时 push 到 HikariCanvas，wall 上引用
@@ -36,7 +36,7 @@ public final class DemoScorePlugin extends JavaPlugin {
         canvas.registerNamespace(this, NAMESPACE, new NamespaceInfo(
                 "Demo 比分",
                 "DemoScorePlugin",
-                getDescription().getVersion()
+                getPluginMeta().getVersion()
         ));
 
         canvas.declareKey(this, NAMESPACE, "red", VarType.NUMBER, "红队当前比分");

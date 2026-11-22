@@ -1,13 +1,15 @@
 package ac.haru.hikaricanvas.web;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import io.javalin.http.Context;
+import ac.haru.hikaricanvas.image.UploadHandler;
+import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
 import ac.haru.hikaricanvas.variable.Variable;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import ac.haru.hikaricanvas.variable.provider.DeclaredKey;
 import ac.haru.hikaricanvas.variable.provider.VariableProvider;
 import ac.haru.hikaricanvas.variable.provider.VariableProviderDaemon;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.javalin.http.Context;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -24,33 +26,32 @@ import java.util.logging.Logger;
  * {@code GET /api/variable/list-all-namespaces} 端点 handler。
  *
  * <p>聚合所有已注册 {@link VariableProvider} 的 {@link VariableProvider#declaredKeys() declared keys}
- * + 调用 wall 的 user 变量（仅当 query string 带 {@code wallId} 时），下发给编辑器 VariablePicker
- * 做自动补全骨架。即使后端尚未 push currentValue（动态 namespace 第一次引用、PAPI 桥接异步等），
+ * + 当前 session 服务端绑定 wall 的 user 变量，下发给编辑器 VariablePicker 做自动补全骨架。
+ * 即使后端尚未 push currentValue（动态 namespace 第一次引用、PAPI 桥接异步等），
  * 编辑器也能看到所有 declared key。</p>
  *
  * <h2>路由约定</h2>
  *
- * <pre>{@code GET /api/variable/list-all-namespaces?sessionId=<id>&wallId=<wallId>}</pre>
+ * <pre>{@code GET /api/variable/list-all-namespaces?sessionId=<id>}</pre>
  *
  * <ul>
  *   <li>{@code sessionId}（必需）：通过 WS auth 拿到，参考 {@code docs/protocol.md §3}。校验失败 401。
- *       同 {@link ac.haru.hikaricanvas.image.UploadHandler#handleDownload(Context)} 的 sessionId 鉴权一致。</li>
- *   <li>{@code wallId}（可选）：当前编辑的 wall id；提供时 response 内追加
- *       {@code user:<wallId>} namespace + 该 wall 的 user 变量列表（自动补全用），
- *       并把它排在首位。</li>
+ *       与 {@link UploadHandler#handleDownload(Context)} 的 sessionId 鉴权一致。</li>
+ *   <li>per-wall user 变量来源：始终取服务端 {@code session.wallId()}（忽略客户端传入的任何
+ *       {@code wallId} query param，防跨 wall IDOR 枚举）；会话有绑定 wall 时把
+ *       {@code user:<wallId>} namespace 排在首位。</li>
  * </ul>
  *
  * <h2>cache</h2>
  *
- * <p>5s server-side cache（{@link #CACHE_TTL_MS}）；仅当请求 <b>不带 wallId</b> 时命中
- * （wallId 路径每次实时算——user 变量增删频繁，cache 收益有限且容易出错）。</p>
+ * <p>5s server-side cache（{@link #CACHE_TTL_MS}）；仅当当前 session 未绑定 wall 时命中
+ * （绑定了 wall 的路径每次实时算——user 变量增删频繁）。</p>
  *
  * <h2>注册</h2>
  *
  * <p>本类不主动注册路由：由 {@link WebServer} 装配时调
- * {@code app.get("/api/variable/list-all-namespaces", handler::handle)} 一行接入。</p>
- *
- * @see docs/dynamic-data.md §3.3 / §6.3
+ * {@code app.get("/api/variable/list-all-namespaces", handler::handle)} 一行接入。
+ * 契约见 {@code docs/dynamic-data.md §3.3 / §6.3}。</p>
  */
 public final class VariableMetadataHandler {
 
@@ -86,8 +87,7 @@ public final class VariableMetadataHandler {
         this(variableStore, daemon,
                 sid -> Objects.requireNonNull(sessionManager, "sessionManager").byId(sid) != null,
                 sid -> {
-                    ac.haru.hikaricanvas.session.Session s =
-                            Objects.requireNonNull(sessionManager, "sessionManager").byId(sid);
+                    Session s = Objects.requireNonNull(sessionManager, "sessionManager").byId(sid);
                     return s == null ? null : s.wallId();
                 },
                 jackson);
@@ -129,11 +129,11 @@ public final class VariableMetadataHandler {
      *   "namespaces": [
      *     {
      *       "namespace": "user:<wallId>",
-     *       "displayName": "我的变量",
+     *       "displayName": "User Variables",
      *       "dynamic": false,
-     *       "keys": [{"key":"red_score","type":"NUMBER","description":"默认值: 0","ttlMs":0}]
+     *       "keys": [{"key":"red_score","type":"NUMBER","description":"Default: 0","ttlMs":0}]
      *     },
-     *     {"namespace":"system", "displayName":"系统变量", "dynamic":false, "keys":[...]},
+     *     {"namespace":"system", "displayName":"System Variables", "dynamic":false, "keys":[...]},
      *     ...
      *   ]
      * }
@@ -232,16 +232,15 @@ public final class VariableMetadataHandler {
     }
 
     /**
-     * 给定 wall 的 user namespace 描述：取 {@link VariableStore#listByWall(String)} 内所有
-     * {@code user:} 前缀变量。{@code listByWall} 依赖 Compositor 已 mark 引用——但 user 变量是
-     * 玩家手动 create 出来的、未必在文本里引用过；故此处取 store.listAll 然后按 namespace 严格匹配
-     * {@code user:<wallId>}，保证所有 user 变量（即使尚未引用）都出现在 Picker 内。
+     * 给定 wall 的 user namespace 描述：遍历 {@link VariableStore#listAll()} 并按 namespace 严格匹配
+     * {@code user:<wallId>}（不依赖 {@link VariableStore#listByWall(String)} 的渲染倒排索引，
+     * 保证新建尚未在文本中引用的 user 变量也出现在 Picker 内）。
      */
     private Map<String, Object> buildUserNamespace(String wallId) {
         String expectedNamespace = VariableStore.USER_NAMESPACE_PREFIX + ":" + wallId;
         Map<String, Object> userNs = new LinkedHashMap<>();
         userNs.put("namespace", expectedNamespace);
-        userNs.put("displayName", "我的变量");
+        userNs.put("displayName", "User Variables");
         userNs.put("dynamic", false);
         List<Map<String, Object>> keys = new ArrayList<>();
         try {
@@ -251,7 +250,7 @@ public final class VariableMetadataHandler {
                 keyMap.put("key", v.key());
                 keyMap.put("type", v.type() == null ? "STRING" : v.type().name());
                 if (v.defaultValue() != null) {
-                    keyMap.put("description", "默认值: " + v.defaultValue());
+                    keyMap.put("description", "Default: " + v.defaultValue());
                 }
                 keyMap.put("ttlMs", v.ttl());
                 keys.add(keyMap);

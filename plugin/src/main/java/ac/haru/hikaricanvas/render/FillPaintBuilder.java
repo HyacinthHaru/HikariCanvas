@@ -10,6 +10,7 @@ import java.awt.Color;
 import java.awt.LinearGradientPaint;
 import java.awt.Paint;
 import java.awt.RadialGradientPaint;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -29,8 +30,8 @@ public final class FillPaintBuilder {
      * 解析 {@code #RRGGBB} 或 {@code #RRGGBBAA} 为 AWT Color。
      *
      * <p>alpha 通道支持：alpha 字段缺省时 = 255（不透明）；非空时 0-255 控制半透明。
-     * 在 {@code TYPE_INT_RGB} 主 buffer 上 fill 时 Graphics2D 走 Porter-Duff SrcOver，
-     * alpha < 255 的色与底层像素叠加（"颜色变浅"语义，同 docs/rendering.md §6.5 element opacity）。</p>
+     * 在 {@code TYPE_INT_ARGB} 主 buffer 上 fill 时 Graphics2D 走 Porter-Duff SrcOver，
+     * alpha &lt; 255 的色与底层像素叠加（同 {@code docs/rendering.md §6.5} element opacity）。</p>
      */
     public static Color parseColor(String hex) {
         if (hex == null) return Color.WHITE;
@@ -138,7 +139,7 @@ public final class FillPaintBuilder {
      */
     private static List<Stop> filterFiniteStops(List<Stop> stops) {
         if (stops == null) return null;
-        java.util.List<Stop> out = new java.util.ArrayList<>(stops.size());
+        List<Stop> out = new ArrayList<>(stops.size());
         for (Stop s : stops) {
             if (s == null) continue;
             if (!Double.isFinite(s.position())) continue;

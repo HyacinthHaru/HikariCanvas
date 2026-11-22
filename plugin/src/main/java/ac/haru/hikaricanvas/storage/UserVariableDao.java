@@ -5,6 +5,8 @@ import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 import org.jetbrains.annotations.Nullable;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -154,7 +156,7 @@ public class UserVariableDao {
         }
     }
 
-    private static Row mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+    private static Row mapRow(ResultSet rs) throws SQLException {
         String typeStr = rs.getString("type");
         VarType type;
         try {

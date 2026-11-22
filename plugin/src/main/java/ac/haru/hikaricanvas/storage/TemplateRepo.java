@@ -1,7 +1,10 @@
 package ac.haru.hikaricanvas.storage;
 
+import ac.haru.hikaricanvas.template.TemplatePublisher;
 import org.jdbi.v3.core.Jdbi;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -9,15 +12,15 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 模板元数据 DAO（创意工坊）。磁盘上的模板文件（{@code .yml} 或 {@code .canvas} pack）仍是真相；
+ * 模板元数据 DAO（创意工坊）。磁盘上的 {@code .canvas} pack 模板文件仍是真相；
  * 本表存 owner / featured / 排序用元数据。schema 见 {@code db-migrations/V008__templates.sql}。
- * DB 列名沿用 {@code yaml_path}（0.9.16 起也存 {@code .canvas} 路径；forward-only 迁移守卫禁改名，
+ * DB 列名沿用 {@code yaml_path}（现存 {@code .canvas} 路径；forward-only 迁移守卫禁止改名，
  * 故 Java 侧用中性的 {@code filePath} 映射它）。
  *
  * <ul>
- *   <li>builtin 模板：启动期由 {@link ac.haru.hikaricanvas.template.TemplateRegistry#reload}
+ *   <li>builtin 模板：启动期由 {@link TemplatePublisher#syncBuiltinToDb}
  *       同步入库；owner_uuid NULL；featured 不可改</li>
- *   <li>玩家发布模板：通过 {@code template.save} WS op 调 {@link #insert}；hard delete</li>
+ *   <li>玩家发布模板：通过 {@code template.save} WS op 调 {@link #upsert}；hard delete</li>
  *   <li>排序：精选优先 + 时间倒序（{@link #listMarketplace}）</li>
  * </ul>
  */
@@ -30,7 +33,7 @@ public final class TemplateRepo {
             String ownerName,
             String displayName,
             String description,
-            String filePath,      // DB 列 yaml_path（可为 .yml 或 .canvas 路径）
+            String filePath,      // DB 列 yaml_path（存 .canvas 路径）
             boolean builtin,
             boolean featured,
             long downloadCount,
@@ -177,7 +180,7 @@ public final class TemplateRepo {
     }
 
     // 非 static（用实例 log 记录损坏数据告警）。仅在实例方法的 RowMapper lambda 内调用。
-    private Row mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+    private Row mapRow(ResultSet rs) throws SQLException {
         String ouuid = rs.getString("owner_uuid");
         UUID owner = null; // builtin 时 null
         if (ouuid != null) {

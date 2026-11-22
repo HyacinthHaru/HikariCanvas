@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P5-F：useCommandTemplates fetch + 缓存 composable 单测。
+ * useCommandTemplates fetch + 缓存 composable 单测。
  *
  * <p>覆盖：① 成功拉到模板列表（形态正确）；② 空配置返空；③ 401 / 网络错 → 空（不抛）；
  * ④ 模块缓存命中（二次 load 不重复 fetch）；⑤ refresh 强制重拉；⑥ 换 session 作废缓存；

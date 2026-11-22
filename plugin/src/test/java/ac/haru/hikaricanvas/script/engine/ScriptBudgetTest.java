@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.7.0-P2-3：{@link ScriptBudget} 三闸 + K5 audit 限频。clock 注入全确定性，不 sleep。
+ * {@link ScriptBudget} 三闸与审计日志限频单测。clock 注入全确定性，不 sleep。
  */
 class ScriptBudgetTest {
 
@@ -87,7 +87,7 @@ class ScriptBudgetTest {
         assertTrue(b.actionsExceeded(51), "51 超");
     }
 
-    // ---------- K5 audit 限频 ----------
+    // ---------- 审计日志限频 ----------
 
     @Test
     void auditBlock_rateLimited_10sWindow() {

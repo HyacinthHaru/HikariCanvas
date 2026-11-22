@@ -3,10 +3,8 @@ package ac.haru.hikaricanvas.render;
 import java.util.logging.Logger;
 
 /**
- * 共享给所有 {@link ElementRenderer} 的渲染上下文。无可变状态（{@code imageLoader} 由
- * {@link CanvasCompositor#setImageLoader} 通过 ctx getter 反射读取，本身 volatile）。
- *
- * <p>拆分自原 {@code CanvasCompositor}（god class 拆分，2026-05-14）。</p>
+ * 共享给所有 {@link ElementRenderer} 的渲染上下文。无自身可变状态（{@code imageLoader} 经
+ * {@link ImageLoaderHolder} 读取 {@link CanvasCompositor} 上的 {@code volatile} 引用）。
  */
 public final class RenderContext {
 
@@ -15,11 +13,6 @@ public final class RenderContext {
     private final IconRegistry iconRegistry;
     private final Logger log;
     private final ImageLoaderHolder imageLoaderHolder;
-
-    public RenderContext(PaletteLut paletteLut, FontRegistry fontRegistry,
-                         Logger log, ImageLoaderHolder imageLoaderHolder) {
-        this(paletteLut, fontRegistry, null, log, imageLoaderHolder);
-    }
 
     /**
      * 含 {@link IconRegistry} 注入，供 {@link IconRenderer} 矢量 path 渲染查 path d / viewBox。

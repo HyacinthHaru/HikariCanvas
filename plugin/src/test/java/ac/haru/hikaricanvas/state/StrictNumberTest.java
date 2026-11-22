@@ -5,10 +5,8 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * {@link StrictNumber} 单测（0.6 P3，rendering.md §9.5）：严格数值文法 + int 钳位的双端
- * 唯一权威。钉住 P3 审查发现的三处双端数字分叉根因——
- * #1 变量 resolve 后私自 {@code parseDouble} 会接受 {@code 0x1p4} / 尾随 {@code d|f}；
- * #2 大数 {@code (int)} 收窄静默回绕；#3 JS {@code trim} 多剥 Unicode 空白。
+ * {@link StrictNumber} 单测（{@code rendering.md §9.5}）：严格数值文法 + int 钳位的双端唯一权威。
+ * 覆盖三类宿主数值解析差异：十六进制浮点与类型后缀拒绝、大数 {@code (int)} 收窄钳位、以及仅剥除 ASCII 空白。
  */
 class StrictNumberTest {
 

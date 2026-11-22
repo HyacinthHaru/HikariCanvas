@@ -27,29 +27,10 @@ public final class ProviderBootstrap {
     private ProviderBootstrap() {}
 
     /**
-     * 创建 + 装配 {@link VariableProviderDaemon}。
+     * 创建并装配 {@link VariableProviderDaemon}。
      *
      * <p>调用方负责把返回的 daemon 实例保留到 plugin 字段，并在 {@code onDisable} 调
      * {@link VariableProviderDaemon#shutdown()}。</p>
-     *
-     * @param store          VariableStore；provider 通过 store push 值
-     * @param plugin         插件实例（Bukkit scheduler 切主线程 / reflection load 等）
-     * @param wallRepo       wall 元数据 DAO（{@link SystemVariableProvider} 注册 per-wall {@code wall.*}）
-     * @param scheduleDao    时刻表 DAO（{@link ManualScheduleProvider} 启动期 loadAll + per-wall 注册）；
-     *                       传 {@code null} 时跳过 ManualScheduleProvider 注册（仅测试 / 极简启动用）
-     * @param scheduleConfig 兜底列车配置（阈值 / 文案）；传 {@code null} 走默认值
-     * @return 已创建的 daemon（never null）
-     */
-    public static VariableProviderDaemon initialize(VariableStore store,
-                                                    JavaPlugin plugin,
-                                                    WallRepo wallRepo,
-                                                    @Nullable ScheduleDao scheduleDao,
-                                                    @Nullable HikariCanvasConfig.ScheduleConfig scheduleConfig) {
-        return initialize(store, plugin, wallRepo, scheduleDao, scheduleConfig, null);
-    }
-
-    /**
-     * 6 参数 overload，加 RailDao（铁路网络 Provider）。
      *
      * <p>装配顺序：</p>
      * <ol>
@@ -59,8 +40,14 @@ public final class ProviderBootstrap {
      *       让 rail-bound wall 跳过 manual push</li>
      * </ol>
      *
-     * @param railDao 铁路网络 DAO；传 {@code null} 时不注册 RailScheduleProvider
-     *                （兼容只用 ManualSchedule 的旧服务器）
+     * @param store          VariableStore；provider 通过 store push 值
+     * @param plugin         插件实例（Bukkit scheduler 切主线程等）
+     * @param wallRepo       wall 元数据 DAO（{@link SystemVariableProvider} 注册 per-wall {@code wall.*}）
+     * @param scheduleDao    时刻表 DAO（{@link ManualScheduleProvider} 启动期 loadAll + per-wall 注册）；
+     *                       传 {@code null} 时跳过 ManualScheduleProvider 注册
+     * @param scheduleConfig 兜底列车配置（阈值 / 文案）；传 {@code null} 走默认值
+     * @param railDao        铁路网络 DAO；传 {@code null} 时不注册 RailScheduleProvider
+     * @return 已创建的 daemon（never null）
      */
     public static VariableProviderDaemon initialize(VariableStore store,
                                                     JavaPlugin plugin,
@@ -79,7 +66,7 @@ public final class ProviderBootstrap {
         // 兜底列车时刻表（per-wall manual）
         ManualScheduleProvider manualProvider = null;
         if (scheduleDao != null) {
-            manualProvider = new ManualScheduleProvider(store, plugin, scheduleDao, cfg);
+            manualProvider = new ManualScheduleProvider(store, scheduleDao, cfg);
             daemon.register(manualProvider);
         }
         // 铁路网络（线路 + 站点 + 车次 + timetable）
@@ -93,24 +80,5 @@ public final class ProviderBootstrap {
             }
         }
         return daemon;
-    }
-
-    /**
-     * 兼容旧调用方的 3 参数 overload。新代码请传 scheduleDao + config。
-     */
-    public static VariableProviderDaemon initialize(VariableStore store,
-                                                    JavaPlugin plugin,
-                                                    WallRepo wallRepo) {
-        return initialize(store, plugin, wallRepo, null, null);
-    }
-
-    /**
-     * 4 参数 overload，默认 schedule config。
-     */
-    public static VariableProviderDaemon initialize(VariableStore store,
-                                                    JavaPlugin plugin,
-                                                    WallRepo wallRepo,
-                                                    @Nullable ScheduleDao scheduleDao) {
-        return initialize(store, plugin, wallRepo, scheduleDao, null);
     }
 }

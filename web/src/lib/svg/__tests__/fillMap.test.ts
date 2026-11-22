@@ -16,7 +16,7 @@ describe('fillMap', () => {
         expect(mapFillRule(makeEl('path', { 'fill-rule': 'evenodd' }))).toBe('evenodd');
         expect(mapStroke(makeEl('path', { stroke: '#00ff00', 'stroke-width': '2' }))).toEqual({ color: '#00ff00', width: 2 });
     });
-    it('gradient url(#id) fill → undefined (B3 will handle)', () => {
+    it('gradient url(#id) fill without svgRoot → undefined', () => {
         expect(mapFill(makeEl('path', { fill: 'url(#g)' }))).toBeUndefined();
     });
     it('named color → hex', () => {

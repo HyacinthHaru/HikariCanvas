@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P4-B：ScriptEditorOverlay 渲染 smoke（防 ComputedRef 解包崩溃 + 关闭路径）。
+ * ScriptEditorOverlay 渲染 smoke（防 ComputedRef 解包崩溃 + 关闭路径）。
  *
  * <p>真实 mount overlay（含 BlockCanvas 子组件）：验证挂载不崩、标题渲染（证明 t.value.script
  * 正确解包，漏 `.value` 则 `t.script.editorTitle` undefined → 崩）、X / Esc 关闭调
- * ui.closeScriptEditor、ui.scriptEditorOpen toggle 状态机。照 TimelineDock.smoke.test.ts 范式：
+ * ui.closeScriptEditor、ui.scriptEditorOpen toggle 状态机。
  * happy-dom + pinia + 锁 locale 断言中文文案。</p>
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -17,7 +17,7 @@ import { useUiStore } from '@/stores/ui';
 import { useScriptStore } from '@/stores/scripts';
 import { useScriptEditStore } from '@/stores/scriptEdit';
 
-// H：试跑按钮点击会调 getWsClient().sendScriptTest——mock 掉（含 scriptEdit 用到的 send*）。
+// 试跑按钮点击会调 getWsClient().sendScriptTest——mock 掉（含 scriptEdit 用到的 send*）。
 const sendScriptTest = vi.fn(() => Promise.resolve({ accepted: true, ruleId: 'sr-1' }));
 vi.mock('@/network/wsClient', () => ({
     getWsClient: () => ({
@@ -43,16 +43,16 @@ describe('ScriptEditorOverlay 渲染 smoke', () => {
         expect(wrapper.text()).toContain('还没有脚本规则');
     });
 
-    it('"新建规则"按钮 D1 起启用（未锁定墙）', async () => {
+    it('"新建规则"按钮在未锁定墙上启用', async () => {
         const wrapper = mount(ScriptEditorOverlay);
         await nextTick();
         const newBtn = wrapper.findAll('button').find(b => b.text().includes('新建规则'));
         expect(newBtn).toBeTruthy();
-        // D1 接通后按钮启用（lock 时才禁用，此 smoke 默认未锁定）
+        // lock 时才禁用，此 smoke 默认未锁定
         expect((newBtn!.element as HTMLButtonElement).disabled).toBe(false);
     });
 
-    it('D1：选规则后头部出现名称输入 + 列表高亮当前', async () => {
+    it('选规则后头部出现名称输入 + 列表高亮当前', async () => {
         const scripts = useScriptStore();
         scripts.initScripts([{
             id: 'sr-1', wallId: 'w-x', enabled: true, name: '我的规则',
@@ -168,7 +168,7 @@ describe('ScriptEditorOverlay 渲染 smoke', () => {
     });
 });
 
-describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
+describe('ScriptEditorOverlay 试跑 + 校验 smoke', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
@@ -183,7 +183,7 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         }]);
     }
 
-    it('合法规则：试跑按钮启用 + 无校验指示 + 无 banner 块（根因 1）', async () => {
+    it('合法规则：试跑按钮启用 + 无校验指示 + 无 banner 块', async () => {
         selectValidRule();
         const wrapper = mount(ScriptEditorOverlay);
         await nextTick();
@@ -194,7 +194,7 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         const testBtn = wrapper.find('button.hc-rule-test');
         expect(testBtn.exists()).toBe(true);
         expect((testBtn.element as HTMLButtonElement).disabled).toBe(false);
-        // 根因 1：红 banner 块已删除（任何情况下都不存在）
+        // 红 banner 块不存在
         expect(wrapper.find('.hc-script-errors').exists()).toBe(false);
         // 合法时头部温和指示也不显示
         expect(wrapper.find('.hc-validation-hint').exists()).toBe(false);
@@ -210,7 +210,7 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         expect(sendScriptTest).toHaveBeenCalledWith('sr-1');
     });
 
-    it('非法规则（名称空）：头部温和指示显示（不是整行 banner）+ 试跑按钮禁用（根因 1）', async () => {
+    it('非法规则（名称空）：头部温和指示显示（不是整行 banner）+ 试跑按钮禁用', async () => {
         const scripts = useScriptStore();
         scripts.initScripts([{
             id: 'sr-1', wallId: 'w-x', enabled: true, name: '占位',
@@ -222,7 +222,7 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         edit.selectRule('sr-1');
         edit.setName('   '); // 改成空名 = 非法
         await nextTick();
-        // 根因 1：不再有整行红 banner（布局位移元凶已删）
+        // 不使用整行红 banner（避免布局位移）
         expect(wrapper.find('.hc-script-errors').exists()).toBe(false);
         // 改为头部 inline 温和指示，显示「N 处待完善」
         const hint = wrapper.find('.hc-validation-hint');
@@ -267,7 +267,7 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         const edit = useScriptEditStore();
         edit.selectRule('sr-1');
         await nextTick();
-        // 主根因联动：积木渲染自 workingCopy → 待完善积木的 data-block-path DOM 存在，能被 querySelector 找到。
+        // 积木渲染自 workingCopy → 待完善积木的 data-block-path DOM 存在，能被 querySelector 找到。
         const blockEl = wrapper.find('[data-block-path="actions/0"]').element as HTMLElement;
         expect(blockEl).toBeTruthy();
         const vp = wrapper.find('.hc-block-viewport').element as HTMLElement;
@@ -332,7 +332,7 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
     });
 });
 
-describe('ScriptEditorOverlay 左右分栏 + 预览框（0.7.1-P3-T2）', () => {
+describe('ScriptEditorOverlay 左右分栏 + 预览框', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
@@ -382,18 +382,10 @@ describe('ScriptEditorOverlay 左右分栏 + 预览框（0.7.1-P3-T2）', () => 
 });
 
 /**
- * 0.7.1-P3 实测 Bug 2：预览框分隔条拖过一次后 hover 持续触发（越拖越大）。
- *
- * <p>根因：分隔条 pointerup 绑在分隔条元素上、靠 setPointerCapture retarget。鼠标拖出分隔条再
- * 松手时 pointerup 不在分隔条触发 → splitterDragging 卡 true；之后 hover 分隔条 → pointermove
- * 触发 → 继续改宽。修复照 useBlockDrag 范式：拖动期间挂 window 监听，松手在 window 一定收到、
- * 一定清 dragging + 摘监听；模板分隔条只留 @pointerdown。</p>
- *
- * <p>可观测信号：{@code splitterDragging} 经 {@code hc-script-splitter-active} class 反映。
- * 断言"按下 → active；window pointerup → active 清除"，并验证 window pointerup 后 hover
- * （pointermove 落分隔条元素）不再改宽（越拖越大已治）。</p>
+ * 预览框分隔条拖动监听：拖动期间挂 window 监听，指针拖出分隔条松手也必清 dragging + 摘监听；
+ * 模板分隔条只留 @pointerdown，松手后 hover 不再改宽。
  */
-describe('ScriptEditorOverlay 分隔条拖动 window 监听（Bug 2：松手必清 dragging）', () => {
+describe('ScriptEditorOverlay 分隔条拖动 window 监听（松手必清 dragging）', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';

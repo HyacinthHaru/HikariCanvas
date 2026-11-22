@@ -1,27 +1,40 @@
 package ac.haru.hikaricanvas.web;
 
+import ac.haru.hikaricanvas.i18n.Messages;
+import ac.haru.hikaricanvas.script.Action;
+import ac.haru.hikaricanvas.script.ScriptPermissions;
+import ac.haru.hikaricanvas.script.ScriptRule;
+import ac.haru.hikaricanvas.script.ScriptRuleValidator;
+import ac.haru.hikaricanvas.script.ScriptStore;
+import ac.haru.hikaricanvas.script.ValidationError;
+import ac.haru.hikaricanvas.script.engine.ConditionEvaluator;
+import ac.haru.hikaricanvas.script.engine.ScriptTestLauncher;
+import ac.haru.hikaricanvas.script.engine.TraceStep;
+import ac.haru.hikaricanvas.session.Session;
+import ac.haru.hikaricanvas.session.SessionManager;
+import ac.haru.hikaricanvas.session.SessionRateLimiter;
+import ac.haru.hikaricanvas.state.PatchOp;
+import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.state.StatePatch;
+import ac.haru.hikaricanvas.storage.AuditLog;
+import ac.haru.hikaricanvas.storage.WallRepo;
+import ac.haru.hikaricanvas.template.expr.ExpressionParser;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.javalin.websocket.WsMessageContext;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
-import ac.haru.hikaricanvas.script.ScriptPermissions;
-import ac.haru.hikaricanvas.script.ValidationError;
-import ac.haru.hikaricanvas.script.ScriptRule;
-import ac.haru.hikaricanvas.script.ScriptRuleValidator;
-import ac.haru.hikaricanvas.script.ScriptStore;
-import ac.haru.hikaricanvas.session.Session;
-import ac.haru.hikaricanvas.session.SessionManager;
-import ac.haru.hikaricanvas.session.SessionRateLimiter;
-import ac.haru.hikaricanvas.state.PatchOp;
-import ac.haru.hikaricanvas.state.StatePatch;
+import org.bukkit.plugin.Plugin;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import static ac.haru.hikaricanvas.web.WebHelpers.asPayloadMap;
 import static ac.haru.hikaricanvas.web.WebHelpers.stringOrNull;
@@ -80,20 +93,19 @@ final class ScriptOpDispatcher {
     private final SessionManager sessionManager;
     private final SessionRateLimiter rateLimiter;
     private final ScriptStore store;
-    private final ac.haru.hikaricanvas.storage.WallRepo wallRepo;
+    private final WallRepo wallRepo;
     private final OpPushCallback push;
-    private final ac.haru.hikaricanvas.storage.AuditLog auditLog;
+    private final AuditLog auditLog;
     /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
-    private final org.bukkit.plugin.Plugin plugin;
+    private final Plugin plugin;
     /** server 日志（catch-all 不再静默吞异常）；可为 null（兜底跳过记录）。 */
-    private final java.util.logging.Logger log;
+    private final Logger log;
     /**
      * i18n 文案中枢，按编辑器 locale 渲染脚本校验报错（{@link ValidationError} →
      * {@code Messages.plain(session.editorLocale(), "script.validate.<key>", …)}）。
-     * 本任务（T1）只注入不使用——T2/T3 把 validate/checkConditionSyntax 的返回改为
-     * {@link ValidationError} 后在此渲染。可为 null（旧测试装配容忍）。
+     * 可为 null（测试装配回退 key 名）。
      */
-    private final ac.haru.hikaricanvas.i18n.Messages messages;
+    private final Messages messages;
     /**
      * 异步试跑入口（不走同步等待——同步等待阻塞
      * Jetty worker，合法规则可串 wait 至分钟级，5s ack 超时必爆）。null = 引擎未装配，
@@ -103,17 +115,17 @@ final class ScriptOpDispatcher {
      * {@code launch} 前同样过 {@link #checkFacets}（sound / command 面缺失真拒）+
      * {@code SCRIPT_TEST} audit；TEST run 不豁免 Budget（runner 投递侧统一过闸）。</p>
      */
-    private volatile ac.haru.hikaricanvas.script.engine.ScriptTestLauncher testLauncher;
+    private volatile ScriptTestLauncher testLauncher;
 
     ScriptOpDispatcher(SessionManager sessionManager,
                        SessionRateLimiter rateLimiter,
                        ScriptStore store,
-                       ac.haru.hikaricanvas.storage.WallRepo wallRepo,
+                       WallRepo wallRepo,
                        OpPushCallback push,
-                       ac.haru.hikaricanvas.storage.AuditLog auditLog,
-                       org.bukkit.plugin.Plugin plugin,
-                       java.util.logging.Logger log,
-                       ac.haru.hikaricanvas.i18n.Messages messages) {
+                       AuditLog auditLog,
+                       Plugin plugin,
+                       Logger log,
+                       Messages messages) {
         this.sessionManager = sessionManager;
         this.rateLimiter = rateLimiter;
         this.store = store;
@@ -125,8 +137,8 @@ final class ScriptOpDispatcher {
         this.messages = messages;
     }
 
-    /** A2：试跑入口注入（HikariCanvas onEnable 引擎装配后经 WebServer 转交）；volatile 可见。 */
-    void setTestLauncher(ac.haru.hikaricanvas.script.engine.ScriptTestLauncher launcher) {
+    /** 试跑入口注入（HikariCanvas onEnable 引擎装配后经 WebServer 转交）；volatile 可见。 */
+    void setTestLauncher(ScriptTestLauncher launcher) {
         this.testLauncher = launcher;
     }
 
@@ -135,8 +147,7 @@ final class ScriptOpDispatcher {
     }
 
     /**
-     * dispatch 主体，返回待发送的 {@link Envelope}（package-private，照
-     * {@code TimelinePlaybackDispatchTest} 的范式让行为级测试绕开 final 的
+     * dispatch 主体，返回待发送的 {@link Envelope}（package-private，供单测绕开 final
      * {@code WsMessageContext} 直接驱动）。
      */
     Envelope dispatchToEnvelope(Envelope in, String sessionId) {
@@ -183,7 +194,7 @@ final class ScriptOpDispatcher {
         } catch (Exception e) {
             // 错误消息脱敏：client 只收固定文案；完整异常进 server 日志
             if (log != null) {
-                log.log(java.util.logging.Level.WARNING, "script op failed: " + op, e);
+                log.log(Level.WARNING, "script op failed: " + op, e);
             }
             return Envelope.error(in.id(), "INTERNAL_ERROR", "script op failed");
         }
@@ -359,7 +370,7 @@ final class ScriptOpDispatcher {
         if (ruleId == null || ruleId.isEmpty()) {
             return Envelope.error(in.id(), "INVALID_PAYLOAD", "ruleId required");
         }
-        ac.haru.hikaricanvas.script.engine.ScriptTestLauncher launcher = this.testLauncher;
+        ScriptTestLauncher launcher = this.testLauncher;
         if (launcher == null) {
             // 引擎未装配（启动早期 / 测试装配缺）固定拒
             return Envelope.error(in.id(), "SCRIPT_ENGINE_UNAVAILABLE",
@@ -372,7 +383,7 @@ final class ScriptOpDispatcher {
             return Envelope.error(in.id(), "SCRIPT_NOT_FOUND",
                     "script rule not found: " + ruleId);
         }
-        // 契约 scripting.md §4.1：试跑即真实执行（D5），同样过 sound/command 面权限
+        // 契约 scripting.md §4.1：试跑即真实执行，同样过 sound/command 面权限
         Set<String> facets = ScriptPermissions.requiredFacets(rule.get());
         Envelope facetDenied = checkFacets(in, sessionId, s, "script.test", facets);
         if (facetDenied != null) return facetDenied;
@@ -390,10 +401,9 @@ final class ScriptOpDispatcher {
     }
 
     /** TraceStep → wire（{@code {blockId, kind, result, detail}} 原样 Map 化；detail 可 null）。 */
-    static List<Map<String, Object>> stepsToWire(
-            List<ac.haru.hikaricanvas.script.engine.TraceStep> steps) {
-        List<Map<String, Object>> wire = new java.util.ArrayList<>(steps.size());
-        for (ac.haru.hikaricanvas.script.engine.TraceStep st : steps) {
+    static List<Map<String, Object>> stepsToWire(List<TraceStep> steps) {
+        List<Map<String, Object>> wire = new ArrayList<>(steps.size());
+        for (TraceStep st : steps) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("blockId", st.blockId());
             m.put("kind", st.kind());
@@ -463,30 +473,26 @@ final class ScriptOpDispatcher {
     }
 
     /**
-     * 递归走动作树，对每个 {@code if.condition} 调
-     * {@link ac.haru.hikaricanvas.script.engine.ConditionEvaluator#checkSyntax}（parse-only）。
+     * 递归走动作树，对每个含条件表达式的动作调 {@link ConditionEvaluator#checkSyntax}（parse-only）。
      * 返回首个失败的结构化 {@link ValidationError}（含 {@code blockId} 定位 + {@code detail}
      * 底层文法错误）；全通过返 empty。
      *
-     * <p>{@code detail} = {@link ac.haru.hikaricanvas.script.engine.ConditionEvaluator#checkSyntax}
-     * 的返回串——由 {@link ac.haru.hikaricanvas.template.expr.ExpressionParser.ParseException} 产出，
-     * 本身已是英文 + 符号 + 位置信息（如 {@code unexpected token '(' (at position 0)}），
-     * 故原样透传作 {@code detail} 参，不再另立 i18n key。dispatcher 侧
-     * {@link #renderValidation} 按 locale 渲染 {@code script.validate.conditionSyntax*} 外层文案。</p>
+     * <p>{@code detail} 由 {@link ExpressionParser.ParseException} 产出，本身已是英文 + 符号 +
+     * 位置信息（如 {@code unexpected token '(' (at position 0)}），原样透传作 {@code detail} 参；
+     * dispatcher 侧 {@link #renderValidation} 按 locale 渲染 {@code script.validate.conditionSyntax*} 外层文案。</p>
      */
-    static Optional<ValidationError> checkConditionSyntax(List<ac.haru.hikaricanvas.script.Action> actions) {
+    static Optional<ValidationError> checkConditionSyntax(List<Action> actions) {
         return checkConditionSyntax(actions, "actions/");
     }
 
     private static Optional<ValidationError> checkConditionSyntax(
-            List<ac.haru.hikaricanvas.script.Action> actions, String prefix) {
+            List<Action> actions, String prefix) {
         if (actions == null) return Optional.empty();
         for (int i = 0; i < actions.size(); i++) {
-            ac.haru.hikaricanvas.script.Action a = actions.get(i);
+            Action a = actions.get(i);
             String blockId = prefix + i;
-            if (a instanceof ac.haru.hikaricanvas.script.Action.If iff) {
-                Optional<String> err = ac.haru.hikaricanvas.script.engine.ConditionEvaluator
-                        .checkSyntax(iff.condition());
+            if (a instanceof Action.If iff) {
+                Optional<String> err = ConditionEvaluator.checkSyntax(iff.condition());
                 if (err.isPresent()) {
                     return Optional.of(ValidationError.of("conditionSyntaxIf",
                             "blockId", blockId, "detail", err.get()));
@@ -495,32 +501,24 @@ final class ScriptOpDispatcher {
                 if (sub.isPresent()) return sub;
                 sub = checkConditionSyntax(iff.elseActions(), blockId + "/else/");
                 if (sub.isPresent()) return sub;
-            } else if (a instanceof ac.haru.hikaricanvas.script.Action.WaitUntil wu) {
-                // WaitUntil 的 condition 同样走保存期 parse-only 预检（与 if 一致）；
-                // 否则坏条件运行期静默恒 false 等满超时、无任何报错，破坏保存期预检契约。
-                Optional<String> err = ac.haru.hikaricanvas.script.engine.ConditionEvaluator
-                        .checkSyntax(wu.condition());
+            } else if (a instanceof Action.WaitUntil wu) {
+                Optional<String> err = ConditionEvaluator.checkSyntax(wu.condition());
                 if (err.isPresent()) {
                     return Optional.of(ValidationError.of("conditionSyntaxWaitUntil",
                             "blockId", blockId, "detail", err.get()));
                 }
-            } else if (a instanceof ac.haru.hikaricanvas.script.Action.Repeat rep) {
-                // 递归进 repeat body（body 里的 if/waitUntil 条件也预检）。
+            } else if (a instanceof Action.Repeat rep) {
                 Optional<ValidationError> sub = checkConditionSyntax(rep.body(), blockId + "/body/");
                 if (sub.isPresent()) return sub;
-            } else if (a instanceof ac.haru.hikaricanvas.script.Action.RepeatUntil ru) {
-                // repeatUntil 自身 condition 预检（照 WaitUntil）+ 递归 body。
-                Optional<String> err = ac.haru.hikaricanvas.script.engine.ConditionEvaluator
-                        .checkSyntax(ru.condition());
+            } else if (a instanceof Action.RepeatUntil ru) {
+                Optional<String> err = ConditionEvaluator.checkSyntax(ru.condition());
                 if (err.isPresent()) {
                     return Optional.of(ValidationError.of("conditionSyntaxRepeatUntil",
                             "blockId", blockId, "detail", err.get()));
                 }
                 Optional<ValidationError> sub = checkConditionSyntax(ru.body(), blockId + "/body/");
                 if (sub.isPresent()) return sub;
-            } else if (a instanceof ac.haru.hikaricanvas.script.Action.RandomBranch rb) {
-                // RandomBranch 自身无 condition，但 then/else 分支可嵌 If/WaitUntil/RepeatUntil
-                // 等含 condition 的积木——必须递归，否则坏条件绕过保存期预检。
+            } else if (a instanceof Action.RandomBranch rb) {
                 Optional<ValidationError> sub = checkConditionSyntax(rb.then(), blockId + "/then/");
                 if (sub.isPresent()) return sub;
                 sub = checkConditionSyntax(rb.elseActions(), blockId + "/else/");
@@ -543,18 +541,12 @@ final class ScriptOpDispatcher {
      * 基础节点 {@code canvas.script.edit}（default=true）+ wall 存在性。
      * 返回 null = 放行；非 null = 直接回给 client 的错误帧。
      *
-     * <p>与 alias / 模板的 own 兜底<b>等价语义</b>——default-true 节点只对
-     * 无法解析的离线玩家（{@code online=false}，含主线程超时 / 解析异常）放行；
-     * <b>在线但被服主显式收回节点的必须真拒</b>（PERMISSION_DENIED + audit，照
-     * {@link #checkFacets} 的 audit 形态）。旧实现无条件 {@code granted=true}
-     * 是 fail-open，服主收回 {@code canvas.script.edit} 形同虚设。</p>
-     *
-     * <p>package-private：权限拒绝路径 dispatch 级测试直接驱动（照 handleCreate
-     * 等 handler 的既有范式，绕开 final 的 SessionManager 全装配）。</p>
+     * <p>default-true 节点只对无法解析的离线玩家（{@code online=false}，含主线程超时 /
+     * 解析异常）放行；在线但被服主显式收回节点的必须真拒（{@code PERMISSION_DENIED} + audit）。</p>
      */
     Envelope checkBasePermission(Envelope in, String sessionId, Session s) {
         UUID callerUuid = s.playerUuid();
-        ac.haru.hikaricanvas.storage.WallRepo.Wall wall =
+        WallRepo.Wall wall =
                 wallRepo == null ? null : wallRepo.loadById(s.wallId()).orElse(null);
         if (wall == null) {
             return Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found");
@@ -583,10 +575,6 @@ final class ScriptOpDispatcher {
      * 面权限逐一查，<b>无兜底</b>（被服主收回必须真拒）。任一缺 →
      * {@code PERMISSION_DENIED}（message 含缺的节点）+ audit。
      * 返回 null = 全通过；非 null = 错误帧。
-     *
-     * <p>package-private 而非 private：{@code ScriptOpFacetGuardTest} 用反射清点
-     * 「每个改动规则内容 / 启用态的 op 都真的走到这里」，防再出现 script.enable
-     * 那种"复制了兄弟 handler 的骨架却没复制它的闸"的漏检。</p>
      */
     Envelope checkFacets(Envelope in, String sessionId,
                          Session s, String op, Set<String> facets) {
@@ -631,7 +619,7 @@ final class ScriptOpDispatcher {
      */
     private static long currentVersion(Session s) {
         if (s == null) return 0L;
-        ac.haru.hikaricanvas.state.ProjectState ps = s.projectState();
+        ProjectState ps = s.projectState();
         return ps == null ? 0L : ps.version();
     }
 
@@ -669,10 +657,9 @@ final class ScriptOpDispatcher {
 
     /**
      * 把结构化 {@link ValidationError} 按发起 session 的编辑器 locale 渲染成人读
-     * 文案（{@code script.validate.<key>}）。缺 {@code messages}（旧测试装配容忍 null）时
+     * 文案（{@code script.validate.<key>}）。缺 {@code messages}（测试装配容忍 null）时
      * 回退 key 名，保证不 NPE。参数转 {@link Placeholder#unparsed}（validation 文案纯文本，
-     * 参数是数字 / 白名单值，无需 MiniMessage 解析）。T2 供 validate 两处调用；T3 的
-     * condition 语法错误亦复用。
+     * 参数是数字 / 白名单值，无需 MiniMessage 解析）。
      */
     private String renderValidation(String sessionId, ValidationError ve) {
         if (messages == null) return ve.key();
@@ -687,7 +674,7 @@ final class ScriptOpDispatcher {
     /** 解析失败时完整异常进 server 日志（外发 message 已脱敏为首行）。 */
     private void logParseFailure(String op, ParsedRule parsed) {
         if (log != null && parsed.cause() != null) {
-            log.log(java.util.logging.Level.FINE,
+            log.log(Level.FINE,
                     "script rule parse failed (" + op + ")", parsed.cause());
         }
     }

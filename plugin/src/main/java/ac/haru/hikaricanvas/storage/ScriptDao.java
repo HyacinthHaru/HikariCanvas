@@ -186,7 +186,7 @@ public class ScriptDao {
             return MAPPER.writeValueAsString(rule);
         } catch (JsonProcessingException e) {
             // ScriptRule 全 POJO/record，序列化失败属编程错误；包成 unchecked 传播
-            throw new IllegalStateException("ScriptRule 序列化失败: id=" + rule.id(), e);
+            throw new IllegalStateException("Failed to serialize ScriptRule: id=" + rule.id(), e);
         }
     }
 

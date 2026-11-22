@@ -36,16 +36,15 @@ import java.util.Map;
  * <p>插件 setVariable 抛业务异常 → API 内部 log + 该次操作丢弃，不影响 HikariCanvas
  * 本身（详见 {@code docs/dynamic-data.md §4.3}）。</p>
  *
- * <p>限流（{@code dynamic-data.md §10.2}）：单 plugin 推送频率 > 100/s 由 P 任务接入的
- * PushRateLimiter 拦截 + log warning，不抛异常给调用方。</p>
+ * <p>限流（{@code docs/dynamic-data.md §10.2}）：单 plugin 推送频率超过阈值时由
+ * {@code PushRateLimiter} 拦截并记录 warning，不向调用方抛异常。</p>
  *
  * <h2>保留 namespace</h2>
  *
- * <p>{@code user / system / papi / scoreboard / schedule} 由 HikariCanvas 内部使用，
+ * <p>{@code user / system / papi / scoreboard / schedule / userglobal} 由 HikariCanvas 内部使用，
  * 外部插件 registerNamespace 这些名字会抛 {@link IllegalArgumentException}。</p>
  *
- * @see docs/dynamic-data.md §4 Plugin Push API
- * @see docs/dynamic-data.md §9.2 插件 namespace ACL
+ * <p>详见 {@code docs/dynamic-data.md §4}（Plugin Push API）与 {@code §9.2}（插件 namespace ACL）。</p>
  */
 public interface HikariCanvasAPI {
 

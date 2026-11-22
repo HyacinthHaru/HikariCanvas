@@ -15,6 +15,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,7 +40,7 @@ import java.util.zip.ZipOutputStream;
  *       样式字段一并参数化：派生 paramId = 该 text 的 finalId（或 autoId）+ {@code _color /
  *       _fontsize / _font} 后缀，type 分别 {@code color / int / font}，default = 元素当前值。
  *       数值字段以字符串形态写占位符（{@code "fontSize": "${...}"}），套用后靠 Jackson coercion
- *       解回 int（见 {@link PackParamResolver} D3）。</li>
+ *       解回 int（见 {@link PackParamResolver}）。</li>
  * </ol>
  *
  * <p>套用走 {@code ProjectImporter.applyPack}——填参数 → {@code ${param}} 替换 → materialize。
@@ -160,12 +161,12 @@ public final class TemplateExporter {
 
         // 1) 收集所有 TextElement + 分配 autoId
         List<TextRef> textRefs = collectTextElements(state);
-        Map<String, TextRef> byAutoId = new java.util.HashMap<>();
+        Map<String, TextRef> byAutoId = new HashMap<>();
         for (TextRef ref : textRefs) byAutoId.put(ref.autoId(), ref);
 
         // 2) 汇总所有参数声明：先 text 内容参数（keep/drop/改名），再样式字段参数。paramId 全局去重。
         List<ParamDecl> params = new ArrayList<>();
-        Map<String, Boolean> seen = new java.util.HashMap<>();
+        Map<String, Boolean> seen = new HashMap<>();
 
         // 2a) text 内容参数
         for (TextRef ref : textRefs) {
@@ -229,7 +230,7 @@ public final class TemplateExporter {
 
         // 4) 在 project map 内按 (flat, jsonField) 把参数化字段的值换成 "${paramId}"
         //    映射：flat 索引 → (json 字段名 → paramId)；一个元素可同时参数化 text + color + fontSize + fontId
-        Map<Integer, Map<String, String>> fieldReplacements = new java.util.HashMap<>();
+        Map<Integer, Map<String, String>> fieldReplacements = new HashMap<>();
         for (ParamDecl p : params) {
             fieldReplacements.computeIfAbsent(p.flat(), k -> new LinkedHashMap<>())
                     .put(p.jsonField(), p.id());

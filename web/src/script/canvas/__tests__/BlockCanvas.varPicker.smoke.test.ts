@@ -1,11 +1,10 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P5 实测修复（次要根因 2：变量「选变量」按钮多点几次才出现选择器）。
+ * 变量「选变量」按钮打开选择器可靠性测试。
  *
- * <p>根因：变量按钮 click 冒泡到 BlockStack.onStackClick → 若规则未选中则 selectRule 在同一次点击里
- * 替换 workingCopy 触发画布重渲，与刚弹出的 picker 抢时序。修法：① BlockNode/BlockStack 在 pointerdown
- * （早于 click）就选中本规则；② picker 打开的 click 截断冒泡。结果：完整 pointerdown→pointerup→click
- * 手势一次打开 picker，且规则已进入编辑态（变量选择落地需 workingCopy）。</p>
+ * <p>① BlockNode/BlockStack 在 pointerdown（早于 click）就选中本规则；② picker 打开的 click
+ * 截断冒泡避免触发同一次点击内的额外重渲。结果：完整 pointerdown→pointerup→click 手势一次打开
+ * picker，且规则已进入编辑态（变量选择落地需 workingCopy）。</p>
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
@@ -40,7 +39,7 @@ beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false } as unknown as Response)));
 });
 
-describe('变量选择器打开可靠性（次要根因 2）', () => {
+describe('变量选择器打开可靠性', () => {
     it('pointerdown 落在变量按钮 → 先选中本规则（早于 click）', async () => {
         const scripts = useScriptStore();
         scripts.initScripts([makeRule('sr-1')]);
@@ -102,9 +101,9 @@ describe('变量选择器打开可靠性（次要根因 2）', () => {
         w.unmount();
     });
 
-    // ---- 0.7.1 触控板敏感度修复（修复 A：isFormTarget 用 closest）----
+    // ---- 表单目标判定（isFormTarget 用 closest）----
     // 变量按钮内有子 <span class="hc-pf-var-text">；pointerdown 实际落在子 span 上。
-    // 旧 isFormTarget 用 el.matches('button') 看不到子节点 → 误判可拖；修复后用 closest 命中 button。
+    // isFormTarget 用 closest 命中 button，避免误判为可拖积木。
 
     it('pointerdown 落在变量按钮的子 span → 不启动拖块（无跟手浮层）+ 仍选中规则', async () => {
         const scripts = useScriptStore();

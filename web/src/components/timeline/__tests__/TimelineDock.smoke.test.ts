@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 /**
- * 0.6 P4 hotfix-2 回归：TimelineDock / EasingCurveEditor 渲染 smoke。
+ * TimelineDock / EasingCurveEditor 渲染 smoke。
  *
  * 真实 mount 组件并触发"展开属性行 / 打开设置 / 渲染缓动预设"——这些路径调 propertyLabel /
  * loopModeLabel / presetLabel，内部访问 `useI18n()` 的 t（ComputedRef）。若 script 里漏写 `.value`
  * （`t.timeline` 而非 `t.value.timeline`），渲染时 `m['propX']` / `x.loopOnce` 抛 undefined → 整个
- * 组件崩溃消失（hotfix-2 的真 bug）。vite build 只转译不查类型、vitest 纯函数测试都抓不到，只有
+ * 组件崩溃消失。vite build 只转译不查类型、vitest 纯函数测试都抓不到，只有
  * 这种组件渲染 smoke 能在 CI 拦住。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -114,7 +114,7 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         expect(wrapper.findAll('option').length).toBeGreaterThanOrEqual(3);
     });
 
-    it('设置里渲染触发方式选项（P5，triggerTypeLabel 正确解包 t.value）', async () => {
+    it('设置里渲染触发方式选项（triggerTypeLabel 正确解包 t.value）', async () => {
         useProjectStore().setSnapshot(makeState());
         useTimelineStore().openDock();
         const wrapper = mount(TimelineDock);
@@ -126,7 +126,7 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         expect(wrapper.text()).toContain('变量变了就播');
     });
 
-    it('选「变量变了就播」→ 下拉停住 + 出现选变量按钮，点按钮才开 picker（P5）', async () => {
+    it('选「变量变了就播」→ 下拉停住 + 出现选变量按钮，点按钮才开 picker', async () => {
         useProjectStore().setSnapshot(makeState());
         useTimelineStore().openDock();
         const wrapper = mount(TimelineDock);
@@ -147,7 +147,7 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         expect(wrapper.find('.hc-variable-picker').exists()).toBe(true);
     });
 
-    it('整体关键帧块渲染 + pointer 点选不崩（P4.5 / P4.5b 块改 pointer 拖动）', async () => {
+    it('整体关键帧块渲染 + pointer 点选不崩', async () => {
         useProjectStore().setSnapshot(makeStateWithKf());
         useUiStore().selectMany(['e-1']);
         const timeline = useTimelineStore();
@@ -155,7 +155,7 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         const wrapper = mount(TimelineDock);
         await nextTick();
         timeline.setPxPerMs(0.1);   // happy-dom 无布局 → 手动给缩放，让块 pointer 选中路径可走
-        // element row 把 x/y/opacity @ t=0 聚合成一个整体关键帧块（菱形 rotate-45）；P4.5b 选中走 pointerup
+        // element row 把 x/y/opacity @ t=0 聚合成一个整体关键帧块（菱形 rotate-45）；选中走 pointerup
         const blocks = wrapper.findAll('.rotate-45');
         expect(blocks.length).toBeGreaterThan(0);
         await blocks[0].trigger('pointerdown', { clientX: 50, button: 0 });
@@ -164,7 +164,7 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         expect(timeline.selectedGroups.has('e-1:0')).toBe(true);
     });
 
-    it('展开后点击 per-property 关键帧 → selectKeyframe（P4.5b）', async () => {
+    it('展开后点击 per-property 关键帧 → selectKeyframe', async () => {
         useProjectStore().setSnapshot(makeStateWithKf());
         useUiStore().selectMany(['e-1']);
         const timeline = useTimelineStore();
@@ -181,7 +181,7 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         expect(timeline.selectedGroups.size).toBe(0);   // 与整体帧选中互斥
     });
 
-    it('加帧按钮选中新整体帧，不崩（P4.5）', async () => {
+    it('加帧按钮选中新整体帧，不崩', async () => {
         useProjectStore().setSnapshot(makeStateWithKf());
         useUiStore().selectMany(['e-1']);
         const timeline = useTimelineStore();
@@ -195,7 +195,7 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         expect(timeline.selectedGroups.has('e-1:0')).toBe(true);
     });
 
-    it('自动加帧 toggle 切 store.autoKeyframe（P4.5b）', async () => {
+    it('自动加帧 toggle 切 store.autoKeyframe', async () => {
         useProjectStore().setSnapshot(makeState());
         const timeline = useTimelineStore();
         timeline.openDock();
@@ -223,7 +223,7 @@ describe('EasingCurveEditor 渲染 smoke', () => {
         expect(wrapper.text()).toContain('匀速');   // easingLinear
     });
 
-    // R19-easingeditor-drag 回归：拖拽中收到 server patch（props.modelValue 变）不得漂移未拖的
+    // 拖拽中收到 server patch（props.modelValue 变）不得漂移未拖的
     // 那个控制点。SIZE=160；toSvgX(x)=x*160，toSvgY(y)=160-y*160。
     it('拖拽中 props 变化不漂移基线：松手发的 bezier 用拖拽起始快照（非 patch 后值）', async () => {
         const wrapper = mount(EasingCurveEditor, {

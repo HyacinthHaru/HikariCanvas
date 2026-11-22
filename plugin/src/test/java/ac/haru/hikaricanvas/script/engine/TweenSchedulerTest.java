@@ -4,21 +4,22 @@ import ac.haru.hikaricanvas.render.AnimationTicker;
 import ac.haru.hikaricanvas.script.Action;
 import ac.haru.hikaricanvas.state.BlendMode;
 import ac.haru.hikaricanvas.state.Easing;
+import ac.haru.hikaricanvas.state.EditSession;
 import ac.haru.hikaricanvas.state.Fill;
 import ac.haru.hikaricanvas.state.Layer;
 import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.state.RectElement;
+import ac.haru.hikaricanvas.state.SolidFill;
 import ac.haru.hikaricanvas.state.TextElement;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import ac.haru.hikaricanvas.state.EditSession;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -27,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 补间引擎 P2 单测（scripting-tween.md T1-T10）。
+ * {@link TweenScheduler} 补间引擎单测。
  *
  * <p>全 fake（seam 接口注入）：fake clock + fake applyFn + fake TickerControl +
  * fake WallLoader。{@link TweenScheduler#tickForTest} 绕开 scheduleAtFixedRate
@@ -79,7 +80,7 @@ class TweenSchedulerTest {
     static class FakeTicker implements TickerControl {
         final List<String> renderCalls = new ArrayList<>();
         final List<String> clearCalls = new ArrayList<>();
-        /** P3：可控的 isWallAnimating 返回值（true = 有时间轴）。 */
+        /** 可控的 isWallAnimating 返回值（true = 有时间轴在播）。 */
         final AtomicBoolean animating = new AtomicBoolean(false);
 
         @Override public AnimationTicker.Result play(String w, String t) { return AnimationTicker.Result.OK; }
@@ -279,7 +280,7 @@ class TweenSchedulerTest {
         assertEquals(1, scheduler.activeCount(), "同 wall 接管不增加 active 计数");
     }
 
-    // ---------- 0.7.1 per-wall fps 节流测试 ----------
+    // ---------- per-wall fps 节流测试 ----------
 
     /**
      * 节流验证：task.fps=10（每 100ms 渲一次），SES maxFps=60（cadence=~17ms）。
@@ -413,11 +414,11 @@ class TweenSchedulerTest {
         assertEquals(1, state.effectiveTweenFps(), "effectiveTweenFps 应 clamp 到 1");
     }
 
-    // ---------- P3 测试用例 ----------
+    // ---------- 颜色补间与时间轴共存分流 ----------
 
-    /** P3：color 补间（TextElement.color，hex from/to → ColorLerp 中间帧）。 */
+    /** color 补间（TextElement.color，hex from/to → ColorLerp 中间帧）。 */
     @Test
-    void p3_color_tween_midframe_renders_interpolated_hex() {
+    void color_tween_midframe_renders_interpolated_hex() {
         fakeState = stateWithText(ELEMENT, "#000000");
         Action.SetElementProperties setColor = new Action.SetElementProperties(
                 ELEMENT, Map.of("color", "#FFFFFF"), "setColor");
@@ -437,9 +438,9 @@ class TweenSchedulerTest {
         assertTrue(scheduler.hasActive(WALL), "中间帧 active 仍存在");
     }
 
-    /** P3：color 补间末帧落盘，颜色值为目标 hex。 */
+    /** color 补间末帧落盘，颜色值为目标 hex。 */
     @Test
-    void p3_color_tween_final_applies_target_color() {
+    void color_tween_final_applies_target_color() {
         fakeState = stateWithText(ELEMENT, "#000000");
         Action.SetElementProperties setColor = new Action.SetElementProperties(
                 ELEMENT, Map.of("color", "#FF0000"), "setColor");
@@ -457,9 +458,9 @@ class TweenSchedulerTest {
         assertFalse(scheduler.hasActive(WALL), "末帧后 active 清空");
     }
 
-    /** P3：fill 补间（RectElement.fill SolidFill，hex from/to → lerpFill 中间帧）。 */
+    /** fill 补间（RectElement.fill SolidFill，hex from/to → lerpFill 中间帧）。 */
     @Test
-    void p3_fill_tween_midframe_renders_and_no_applyMany() {
+    void fill_tween_midframe_renders_and_no_applyMany() {
         fakeState = stateWithRect(0, 0); // fill = #FF0000
         Action.SetElementProperties setFill = new Action.SetElementProperties(
                 ELEMENT, Map.of("fill", "#0000FF"), "setColor");
@@ -474,9 +475,9 @@ class TweenSchedulerTest {
         assertTrue(applyFn.log.isEmpty(), "fill 补间中间帧不应落盘");
     }
 
-    /** P3：fill 补间末帧落盘。 */
+    /** fill 补间末帧落盘。 */
     @Test
-    void p3_fill_tween_final_applies_target_fill() {
+    void fill_tween_final_applies_target_fill() {
         fakeState = stateWithRect(0, 0); // fill = #FF0000
         Action.SetElementProperties setFill = new Action.SetElementProperties(
                 ELEMENT, Map.of("fill", "#0000FF"), "setColor");
@@ -495,11 +496,10 @@ class TweenSchedulerTest {
     }
 
     /**
-     * P3：共存分流——有时间轴的墙（animating=true）。
-     * 中间帧应走 applyFn（落 DB），不走 renderStatic。
+     * 共存分流：有时间轴在播的墙（animating=true）中间帧走 applyFn 落库，不走 renderStatic。
      */
     @Test
-    void p3_coexist_animating_wall_uses_applyMany_not_renderStatic() {
+    void coexist_animating_wall_uses_applyMany_not_renderStatic() {
         fakeState = stateWithRect(0, 0);
         ticker.animating.set(true); // 模拟该 wall 有时间轴在播
         Action.TweenBlock tb = tweenMove(1000L, 100, 0);
@@ -516,11 +516,10 @@ class TweenSchedulerTest {
     }
 
     /**
-     * P3：共存分流——静态墙（animating=false）。
-     * 中间帧应走 renderStatic，不走 applyFn。
+     * 共存分流：静态墙（animating=false）中间帧走 renderStatic，不走 applyFn。
      */
     @Test
-    void p3_coexist_static_wall_uses_renderStatic_not_applyMany() {
+    void coexist_static_wall_uses_renderStatic_not_applyMany() {
         fakeState = stateWithRect(0, 0);
         ticker.animating.set(false); // 静态墙
         Action.TweenBlock tb = tweenMove(1000L, 100, 0);
@@ -537,10 +536,10 @@ class TweenSchedulerTest {
     }
 
     /**
-     * P3：共存末帧——无论 animating=true/false，末帧都 applyFn 落 DB。
+     * 共存末帧：无论 animating=true/false，末帧都经 applyFn 落库。
      */
     @Test
-    void p3_coexist_both_walls_applyMany_on_final() {
+    void coexist_both_walls_applyMany_on_final() {
         // 测试 animating=true 的末帧
         fakeState = stateWithRect(0, 0);
         ticker.animating.set(true);
@@ -568,11 +567,10 @@ class TweenSchedulerTest {
     }
 
     /**
-     * P3：animating 状态每 tick 现查（不缓存）。
-     * 补间中途 animating 从 false 变 true → 后续 tick 切换路径。
+     * animating 状态每 tick 现查（不缓存）：补间中途 animating 从 false 变 true → 后续 tick 切换路径。
      */
     @Test
-    void p3_animating_checked_each_tick_not_cached() {
+    void animating_checked_each_tick_not_cached() {
         fakeState = stateWithRect(0, 0);
         ticker.animating.set(false); // 初始静态
 
@@ -600,12 +598,10 @@ class TweenSchedulerTest {
     }
 
     /**
-     * P3：${var:} 颜色退化末帧瞬切——enqueue 成功（不报错），但 toStr 含变量。
-     * 中间帧 renderStatic 被调（snap=true → buildPatchValue 返 null → 中间帧无 color patch，
-     * 但 buildInterpolatedFrame 其他属性仍正常）；末帧 applyFn 落盘含变量字符串。
+     * ${var:} 颜色退化为末帧瞬切：enqueue 成功，中间帧跳过颜色插值，末帧原样落盘变量字符串。
      */
     @Test
-    void p3_color_with_var_snaps_to_final_on_end() {
+    void color_with_var_snaps_to_final_on_end() {
         fakeState = stateWithText(ELEMENT, "#000000");
         Action.SetElementProperties setColor = new Action.SetElementProperties(
                 ELEMENT, Map.of("color", "${var:user/mycolor}"), "setColor");
@@ -626,20 +622,14 @@ class TweenSchedulerTest {
                 "含变量颜色末帧应落变量字符串: " + entry);
     }
 
-    // ---------- P3-16：buildInterpolatedFrame 不得原地 mutate 共享 baseState ----------
+    // ---------- buildInterpolatedFrame 不原地修改共享 baseState ----------
 
     /**
-     * P3-16 回归：补间中间帧产帧（{@code buildInterpolatedFrame}）<b>不得</b>原地 mutate
-     * {@code task.baseState()}——否则该 baseState 的 element ArrayList 会被 tick 线程并发 set，
-     * 而它同时被 renderStatic 异步在 Ticker 线程读 → 撕裂读。
-     *
-     * <p>旧实现 {@code new EditSession(task.baseState())} 按引用共享 layers/elements，
-     * {@code updateElement} 的 {@code elements().set(idx, ...)} 直接改 baseState；连续两次 tick 后
-     * baseState 里 rect 的 x 会被污染成插值值（50 / …）。修复后每帧 {@code deepCopyState} 拍独立
-     * 副本，baseState 的 from 值（x=0）始终不变。</p>
+     * 补间中间帧产帧（{@code buildInterpolatedFrame}）<b>不得</b>原地修改 {@code baseState}，
+     * 每帧必须在独立深拷贝副本上写入插值，保证 {@code baseState} 中的初始值跨帧恒定且无并发读写冲突。
      */
     @Test
-    void p3_16_buildInterpolatedFrame_doesNotMutateSharedBaseState() {
+    void buildInterpolatedFrame_doesNotMutateSharedBaseState() {
         // from x=0, to x=100；静态墙（animating=false 默认）走 buildInterpolatedFrame
         fakeState = stateWithRect(0, 0);
         Action.SetElementProperties move = new Action.SetElementProperties(
@@ -668,14 +658,14 @@ class TweenSchedulerTest {
         assertTrue(scheduler.hasActive(WALL), "未到末帧 active 仍在");
     }
 
-    // ---------- E1：补间末帧落盘 → 续接回调（顺序承诺 scripting-tween.md §2.2） ----------
+    // ---------- 补间末帧落盘 → 续接回调顺序承诺 ----------
 
     /**
-     * E1 核心顺序承诺：续接回调（{@code onComplete}）<b>必在末帧 applyFn 落盘之后</b>触发。
+     * 核心顺序承诺：续接回调（{@code onComplete}）<b>必在末帧 applyFn 落盘之后</b>触发。
      * 用共享 {@code events} 序列记录两件事的发生先后——断言 WRITE 在 CONTINUE 之前。
      */
     @Test
-    void e1_onComplete_firesAfterFinalApplyFn() {
+    void onComplete_firesAfterFinalApplyFn() {
         List<String> events = new ArrayList<>();
         // applyFn 记 WRITE（在 FakeApplyFn 之外另用一个直接记序的 fake）
         TweenScheduler sched = new TweenScheduler(
@@ -704,10 +694,10 @@ class TweenSchedulerTest {
         assertTrue(events.get(0).contains("100"), "落盘值应为目标 x=100: " + events);
     }
 
-    /** E1：正常完成只触发 onComplete 一次（即使再多 tick 也不重复）。 */
+    /** 正常完成只触发 onComplete 一次（即使再多 tick 也不重复）。 */
     @Test
-    void e1_onComplete_firesExactlyOnce_onNormalCompletion() {
-        java.util.concurrent.atomic.AtomicInteger fires = new java.util.concurrent.atomic.AtomicInteger();
+    void onComplete_firesExactlyOnce_onNormalCompletion() {
+        AtomicInteger fires = new AtomicInteger();
         fakeState = stateWithRect(0, 0);
         clock.set(0L);
         scheduler.enqueue(WALL, BLOCK, tweenMove(500L, 100, 0), fires::incrementAndGet);
@@ -723,13 +713,13 @@ class TweenSchedulerTest {
     }
 
     /**
-     * E1：被同墙新补间接管时，<b>旧补间</b>的 onComplete 触发一次（旧脚本不永久挂起，T8 接管语义）；
+     * 被同墙同属性新补间接管时，<b>旧补间</b>的 onComplete 触发一次（旧脚本不永久挂起）；
      * 新补间的 onComplete 不在接管瞬间触发（它还没完成）。
      */
     @Test
-    void e1_takeover_firesOldOnComplete_once_notNew() {
-        java.util.concurrent.atomic.AtomicInteger oldFires = new java.util.concurrent.atomic.AtomicInteger();
-        java.util.concurrent.atomic.AtomicInteger newFires = new java.util.concurrent.atomic.AtomicInteger();
+    void takeover_firesOldOnComplete_once_notNew() {
+        AtomicInteger oldFires = new AtomicInteger();
+        AtomicInteger newFires = new AtomicInteger();
         fakeState = stateWithRect(0, 0);
 
         clock.set(0L);
@@ -749,12 +739,12 @@ class TweenSchedulerTest {
     }
 
     /**
-     * E1：补间 tick 异常（{@code renderStatic} 抛）也触发 onComplete 一次——脚本不永久挂起。
+     * 补间 tick 异常（{@code renderStatic} 抛）也触发 onComplete 一次——脚本不永久挂起。
      * 用一个会抛的 ticker 让 tickOne 末帧 renderStatic 抛 → 落到 tick() 的 Throwable 清理路径。
      */
     @Test
-    void e1_onComplete_firesOnTickException_noPermanentHang() {
-        java.util.concurrent.atomic.AtomicInteger fires = new java.util.concurrent.atomic.AtomicInteger();
+    void onComplete_firesOnTickException_noPermanentHang() {
+        AtomicInteger fires = new AtomicInteger();
         // throwingTicker：renderStatic 抛 RuntimeException（静态墙末帧会调 renderStatic）
         TickerControl throwingTicker = new TickerControl() {
             @Override public AnimationTicker.Result play(String w, String t) { return AnimationTicker.Result.OK; }
@@ -782,10 +772,10 @@ class TweenSchedulerTest {
         assertFalse(sched.hasActive(WALL), "异常后 active 应清空");
     }
 
-    /** E1：shutdown <b>不</b>触发 onComplete（关服路径，与 ScriptRunner 丢弃续接契约一致）。 */
+    /** shutdown <b>不</b>触发 onComplete（关服路径，与 ScriptRunner 丢弃续接契约一致）。 */
     @Test
-    void e1_shutdown_doesNotFireOnComplete() {
-        java.util.concurrent.atomic.AtomicInteger fires = new java.util.concurrent.atomic.AtomicInteger();
+    void shutdown_doesNotFireOnComplete() {
+        AtomicInteger fires = new AtomicInteger();
         fakeState = stateWithRect(0, 0);
         clock.set(0L);
         scheduler.enqueue(WALL, BLOCK, tweenMove(5000L, 100, 0), fires::incrementAndGet);
@@ -794,9 +784,9 @@ class TweenSchedulerTest {
         assertEquals(0, fires.get(), "shutdown 不触发续接回调");
     }
 
-    /** E1：null onComplete 安全（演示拼接 / 测试无续接需求）——不崩、补间照常完成。 */
+    /** null onComplete 安全（无续接需求时）——不崩、补间照常完成。 */
     @Test
-    void e1_nullOnComplete_isSafe() {
+    void nullOnComplete_isSafe() {
         fakeState = stateWithRect(0, 0);
         clock.set(0L);
         // 3 参重载等价 onComplete=null
@@ -856,7 +846,7 @@ class TweenSchedulerTest {
         };
     }
 
-    // ---------- 冲突语义（scripting-tween.md §6）：同属性接管 / 不同属性并存 ----------
+    // ---------- 冲突语义（docs/scripting.md）：同属性接管 / 不同属性并存 ----------
 
     /** 只改 fill（颜色）的补间；与 tweenMove 争的是不同属性。 */
     private static Action.TweenBlock tweenFill(long durationMs, String toColor) {
@@ -877,7 +867,7 @@ class TweenSchedulerTest {
     private static String rectFillHex(ProjectState state) {
         for (Layer l : state.layers()) {
             for (var e : l.elements()) {
-                if (e instanceof RectElement r && r.fill() instanceof ac.haru.hikaricanvas.state.SolidFill sf) {
+                if (e instanceof RectElement r && r.fill() instanceof SolidFill sf) {
                     return sf.color();
                 }
             }
@@ -895,8 +885,7 @@ class TweenSchedulerTest {
     }
 
     /** 等一个计数器达到期望值（默认 2s 预算）——用于跨线程触发的续接回调断言。 */
-    private static void awaitCount(java.util.concurrent.atomic.AtomicInteger counter,
-                                   int expected, String message) {
+    private static void awaitCount(AtomicInteger counter, int expected, String message) {
         long deadline = System.nanoTime() + 2_000_000_000L;
         while (counter.get() != expected && System.nanoTime() < deadline) {
             Thread.onSpinWait();
@@ -904,14 +893,11 @@ class TweenSchedulerTest {
         assertEquals(expected, counter.get(), message);
     }
 
-    /**
-     * 同元素<b>不同</b>属性 → 并存。以前 active 以 wallId 为 key、后来者无条件顶掉前者，
-     * 「移动 + 变色」两条补间必然互相掐断。
-     */
+    /** 同元素<b>不同</b>属性 → 并存（如移动与变色同时进行，互不掐断）。 */
     @Test
     void differentProperty_sameElement_coexists() {
         fakeState = stateWithRect(0, 0);
-        java.util.concurrent.atomic.AtomicInteger moveDone = new java.util.concurrent.atomic.AtomicInteger();
+        AtomicInteger moveDone = new AtomicInteger();
 
         clock.set(0L);
         assertEquals("ok", scheduler.enqueue(WALL, BLOCK, tweenMove(1000L, 100, 0),
@@ -945,7 +931,7 @@ class TweenSchedulerTest {
     @Test
     void sameProperty_takesOver_andFiresOldContinuation() {
         fakeState = stateWithRect(0, 0);
-        java.util.concurrent.atomic.AtomicInteger oldDone = new java.util.concurrent.atomic.AtomicInteger();
+        AtomicInteger oldDone = new AtomicInteger();
 
         clock.set(0L);
         scheduler.enqueue(WALL, BLOCK, tweenMove(1000L, 100, 0), oldDone::incrementAndGet);
@@ -960,8 +946,8 @@ class TweenSchedulerTest {
     @Test
     void oneTweenFinishing_doesNotCancelTheOtherOnSameWall() {
         fakeState = stateWithRect(0, 0);
-        java.util.concurrent.atomic.AtomicInteger shortDone = new java.util.concurrent.atomic.AtomicInteger();
-        java.util.concurrent.atomic.AtomicInteger longDone = new java.util.concurrent.atomic.AtomicInteger();
+        AtomicInteger shortDone = new AtomicInteger();
+        AtomicInteger longDone = new AtomicInteger();
 
         clock.set(0L);
         scheduler.enqueue(WALL, BLOCK, tweenMove(500L, 100, 0), shortDone::incrementAndGet);

@@ -2,12 +2,16 @@ package ac.haru.hikaricanvas.variable;
 
 import ac.haru.hikaricanvas.storage.UserGlobalVariableDao;
 import ac.haru.hikaricanvas.storage.UserVariableDao;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Logger;
@@ -20,10 +24,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P1-A：VariableStore 单测。
+ * {@link VariableStore} 与 {@link VariableDto} 单测。
  *
- * <p>用 {@link FakeUserVariableDao} 在内存里跟踪 upsert / delete 调用——不碰真 SQLite，
- * 单测跑 < 100ms。schema 行为由 V011 SQL + 集成测试覆盖（B 任务范围）。</p>
+ * <p>用 {@link FakeUserVariableDao} 在内存里跟踪 upsert / delete 调用。</p>
  */
 class VariableStoreTest {
 
@@ -170,12 +173,6 @@ class VariableStoreTest {
     /**
      * 删最后一个变量会把空桶从 byNamespace 摘掉（防 per-wall namespace 的桶永久驻留），
      * 但"判空 + 摘桶"必须对并发 create 原子。
-     *
-     * <p>并发压力版：一个线程反复删、另一个线程反复建，结束后 store 里还剩的变量必须
-     * 都能被 listByNamespace 看到。早先用 {@code byNamespace.remove(ns, bucket)} 两参版并
-     * 注释说"并发 create 已重新填入时值不等会跳过"——不成立：并发 create 拿到的是同一个
-     * Set 对象引用，equals 恒真，照删不误，倒排索引就丢桶了（listByNamespace 漏显、
-     * 删墙漏清 user 变量 → 内存 + DB 行泄漏）。</p>
      */
     @Test
     void namespaceBucket_removalIsAtomicAgainstConcurrentCreate() throws Exception {
@@ -223,7 +220,7 @@ class VariableStoreTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  listVisibleToWall — 0.4.0 bugfix Bug 1（ready payload 鸡生蛋）
+    //  listVisibleToWall（ready payload 可见集）
     // ──────────────────────────────────────────────────────────
 
     @Test
@@ -263,8 +260,7 @@ class VariableStoreTest {
 
     @Test
     void listVisibleToWall_doesNotDependOnByWallIndex() {
-        // 关键 bug 1 修复证明：即使 Compositor 从未 markWallReferences，listVisibleToWall
-        // 仍能返回 wall 可见变量（这是 ready payload 场景）
+        // 即使 Compositor 尚未 markWallReferences，listVisibleToWall 仍能返回 wall 可见变量
         store.create("system", "online", VarType.NUMBER, null, null);
         store.create("schedule:w-1", "next", VarType.STRING, null, null);
         assertEquals(0, store.listByWall("w-1").size(), "byWall index empty");
@@ -273,7 +269,7 @@ class VariableStoreTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  create 反查 byWall — 0.4.0 bugfix Bug 2
+    //  create 反查 byWall 索引
     // ──────────────────────────────────────────────────────────
 
     @Test
@@ -304,7 +300,7 @@ class VariableStoreTest {
 
     @Test
     void setValue_afterCreateInheritedRefs_triggersDirtyCallback() {
-        // 验证 Bug 2 完整链路：mark → create → setValue → wallDirtyCallback 被调
+        // 验证完整链路：mark → create → setValue → wallDirtyCallback 被调
         store.markWallReferences("w-A", Set.of("schedule:w-A/eta"));
         store.create("schedule:w-A", "eta", VarType.NUMBER, null, "schedule");
         dirtyWalls.clear();
@@ -551,7 +547,7 @@ class VariableStoreTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.4.0 bugfix3（Bug B）：ChangeListener 广播
+    //  ChangeListener 广播
     // ──────────────────────────────────────────────────────────
 
     @Test
@@ -567,7 +563,7 @@ class VariableStoreTest {
         assertEquals("bedwars/score", e.fullName());
         assertNotNull(e.variable());
         assertEquals("0", e.variable().defaultValue());
-        // 新建变量初始 referencedByWalls 空（除非 Bug 2 反查注入）→ event.referencingWalls() 空
+        // 新建变量初始 referencedByWalls 空 → event.referencingWalls() 空
         assertTrue(e.referencingWalls().isEmpty());
     }
 
@@ -678,7 +674,7 @@ class VariableStoreTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.4.3：全局用户变量（userglobal/*）
+    //  全局用户变量（userglobal/*）
     // ──────────────────────────────────────────────────────────
 
     private static final UUID ALICE = UUID.fromString("11111111-1111-1111-1111-111111111111");
@@ -818,7 +814,6 @@ class VariableStoreTest {
 
     @Test
     void listVisibleToWall_includesUserGlobalForAnyWall() {
-        // 0.4.3 关键回归：listVisibleToWall 对 userglobal/* 跨 wall 可见
         FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
         store.configureUserGlobal(globalDao, 500, 10_000);
         store.createGlobal(ALICE, "Alice", "shared", VarType.STRING, null);
@@ -831,21 +826,14 @@ class VariableStoreTest {
 
     @Test
     void createGlobal_inheritsReferencedByWalls_fromMarkWallReferences() {
-        // 0.4.5 P7 复查：用户先在 wall 文本写 ${var:userglobal/red_score} 触发 markWallReferences，
-        // 后再 createGlobal — 期望 created variable 反查 byWall 注入 initialRefs，避免 Provider
-        // setValue 时 notifyReferencingWalls 漏 wall（同 0.4.0 Bug 2 同款风险）
         FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
         store.configureUserGlobal(globalDao, 500, 10_000);
 
-        // 先用 wall A 标记引用 userglobal/red_score（变量还不存在，markWallReferences 内部
-        // 会调 addWallToReferencedSet 但 store.compute 内 noop ——但 byWall 索引被记录了）
         store.markWallReferences("w-A", Set.of("userglobal/red_score"));
 
-        // 再 createGlobal — 此时 store.create 内部 byWall 反查应注入 referencedByWalls={w-A}
         Variable v = store.createGlobal(ALICE, "Alice", "red_score", VarType.NUMBER, "0");
         assertTrue(v.referencedByWalls().contains("w-A"),
-                "createGlobal should inject initialRefs from byWall inverted index, "
-                        + "to fix 0.4.0 Bug 2 pattern for userglobal namespace");
+                "createGlobal should inject initialRefs from byWall inverted index");
     }
 
     @Test
@@ -862,12 +850,88 @@ class VariableStoreTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  statsByNamespace & VariableDto wire 视图
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void statsByNamespace_emptyStore_returnsEmptyMap() {
+        assertTrue(store.statsByNamespace().isEmpty());
+        assertEquals(0, store.size());
+    }
+
+    @Test
+    void statsByNamespace_countsByNamespacePrefix_andSumEqualsSize() {
+        store.create("user:w-1", "score_a", VarType.NUMBER, "0", null);
+        store.create("user:w-1", "score_b", VarType.NUMBER, "0", null);
+        store.create("user:w-2", "score_c", VarType.NUMBER, "0", null);
+        store.create("schedule:w-1", "eta", VarType.NUMBER, "0", "system");
+        store.create("system", "server.online", VarType.NUMBER, "0", "system");
+        store.create("system", "server.tps", VarType.NUMBER, "0", "system");
+        store.create("scoreboard", "kills", VarType.NUMBER, "0", "scoreboard");
+        store.create("papi", "pct_foo_pct", VarType.STRING, null, "papi");
+        store.create("userglobal", "global_msg", VarType.STRING, "hi", null);
+        store.create("bedwars", "red_score", VarType.NUMBER, "0", "BedWars");
+
+        Map<String, Integer> stats = store.statsByNamespace();
+
+        assertEquals(3, stats.get("user").intValue());
+        assertEquals(1, stats.get("schedule").intValue());
+        assertEquals(2, stats.get("system").intValue());
+        assertEquals(1, stats.get("scoreboard").intValue());
+        assertEquals(1, stats.get("papi").intValue());
+        assertEquals(1, stats.get("userglobal").intValue());
+        assertEquals(1, stats.get("bedwars").intValue());
+
+        int sum = stats.values().stream().mapToInt(Integer::intValue).sum();
+        assertEquals(store.size(), sum, "各 namespace 计数之和应等于 store.size()");
+        assertEquals(10, store.size());
+        assertEquals(7, stats.size(), "应有 7 个 namespace 前缀");
+    }
+
+    @Test
+    void statsByNamespace_sortedByCountDescending() {
+        store.create("user:w-1", "a", VarType.NUMBER, "0", null);
+        store.create("user:w-1", "b", VarType.NUMBER, "0", null);
+        store.create("user:w-1", "c", VarType.NUMBER, "0", null);
+        store.create("system", "x", VarType.NUMBER, "0", "system");
+
+        List<String> order = new ArrayList<>(store.statsByNamespace().keySet());
+        assertEquals("user", order.get(0), "计数最高的 namespace 应排在前");
+    }
+
+    @Test
+    void variableDto_jsonOmitsReferencedByWallsAndPreservesCoreFields() throws Exception {
+        store.create("bedwars", "score", VarType.NUMBER, "0", "BedWarsPlugin");
+        store.setValue("bedwars/score", "42", Duration.ofMinutes(5));
+        store.markWallReferences("w-secret-peer", Set.of("bedwars/score"));
+
+        Variable v = store.get("bedwars/score").orElseThrow();
+        assertTrue(v.referencedByWalls().contains("w-secret-peer"));
+
+        ObjectMapper mapper = new ObjectMapper()
+                .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+        String json = mapper.writeValueAsString(VariableDto.from(v, store));
+        JsonNode node = mapper.readTree(json);
+
+        assertFalse(node.has("referencedByWalls"),
+                "VariableDto wire 序列化不得泄露 referencedByWalls: " + json);
+        assertFalse(json.contains("w-secret-peer"),
+                "不得泄露其他引用该变量的 wallId: " + json);
+        assertEquals("bedwars", node.get("namespace").asText());
+        assertEquals("score", node.get("key").asText());
+        assertEquals("NUMBER", node.get("type").asText());
+        assertEquals("0", node.get("defaultValue").asText());
+        assertEquals("42", node.get("currentValue").asText());
+        assertEquals("BedWarsPlugin", node.get("source").asText());
+        assertTrue(node.has("updatedAt"));
+        assertTrue(node.has("ttl"));
+        assertFalse(node.has("ownerUuid"), "非 userglobal 变量 ownerUuid 为 null 时应省略");
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  Helper：内存 fake DAO
     // ──────────────────────────────────────────────────────────
 
-    /**
-     * 0.4.3：UserGlobalVariableDao 内存 fake；同 FakeUserVariableDao 风格。
-     */
     private static final class FakeUserGlobalVariableDao extends UserGlobalVariableDao {
         record UpsertCall(String name, UUID ownerUuid, String ownerName, VarType type,
                           String defaultValue, String currentValue, String boundTo,

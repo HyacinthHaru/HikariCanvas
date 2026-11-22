@@ -1,11 +1,14 @@
 package ac.haru.hikaricanvas.script;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import ac.haru.hikaricanvas.state.Easing;
 import ac.haru.hikaricanvas.state.EasingType;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+
 import java.util.List;
 import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class ActionWireTest {
@@ -14,6 +17,12 @@ class ActionWireTest {
     private void roundtrip(String json) throws Exception {
         Action a = mapper.readValue(json, Action.class);
         assertEquals(mapper.readTree(json), mapper.readTree(mapper.writeValueAsString(a)));
+    }
+
+    private void roundtrip(Action original) throws Exception {
+        String json = mapper.writeValueAsString(original);
+        Action back = mapper.readValue(json, Action.class);
+        assertEquals(original, back, "roundtrip failed for: " + json);
     }
 
     @Test void setVariable() throws Exception {
@@ -68,20 +77,20 @@ class ActionWireTest {
                 () -> mapper.readValue("{\"type\":\"loop\"}", Action.class));
     }
 
-    /** I-1 回归：if 分支元素为 null 必须走 reportInputMismatch（Jackson 异常），不能裸 NPE。 */
+    /** if 分支元素为 null 必须走 reportInputMismatch（Jackson 异常），不能裸 NPE。 */
     @Test void ifBranchNullElementRejected() {
         String json = "{\"type\":\"if\",\"condition\":\"x\",\"then\":[null],\"else\":[]}";
-        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+        assertThrows(JsonMappingException.class,
                 () -> mapper.readValue(json, Action.class));
     }
 
-    /** M-4 回归：setVariable 缺 value 字段被拒。 */
+    /** setVariable 缺 value 字段被拒。 */
     @Test void setVariableMissingFieldRejected() {
-        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+        assertThrows(JsonMappingException.class,
                 () -> mapper.readValue("{\"type\":\"setVariable\",\"fullName\":\"x\"}", Action.class));
     }
 
-    // ---------- 0.7.1：6 个新 Action 子类 round-trip ----------
+    // ---------- 友好属性 / 消息 / 随机 / 缩放 / 等待时间轴 ----------
 
     @Test void setElementProperties_roundTrip() throws Exception {
         Action a = new Action.SetElementProperties(
@@ -126,7 +135,7 @@ class ActionWireTest {
         assertEquals(a, mapper.readValue(mapper.writeValueAsString(a), Action.class));
     }
 
-    // ---------- 0.7.1：Repeat 有界循环 round-trip ----------
+    // ---------- Repeat 有界循环 round-trip ----------
 
     @Test void repeat_roundTrip() throws Exception {
         Action a = new Action.Repeat(3, List.of(new Action.Log("loop")));
@@ -150,7 +159,7 @@ class ActionWireTest {
         assertEquals(mapper.readTree(json), mapper.readTree(mapper.writeValueAsString(a)));
     }
 
-    /** repeat.count 非整数值 → 拒（K8 纪律）。 */
+    /** repeat.count 非整数值 → 拒。 */
     @Test void repeat_fractionalCountRejected() {
         assertThrows(Exception.class, () -> mapper.readValue(
                 "{\"type\":\"repeat\",\"count\":3.5,\"body\":[]}", Action.class));
@@ -158,7 +167,7 @@ class ActionWireTest {
 
     /** repeat 缺 count → 拒。 */
     @Test void repeat_missingCountRejected() {
-        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+        assertThrows(JsonMappingException.class,
                 () -> mapper.readValue("{\"type\":\"repeat\",\"body\":[]}", Action.class));
     }
 
@@ -170,12 +179,12 @@ class ActionWireTest {
 
     /** setElementProperties 缺 elementId → 拒。 */
     @Test void setElementProperties_missingElementId_rejected() {
-        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+        assertThrows(JsonMappingException.class,
                 () -> mapper.readValue(
                         "{\"type\":\"setElementProperties\",\"patch\":{\"x\":\"1\"}}", Action.class));
     }
 
-    /** 0.7.0-P2-1(K8)：wait.ms 非整数值（100.5）→ 拒，不静默截断。 */
+    /** wait.ms 非整数值（100.5）→ 拒，不静默截断。 */
     @Test void waitFractionalMsRejected() {
         assertThrows(Exception.class, () -> mapper.readValue(
                 "{\"type\":\"wait\",\"ms\":100.5}", Action.class));
@@ -188,7 +197,7 @@ class ActionWireTest {
                 Action.class));
     }
 
-    // ---------- 0.7.1-P5：停止 / 粒子 / 等待直到 3 个新 Action 子类 round-trip ----------
+    // ---------- 停止 / 粒子 / 等待直到 round-trip ----------
 
     @Test void stopScript_roundTrip() throws Exception {
         Action a = new Action.StopScript();
@@ -215,18 +224,18 @@ class ActionWireTest {
 
     /** playParticle 缺 particle 字段 → 拒。 */
     @Test void playParticle_missingParticleRejected() {
-        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+        assertThrows(JsonMappingException.class,
                 () -> mapper.readValue("{\"type\":\"playParticle\",\"count\":10,"
                         + "\"offsetX\":0,\"offsetY\":0,\"offsetZ\":0}", Action.class));
     }
 
-    /** waitUntil.timeoutMs 非整数值（K8 纪律）→ 拒。 */
+    /** waitUntil.timeoutMs 非整数值 → 拒。 */
     @Test void waitUntil_fractionalTimeoutRejected() {
         assertThrows(Exception.class, () -> mapper.readValue(
                 "{\"type\":\"waitUntil\",\"condition\":\"x>0\",\"timeoutMs\":5000.5}", Action.class));
     }
 
-    // ---------- 0.7.2-P2：copy / append / clone / delete 4 个新 Action 子类 round-trip ----------
+    // ---------- copy / append / clone / delete round-trip ----------
 
     @Test void copyVariable_roundtrip() throws Exception {
         Action a = new Action.CopyVariable("user/dst", "user/src");
@@ -259,18 +268,18 @@ class ActionWireTest {
 
     /** copyVariable 缺 source → 拒。 */
     @Test void copyVariable_missingSourceRejected() {
-        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+        assertThrows(JsonMappingException.class,
                 () -> mapper.readValue("{\"type\":\"copyVariable\",\"target\":\"user/d\"}", Action.class));
     }
 
-    /** cloneElement.offsetX 非整数值（K8 纪律）→ 拒。 */
+    /** cloneElement.offsetX 非整数值 → 拒。 */
     @Test void cloneElement_fractionalOffsetRejected() {
         assertThrows(Exception.class, () -> mapper.readValue(
                 "{\"type\":\"cloneElement\",\"elementId\":\"e-1\",\"offsetX\":1.5,\"offsetY\":2}",
                 Action.class));
     }
 
-    // ---------- 0.7.2-P3：repeatUntil round-trip + sendMessage 加 target ----------
+    // ---------- repeatUntil round-trip + sendMessage target ----------
 
     @Test void repeatUntil_roundtrip() throws Exception {
         Action a = new Action.RepeatUntil("var(\"user/x\") > 5", 10,
@@ -295,7 +304,7 @@ class ActionWireTest {
         assertEquals(mapper.readTree(json), mapper.readTree(mapper.writeValueAsString(a)));
     }
 
-    /** repeatUntil.maxIterations 非整数值 → 拒（K8 纪律）。 */
+    /** repeatUntil.maxIterations 非整数值 → 拒。 */
     @Test void repeatUntil_fractionalMaxIterationsRejected() {
         assertThrows(Exception.class, () -> mapper.readValue(
                 "{\"type\":\"repeatUntil\",\"condition\":\"x>0\",\"maxIterations\":3.5,\"body\":[]}",
@@ -304,7 +313,7 @@ class ActionWireTest {
 
     /** repeatUntil 缺 condition → 拒。 */
     @Test void repeatUntil_missingConditionRejected() {
-        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+        assertThrows(JsonMappingException.class,
                 () -> mapper.readValue(
                         "{\"type\":\"repeatUntil\",\"maxIterations\":3,\"body\":[]}", Action.class));
     }
@@ -378,7 +387,7 @@ class ActionWireTest {
         assertEquals(EasingType.LINEAR, tb.easing().type());
     }
 
-    /** durationMs 非整数值 → 拒（K8 纪律）。 */
+    /** durationMs 非整数值 → 拒。 */
     @Test void tweenBlock_fractionalDurationRejected() {
         assertThrows(Exception.class, () -> mapper.readValue(
                 "{\"type\":\"tweenBlock\",\"durationMs\":1500.5,\"easing\":{\"type\":\"linear\"},"
@@ -387,8 +396,69 @@ class ActionWireTest {
 
     /** tweenBlock 缺 durationMs → 拒。 */
     @Test void tweenBlock_missingDurationRejected() {
-        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+        assertThrows(JsonMappingException.class,
                 () -> mapper.readValue("{\"type\":\"tweenBlock\","
                         + "\"easing\":{\"type\":\"linear\"},\"body\":[]}", Action.class));
+    }
+
+    // ---------- randomBranch / setElementLayer / roundVariable / showTitle round-trip ----------
+
+    @Test void randomBranch_roundTrip_withBranches() throws Exception {
+        Action a = new Action.RandomBranch(
+                60,
+                List.of(new Action.Log("then-branch")),
+                List.of(new Action.Log("else-branch")));
+        roundtrip(a);
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"type\":\"randomBranch\""), json);
+        assertTrue(json.contains("\"probability\":60"), json);
+        assertTrue(json.contains("\"then\""), json);
+        assertTrue(json.contains("\"else\""), json);
+    }
+
+    @Test void randomBranch_roundTrip_emptyBranches() throws Exception {
+        roundtrip(new Action.RandomBranch(0, List.of(), List.of()));
+    }
+
+    @Test void randomBranch_roundTrip_nestedIf() throws Exception {
+        Action inner = new Action.If("x > 0", List.of(new Action.Log("y")), List.of());
+        roundtrip(new Action.RandomBranch(50, List.of(inner), List.of()));
+    }
+
+    @Test void setElementLayer_front_roundTrip() throws Exception {
+        roundtrip(new Action.SetElementLayer("el-1", "front"));
+    }
+
+    @Test void setElementLayer_back_roundTrip() throws Exception {
+        roundtrip(new Action.SetElementLayer("el-2", "back"));
+    }
+
+    @Test void roundVariable_round_roundTrip() throws Exception {
+        roundtrip(new Action.RoundVariable("user/score", "round"));
+    }
+
+    @Test void roundVariable_floor_roundTrip() throws Exception {
+        roundtrip(new Action.RoundVariable("user/val", "floor"));
+    }
+
+    @Test void roundVariable_ceil_roundTrip() throws Exception {
+        roundtrip(new Action.RoundVariable("user/val", "ceil"));
+    }
+
+    @Test void showTitle_trigger_roundTrip() throws Exception {
+        roundtrip(new Action.ShowTitle("Hello", "World", 500, 2000, 500, "trigger"));
+    }
+
+    @Test void showTitle_all_roundTrip() throws Exception {
+        roundtrip(new Action.ShowTitle("Big news", "", 200, 3000, 200, "all"));
+    }
+
+    @Test void showTitle_defaultTarget_backCompat() throws Exception {
+        // 缺省 target 字段时反序列化为 "trigger"（向后兼容）
+        String json = "{\"type\":\"showTitle\",\"title\":\"Hi\",\"subtitle\":\"\","
+                + "\"fadeInMs\":500,\"stayMs\":2000,\"fadeOutMs\":500}";
+        Action a = mapper.readValue(json, Action.class);
+        assertInstanceOf(Action.ShowTitle.class, a);
+        assertEquals("trigger", ((Action.ShowTitle) a).target());
     }
 }

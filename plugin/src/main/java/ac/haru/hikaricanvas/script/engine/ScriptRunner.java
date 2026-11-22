@@ -8,12 +8,17 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.IntSupplier;
+import java.util.function.LongSupplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -76,18 +81,6 @@ public final class ScriptRunner {
     }
 
     /**
-     * 当前 run 的触发描述（{@link TriggerContext#detail()}）。只给 trace / 日志看，
-     * <b>不是玩家名</b>（playerKill 的 detail 是 {@code victim→killer} 拼接串）。
-     * 与 {@link #RULE_KEY} 同生命周期（runFrames 置位 / finally 清）。
-     */
-    static final ThreadLocal<String> TRIGGER_DETAIL = new ThreadLocal<>();
-
-    /** 包级读取入口：当前线程触发描述；无 run 上下文返 null。 */
-    static @Nullable String currentTriggerDetail() {
-        return TRIGGER_DETAIL.get();
-    }
-
-    /**
      * 当前 run 的触发玩家名（{@link TriggerContext#triggerPlayer()}，仅 player* /
      * rightClickWall 触发器有值）。与 {@link #RULE_KEY} 同生命周期。
      * {@code ActionExecutor.doSendMessage} / {@code doShowTitle} 读它拿人
@@ -120,7 +113,7 @@ public final class ScriptRunner {
     private final TaskScheduler scheduler;
     private volatile boolean shutdown;
     /** 时间源（WaitUntil 超时判定）。生产 {@code System::currentTimeMillis}；测试注入可控时钟。 */
-    private final java.util.function.LongSupplier clock;
+    private final LongSupplier clock;
     /**
      * 补间引擎（TweenScheduler）注入 seam。{@code null} = 未装配（降级行为：记 trace 跳过）。
      * 生产由 {@link ac.haru.hikaricanvas.HikariCanvas} onEnable 经 {@link #setTweenScheduler} 注入；
@@ -136,8 +129,7 @@ public final class ScriptRunner {
      * 生产默认 {@code ThreadLocalRandom.current()}；测试经 {@link #setRngForTest} 注入确定性源。
      * IntSupplier 语义：返回 [0,100) 内随机整数（nextInt(100) 等价）。
      */
-    private java.util.function.IntSupplier rng =
-            () -> java.util.concurrent.ThreadLocalRandom.current().nextInt(100);
+    private IntSupplier rng = () -> ThreadLocalRandom.current().nextInt(100);
 
     /** 生产装配：自建单线程 daemon SES（线程名 {@code hikari-script-runner}）。 */
     public ScriptRunner(ConditionEvaluator conditions, ActionSink sink, ScriptBudget budget,
@@ -154,7 +146,7 @@ public final class ScriptRunner {
     /** 测试装配：注入调度替身 + 时钟（WaitUntil 超时测试）。 */
     ScriptRunner(ConditionEvaluator conditions, ActionSink sink, ScriptBudget budget,
                  @Nullable AuditLog audit, Logger log, TaskScheduler scheduler,
-                 java.util.function.LongSupplier clock) {
+                 LongSupplier clock) {
         this.conditions = conditions;
         this.sink = sink;
         this.budget = budget;
@@ -176,7 +168,7 @@ public final class ScriptRunner {
      * 测试 seam：注入确定性随机源（生产不调用）。
      * {@code rng} 返回 [0,100) 范围的整数值——调用侧 {@code rng.getAsInt() < probability}。
      */
-    void setRngForTest(java.util.function.IntSupplier rng) {
+    void setRngForTest(IntSupplier rng) {
         this.rng = rng;
     }
 
@@ -198,7 +190,7 @@ public final class ScriptRunner {
      * 被吞 + WARNING，不杀 runner。</p>
      */
     public void submit(String wallId, ScriptRule rule, TriggerContext ctx,
-                       @Nullable java.util.function.Consumer<List<TraceStep>> traceCallback) {
+                       @Nullable Consumer<List<TraceStep>> traceCallback) {
         if (shutdown || wallId == null || rule == null || ctx == null) return;
         String ruleKey = ruleKey(wallId, rule);
 
@@ -248,7 +240,7 @@ public final class ScriptRunner {
         final ScriptRule rule;
         final TriggerContext ctx;
         /** trace callback（wait 续接经本对象延续传递）；可 null。 */
-        final @Nullable java.util.function.Consumer<List<TraceStep>> traceCallback;
+        final @Nullable Consumer<List<TraceStep>> traceCallback;
         final List<TraceStep> trace = new ArrayList<>();
         int actionCount;
         /** callback 恰一次保险（finish 与 run 级异常路径互斥触发）。 */
@@ -257,10 +249,10 @@ public final class ScriptRunner {
          * RepeatUntil 每个 blockId 的已执行轮数（while 语义动态循环计数）。嵌套
          * RepeatUntil 各 blockId 独立；跳出（满足 / 达上限）时 remove 该 blockId；run 结束随 RunState 弃。
          */
-        final java.util.Map<String, Integer> repeatUntilRounds = new java.util.HashMap<>();
+        final Map<String, Integer> repeatUntilRounds = new HashMap<>();
 
         RunState(String wallId, ScriptRule rule, TriggerContext ctx,
-                 @Nullable java.util.function.Consumer<List<TraceStep>> traceCallback) {
+                 @Nullable Consumer<List<TraceStep>> traceCallback) {
             this.wallId = wallId;
             this.rule = rule;
             this.ctx = ctx;
@@ -272,7 +264,7 @@ public final class ScriptRunner {
     private record Frame(List<Action> actions, int index, String prefix) {}
 
     private void startRun(String wallId, ScriptRule rule, TriggerContext ctx,
-                          @Nullable java.util.function.Consumer<List<TraceStep>> traceCallback) {
+                          @Nullable Consumer<List<TraceStep>> traceCallback) {
         RunState st = new RunState(wallId, rule, ctx, traceCallback);
         st.trace.add(TraceStep.ok("trigger", "trigger",
                 ctx.source() + (ctx.detail() == null ? "" : " " + ctx.detail())));
@@ -288,7 +280,6 @@ public final class ScriptRunner {
     private void runFrames(RunState st, Deque<Frame> stack) {
         CHAIN_DEPTH.set(st.ctx.chainDepth());
         RULE_KEY.set(ruleKey(st.wallId, st.rule));
-        TRIGGER_DETAIL.set(st.ctx.detail());          // 自由描述 → trace / 日志
         TRIGGER_PLAYER.set(st.ctx.triggerPlayer());   // 触发玩家 → sendMessage/showTitle 的 trigger 档
         try {
             outer:
@@ -320,8 +311,7 @@ public final class ScriptRunner {
                         continue outer;
                     }
                     if (a instanceof Action.RandomBranch rb) {
-                        // 随机分支（控制流，照 if；rng 由 ActionExecutor.rng 注入 seam 持有，
-                        // 但 ScriptRunner 不依赖 ActionExecutor——改由 runner 自持 rng seam）。
+                        // 随机分支（控制流，由 runner 自持 rng seam 采样）
                         boolean pick = rng.getAsInt() < rb.probability();
                         st.trace.add(TraceStep.ok(blockId, "condition",
                                 "random=" + rb.probability() + "% → " + (pick ? "then" : "else")));
@@ -427,7 +417,7 @@ public final class ScriptRunner {
                         continue;
                     }
                     if (a instanceof Action.TweenBlock tb) {
-                        // 补间引擎接入（TweenScheduler）。顺序承诺（scripting-tween.md §2.2）：
+                        // 补间引擎接入（TweenScheduler）。顺序承诺（docs/scripting.md）：
                         // 续接<b>不再</b>由本 runner 自按 durationMs 定时——改由 TweenScheduler 在
                         // 「末帧落盘完成后」回调触发（否则续接早于落盘，后续动作读到补间前旧值）。
                         TweenScheduler ts = tweenScheduler;
@@ -501,7 +491,6 @@ public final class ScriptRunner {
         } finally {
             CHAIN_DEPTH.remove();
             RULE_KEY.remove();
-            TRIGGER_DETAIL.remove();
             TRIGGER_PLAYER.remove();
         }
     }
@@ -545,13 +534,12 @@ public final class ScriptRunner {
             st.trace.add(TraceStep.error(blockId, "waitUntil poll failed: " + t.getMessage()));
             fireTraceOnce(st);
         } finally {
-            // pollWaitUntil 走独立调度、不在 runFrames 的 try-finally 内——自清这四个 ThreadLocal，
-            // 防异常/inline 首调路径把 CHAIN_DEPTH/RULE_KEY/TRIGGER_DETAIL/TRIGGER_PLAYER
+            // pollWaitUntil 走独立调度、不在 runFrames 的 try-finally 内——自清这三个 ThreadLocal，
+            // 防异常/inline 首调路径把 CHAIN_DEPTH/RULE_KEY/TRIGGER_PLAYER
             // 泄漏到 runner 线程后续任务。续接 runFrames（上方 schedule）会在自身入口重设，
             // 故此处清理不影响续接。
             CHAIN_DEPTH.remove();
             RULE_KEY.remove();
-            TRIGGER_DETAIL.remove();
             TRIGGER_PLAYER.remove();
         }
     }
@@ -587,7 +575,7 @@ public final class ScriptRunner {
     }
 
     /** callback 调用统一兜底（callback 抛异常不杀 runner / 不影响投递方）。 */
-    private void fireTrace(@Nullable java.util.function.Consumer<List<TraceStep>> cb,
+    private void fireTrace(@Nullable Consumer<List<TraceStep>> cb,
                            List<TraceStep> steps) {
         if (cb == null) return;
         try {

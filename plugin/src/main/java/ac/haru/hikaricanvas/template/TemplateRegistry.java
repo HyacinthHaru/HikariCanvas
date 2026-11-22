@@ -11,8 +11,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
@@ -138,7 +140,7 @@ public final class TemplateRegistry {
      * @return 调用方可见的 {@link TemplateEntry} 列表（读 volatile 快照一次，安全暴露）
      */
     public List<TemplateEntry> listVisibleTo(UUID callerUuid, boolean hasBypass) {
-        List<TemplateEntry> visible = new java.util.ArrayList<>();
+        List<TemplateEntry> visible = new ArrayList<>();
         for (TemplateEntry entry : entries.values()) {
             Optional<UUID> owner = entry.ownerUuid();
             if (owner.isEmpty() || hasBypass
@@ -159,7 +161,7 @@ public final class TemplateRegistry {
      */
     public synchronized ReloadStats reload() {
         Map<String, TemplateEntry> next = new LinkedHashMap<>();
-        java.util.List<String> failures = new java.util.ArrayList<>();
+        List<String> failures = new ArrayList<>();
         int[] builtinLoaded = {0};
         int[] serverLoaded = {0};
         int[] userLoaded = {0};
@@ -190,12 +192,9 @@ public final class TemplateRegistry {
     // ---------------- builtin (jar / classes dir) ----------------
 
     private void loadBuiltin(Map<String, TemplateEntry> out, int[] counter,
-                             java.util.List<String> failures) {
+                             List<String> failures) {
         // 主路径：读 classpath 内的 _index.txt 清单，按名字依次 getResourceAsStream。
-        // 这条路径同时覆盖：
-        //   - 打包后 jar（所有 .canvas 与 _index.txt 都在 jar 内）
-        //   - dev / test（gradle 把 _index.txt + .canvas 一起摊到 build/resources/main/）
-        // 避免之前"扫 codesource 目录"在 classes 与 resources 分离时漏文件。
+        // 这条路径同时覆盖打包后 jar 与 dev / test（gradle 把 _index.txt + .canvas 一起摊到 build/resources/main/）。
         List<String> manifest = readBuiltinManifest();
         if (!manifest.isEmpty()) {
             for (String name : manifest) {
@@ -243,8 +242,8 @@ public final class TemplateRegistry {
         try (InputStream in = anchorClass.getClassLoader().getResourceAsStream(INDEX_RESOURCE)) {
             if (in == null) return List.of();
             byte[] bytes = in.readAllBytes();
-            String content = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
-            List<String> out = new java.util.ArrayList<>();
+            String content = new String(bytes, StandardCharsets.UTF_8);
+            List<String> out = new ArrayList<>();
             for (String line : content.split("\\R")) {
                 String trimmed = line.trim();
                 if (trimmed.isEmpty() || trimmed.startsWith("#")) continue;
@@ -259,7 +258,7 @@ public final class TemplateRegistry {
     }
 
     private void loadBuiltinFromJar(File jarFile, Map<String, TemplateEntry> out,
-                                    int[] counter, java.util.List<String> failures) {
+                                    int[] counter, List<String> failures) {
         try (JarFile jar = new JarFile(jarFile)) {
             Enumeration<JarEntry> es = jar.entries();
             while (es.hasMoreElements()) {
@@ -281,7 +280,7 @@ public final class TemplateRegistry {
     }
 
     private void loadBuiltinFromClassesDir(File classesDir, Map<String, TemplateEntry> out,
-                                            int[] counter, java.util.List<String> failures) {
+                                            int[] counter, List<String> failures) {
         // 测试 / 开发期：plugin/build/classes/.../templates/*.canvas
         File templatesDir = new File(classesDir, CLASSPATH_TEMPLATES_DIR);
         if (!templatesDir.isDirectory()) return;
@@ -304,7 +303,7 @@ public final class TemplateRegistry {
     // ---------------- server (plugins/HikariCanvas/templates/) ----------------
 
     private void loadServer(Map<String, TemplateEntry> out, int[] counter, int[] overrides,
-                            java.util.List<String> failures) {
+                            List<String> failures) {
         if (serverTemplatesDir == null) return;
         try {
             Files.createDirectories(serverTemplatesDir);
@@ -346,7 +345,7 @@ public final class TemplateRegistry {
      * builtin / server）。容错：单 uuid 子目录失败不影响其他。
      */
     private void loadUser(Map<String, TemplateEntry> out, int[] counter,
-                          java.util.List<String> failures) {
+                          List<String> failures) {
         if (userTemplatesDir == null) return;
         try {
             Files.createDirectories(userTemplatesDir);
@@ -376,7 +375,7 @@ public final class TemplateRegistry {
     }
 
     private void loadUserUuidDir(Path uuidDir, UUID ownerUuid, Map<String, TemplateEntry> out,
-                                  int[] counter, java.util.List<String> failures) {
+                                  int[] counter, List<String> failures) {
         try (Stream<Path> stream = Files.list(uuidDir)) {
             List<Path> files = stream
                     .filter(Files::isRegularFile)
@@ -415,7 +414,7 @@ public final class TemplateRegistry {
     private boolean acceptPackBytes(byte[] packBytes, TemplateSource source, String label,
                                     String idStem, Optional<UUID> ownerUuid,
                                     Map<String, TemplateEntry> out,
-                                    java.util.List<String> failures) {
+                                    List<String> failures) {
         TemplateSpec spec = tryBuildPackSpec(packBytes, idStem, label, failures);
         if (spec == null) return false;   // 非 pack / 解析失败（tryBuildPackSpec 已记 warn/fine）
         String id = spec.id();            // manifest 自声明或退回 stem（见 buildPackSpec）
@@ -435,7 +434,7 @@ public final class TemplateRegistry {
      */
     private void registerServerEntry(Map<String, TemplateEntry> out, String id, String label,
                                      TemplateEntry entry, int[] counter, int[] overrides,
-                                     java.util.List<String> failures) {
+                                     List<String> failures) {
         TemplateEntry prev = out.get(id);
         if (prev != null && prev.source() == TemplateSource.SERVER) {
             failures.add(label + ": duplicate server id '" + id
@@ -458,14 +457,14 @@ public final class TemplateRegistry {
      * <p><b>{@code kind="project"} 也收</b>：契约（{@code docs/template-pack.md §5}）写明
      * 「模板导入遇 project → 当零参数模板处理（无参数可填，套用即原样）入库」。project 与 pack
      * 只差一层 {@code params.json}，套用走同一条 {@code applyPack}——没有 params.json 时替换段
-     * 直接 no-op。此前这里直接跳过，服主把导出的工程丢进模板目录后界面上一点反馈都没有。</p>
+     * 直接 no-op。</p>
      *
      * <p>返回 {@code null} 表示「跳过」：解包 / manifest / params 解析失败
      * （{@link CanvasImportException}）记 warn + failures，<b>不上抛</b>——照每文件容错纪律，
      * 一个坏包不毁整次 {@link #reload()}。</p>
      */
     private TemplateSpec tryBuildPackSpec(byte[] packBytes, String idStem, String label,
-                                          java.util.List<String> failures) {
+                                          List<String> failures) {
         try {
             CanvasArchive.Limits limits = new CanvasArchive.Limits(
                     PACK_LOAD_MAX_ZIP_BYTES, PACK_LOAD_MAX_ENTRY_BYTES, PACK_LOAD_MAX_TOTAL_BYTES);
@@ -527,7 +526,7 @@ public final class TemplateRegistry {
                 && isTemplateFileName(name.substring(name.lastIndexOf('/') + 1));
     }
 
-    /** 模板文件名 = {@code .canvas} pack（旧 YAML DSL 已退役）。各来源 scan 过滤器据此纳入文件。 */
+    /** 模板文件名 = {@code .canvas} pack。各来源 scan 过滤器据此纳入文件。 */
     private static boolean isTemplateFileName(String name) {
         return name.endsWith(".canvas");
     }

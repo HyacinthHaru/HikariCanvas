@@ -6,7 +6,7 @@ import ac.haru.hikaricanvas.api.NamespaceInfo;
 import ac.haru.hikaricanvas.api.PluginNamespaceException;
 import ac.haru.hikaricanvas.api.VariableUpdate;
 import ac.haru.hikaricanvas.storage.AuditLog;
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.Variable;
 import ac.haru.hikaricanvas.variable.VariableStore;
@@ -17,7 +17,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -25,48 +24,27 @@ import java.util.logging.Logger;
 
 import static ac.haru.hikaricanvas.variable.plugin.PluginNamespaceRegistryTest.fakePlugin;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P4-O：{@link HikariCanvasAPIImpl} 单测。
- *
- * <p>覆盖：</p>
- * <ul>
- *   <li>registerNamespace → registry + daemon provider 同步</li>
- *   <li>declareKey → provider.declaredKeys 反映；未注册 namespace 抛 ACL/NOT_REGISTERED</li>
- *   <li>setVariable 首次 → store.create + setValue（auto-create）</li>
- *   <li>setVariable 重复 key → 只 setValue 不 create</li>
- *   <li>setVariables 批量分发 + null 单条容错</li>
- *   <li>ACL：plugin B 推 plugin A 的 namespace → PluginNamespaceException ACL_DENIED</li>
- *   <li>未注册 namespace 直接 setVariable → NAMESPACE_NOT_REGISTERED</li>
- *   <li>unsetVariable → store.delete；不删 declared key</li>
- *   <li>VarType 4 case 转换正确</li>
- *   <li>unregisterPluginProviders → daemon.unregister + 摘除 provider</li>
- *   <li>purgeNamespaceData → store.delete 该 namespace 所有变量</li>
- *   <li>declared key 影响新建变量 type；未声明 fallback STRING</li>
- *   <li>setVariable 业务异常（QUOTA / VALUE_TOO_LONG）静默不抛</li>
- * </ul>
+ * {@link HikariCanvasAPIImpl} 命名空间注册、键声明、ACL 隔离与 TTL 钳位单测。
  */
 class HikariCanvasAPIImplTest {
 
-    private FakeUserVariableDao fakeDao;
     private VariableStore store;
     private VariableProviderDaemon daemon;
     private PluginNamespaceRegistry registry;
     private HikariCanvasAPIImpl api;
-    /** 0.4.10 P3-4：null jdbi 的 AuditLog —— record() 的 jdbi.useHandle 抛 NPE 被吞，走 log fallback。 */
     private AuditLog auditLog;
     private Plugin pluginA;
     private Plugin pluginB;
 
     @BeforeEach
     void setUp() {
-        fakeDao = new FakeUserVariableDao();
-        store = new VariableStore(fakeDao, w -> { });
+        store = new VariableStore(new NoopUserVariableDao(), w -> { });
         daemon = new VariableProviderDaemon();
         registry = new PluginNamespaceRegistry();
         auditLog = new AuditLog(null, Logger.getLogger("test"));
@@ -237,11 +215,7 @@ class HikariCanvasAPIImplTest {
     }
 
     /**
-     * {@code ttl < 100ms} 按 {@code api.md §3.3 / §8.2} 的承诺 clamp 到 100ms，而不是把整条
-     * push 丢掉。
-     *
-     * <p>之前的实现是 store 直接抛 TTL_INVALID、API 层 catch 后只打一条 WARNING——
-     * 接入方看到的是"数据莫名其妙没进去"，文档却写着"自动 clamp"。这条钉住文档那一侧。</p>
+     * {@code ttl < 100ms} 按 {@code docs/api.md §3.3 / §8.2} 契约钳位到 100ms，而非丢弃整条推送。
      */
     @Test
     void setVariable_tooSmallTtl_isClampedNotDropped() {
@@ -379,7 +353,7 @@ class HikariCanvasAPIImplTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  Q 任务钩子
+    //  插件卸载清理钩子
     // ──────────────────────────────────────────────────────────
 
     @Test
@@ -454,21 +428,5 @@ class HikariCanvasAPIImplTest {
     void impl_isHikariCanvasAPI() {
         HikariCanvasAPI iface = api;
         assertNotNull(iface);
-    }
-
-    // ──────────────────────────────────────────────────────────
-    //  Fakes
-    // ──────────────────────────────────────────────────────────
-
-    private static final class FakeUserVariableDao extends UserVariableDao {
-        FakeUserVariableDao() {
-            super(Logger.getLogger("test"), null);
-        }
-        @Override
-        public void upsert(String wallId, String name, VarType type,
-                           String defaultValue, String currentValue, String boundTo,
-                           long createdAt, long updatedAt) {}
-        @Override public void delete(String wallId, String name) {}
-        @Override public List<Row> loadAll() { return new ArrayList<>(); }
     }
 }

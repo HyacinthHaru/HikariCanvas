@@ -1,5 +1,5 @@
 /**
- * 0.4.2 variableAliasStore 单测。
+ * variableAliasStore 单测。
  *
  * <p>纯 Pinia store 逻辑（无 Vue 组件 / DOM），用 vitest node 跑。覆盖 get/set/remove
  * /clear/reset/initAliases/has + size computed。</p>

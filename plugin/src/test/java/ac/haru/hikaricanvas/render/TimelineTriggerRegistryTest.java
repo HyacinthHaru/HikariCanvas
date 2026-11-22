@@ -1,11 +1,14 @@
 package ac.haru.hikaricanvas.render;
 
+import ac.haru.hikaricanvas.script.engine.TriggerRouter;
 import ac.haru.hikaricanvas.state.EditSession;
 import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.storage.WallRepo;
 import ac.haru.hikaricanvas.variable.VariableInterpolator;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -17,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.6 P5：{@link TimelineTriggerRegistry} 单测——变量变化 → 播放绑定时间轴。
+ * {@link TimelineTriggerRegistry} 单测——变量变化 → 播放绑定时间轴。
  *
  * <p>用真实 {@link VariableInterpolator#resolveFullName} 作 resolver，验证"trigger 配 user/X →
  * 必须注入 wallId 成 user:&lt;wallId&gt;/X 才命中"这条一致性坑（§5.2 R）。player 用捕获桩、clock 注入。</p>
@@ -160,26 +163,24 @@ class TimelineTriggerRegistryTest {
      * <p>索引本身是 CHM，但"清旧 + 重登"要作为一个整体原子：两个线程（Jetty 编辑线程的
      * persistWall 与脚本线程的 ElementPropertyApplier→persistWall）同时重建同一面墙时，
      * 会出现「A 已拿到 wallKeys 快照 → B 写入新 binding → A 按旧快照 removeIf 把 B 刚加的删掉」，
-     * 结果 wallKeys 说已绑、byFullName 却是空的，该墙的变量 / 时刻表触发静默失效到下次 rebuild
-     * （铁路屏不再随变量播，且没有任何报错）。同型的 {@code TriggerRouter} 从一开始就是全方法
-     * synchronized，本类漏了——这条守卫钉住两边一致。</p>
+     * 结果 wallKeys 说已绑、byFullName 却是空的，该墙的变量 / 时刻表触发静默失效到下次 rebuild。
+     * 本守卫确保本类与同型的 {@link TriggerRouter} 保持一致的同步纪律。</p>
      */
     @Test
     void rebuildMethodsAreSynchronized_likeTriggerRouter() {
         assertSynchronized(TimelineTriggerRegistry.class,
                 "rebuildAll", "rebuildForWall", "removeWall", "registerWall");
-        // 姊妹类同款纪律（防止哪天反过来把 TriggerRouter 的锁去掉）
-        assertSynchronized(ac.haru.hikaricanvas.script.engine.TriggerRouter.class,
+        assertSynchronized(TriggerRouter.class,
                 "rebuildAll", "rebuildWall", "removeWall", "shutdown");
     }
 
     private static void assertSynchronized(Class<?> type, String... methodNames) {
         for (String name : methodNames) {
             boolean found = false;
-            for (java.lang.reflect.Method m : type.getDeclaredMethods()) {
+            for (Method m : type.getDeclaredMethods()) {
                 if (!m.getName().equals(name)) continue;
                 found = true;
-                assertTrue(java.lang.reflect.Modifier.isSynchronized(m.getModifiers()),
+                assertTrue(Modifier.isSynchronized(m.getModifiers()),
                         type.getSimpleName() + "." + name + " 必须 synchronized（清旧+重登要原子）");
             }
             assertTrue(found, "找不到方法 " + type.getSimpleName() + "." + name);

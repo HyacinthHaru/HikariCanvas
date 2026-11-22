@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 多帧 snapshot —— 时间轴插值的像素级一致性防线（0.6 P3，契约 {@code docs/rendering.md §9.6}）。
+ * 多帧 snapshot —— 时间轴插值的像素级一致性防线（契约 {@code docs/rendering.md §9.6}）。
  *
  * <h2>与 {@link RendererSnapshotTest} 的关系</h2>
  * 原 snapshot 测试无时间维（读 fixture → {@code rasterize(state)} 一次 → 比单张 PNG），
@@ -31,8 +31,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <h2>fixture 设计（§9.6 纯几何约束）</h2>
  * {@code 14-timeline-easing.json} 只用纯几何元素（rect / circle / shape star / path）—— 文本
  * 元素因 AWT 字体度量跨平台差异已在 CI 跳过（{@link RendererSnapshotTest} §8.4 同因），故本
- * fixture 不含文本，**无需平台脆弱跳过机制**，CI Linux 与本地 macOS 一致跑全套。4 个元素分别
- * 覆盖 P3 全部插值类别：
+ * fixture 不含文本，<b>无需平台脆弱跳过机制</b>，CI Linux 与本地 macOS 一致跑全套。4 个元素分别
+ * 覆盖全部插值类别：
  * <ul>
  *   <li>{@code e-mover}（rect）：x 轨 LINEAR + fill 轨 solid 色彩插值（§9.2 数值 + §9.4 solid）</li>
  *   <li>{@code e-fader}（circle）：opacity 轨 easeInOut（§9.3 缓动接入）</li>

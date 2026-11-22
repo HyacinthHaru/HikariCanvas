@@ -22,9 +22,8 @@ import java.util.logging.Logger;
  *
  * <h2>加载顺序（后者覆盖前者）</h2>
  * <ol>
- *   <li><b>内置字体</b>：jar 内 {@code /fonts/SourceHanSansSC-Regular.otf} 与
- *       {@code /fonts/ark-pixel-12px-monospaced-zh_cn.ttf}（由 Gradle
- *       {@code downloadFonts} 任务构建期拉取入 jar）</li>
+ *   <li><b>内置字体</b>：jar 内 {@code /fonts/} 下共 22 款 SIL OFL 1.1 字体（由 Gradle
+ *       {@code downloadFonts} 任务在构建期拉取入 jar）</li>
  *   <li><b>外部字体</b>：{@code plugins/HikariCanvas/fonts/*.ttf}（{@code .otf}），
  *       扫描时 fileName 去扩展名作为 {@code fontId}；同名覆盖内置</li>
  * </ol>
@@ -52,7 +51,7 @@ public final class FontRegistry {
         BUILT_IN.put("source_han_sans", new BuiltIn(
                 "/fonts/SourceHanSansSC-Regular.otf",
                 new Metadata("思源黑体 SC Regular", false, 0)));
-        // 6 个正文字体（全 SIL OFL 1.1）
+        // 其余 5 款正文字体（与上方合计 7 款正文/像素字体，全 SIL OFL 1.1）
         BUILT_IN.put("source_han_serif", new BuiltIn(
                 "/fonts/SourceHanSerifSC-Regular.otf",
                 new Metadata("思源宋体 SC Regular", false, 0)));
@@ -68,7 +67,7 @@ public final class FontRegistry {
         BUILT_IN.put("noto_serif", new BuiltIn(
                 "/fonts/NotoSerif-Regular.ttf",
                 new Metadata("Noto Serif Regular", false, 0)));
-        // 13 个艺术 / 装饰字体（全 SIL OFL 1.1）
+        // 15 款艺术 / 装饰字体（全 SIL OFL 1.1）
         // 中文艺术 6
         BUILT_IN.put("smiley_sans", new BuiltIn(
                 "/fonts/SmileySans-Oblique.otf",
@@ -88,7 +87,7 @@ public final class FontRegistry {
         BUILT_IN.put("lxgw_wenkai", new BuiltIn(
                 "/fonts/LXGWWenKai-Regular.ttf",
                 new Metadata("霞鹜文楷 LXGW WenKai Regular", false, 0)));
-        // 西文装饰 7（permanent_marker Apache License 跳过，shadows_into_light 替代马克笔位）
+        // 西文装饰 9（permanent_marker Apache License 跳过，shadows_into_light 替代马克笔位）
         BUILT_IN.put("comic_neue", new BuiltIn(
                 "/fonts/ComicNeue-Regular.ttf",
                 new Metadata("Comic Neue Regular", false, 0)));
@@ -148,9 +147,8 @@ public final class FontRegistry {
                             + id + " (" + bi.resourcePath + ")；确认 ./gradlew downloadFonts 已跑过");
                     continue;
                 }
-                int format = bi.resourcePath.endsWith(".otf") ? Font.TRUETYPE_FONT : Font.TRUETYPE_FONT;
-                // AWT 对 TTF/OTF 统一用 TRUETYPE_FONT 常量；OpenType 是 TrueType 的超集
-                Font font = Font.createFont(format, in);
+                // Java AWT Font.createFont(TRUETYPE_FONT, ...) 同时支持 TTF 与 CFF/OTF
+                Font font = Font.createFont(Font.TRUETYPE_FONT, in);
                 fonts.put(id, new Registered(id, font, bi.metadata, "classpath:" + bi.resourcePath));
                 log.fine("FontRegistry: loaded built-in '" + id + "' ("
                         + bi.metadata.displayName + ", pixelated=" + bi.metadata.pixelated + ")");

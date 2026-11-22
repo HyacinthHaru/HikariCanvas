@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import ac.haru.hikaricanvas.state.Easing;
 import ac.haru.hikaricanvas.state.EasingType;
+import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 
@@ -18,12 +19,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 
 /**
- * {@link EasingSolver} 双端共享向量 runner + 解析性质单测（0.6 P3）。
+ * {@link EasingSolver} 双端共享向量 runner + 解析性质单测。
  * 数学权威见 {@code docs/rendering.md §9.3}；一致性验证范式见 §9.6。
  *
  * <p>本测试与前端 vitest 共享同一份 {@code rendering-test/easing-vectors.json}（第三方
  * Python 参照实现生成，容差 {@value #TOLERANCE}）——两端各跑同向量、对同 expected，
- * 任一端浮点漂移即红，守住「缓动双端逐位等价」硬纪律（D8）。</p>
+ * 任一端浮点漂移即红，守住「缓动双端逐位等价」硬纪律。</p>
  *
  * <p>向量路径与 {@link RendererSnapshotTest} 同范式：gradle test 工作目录 = {@code {root}/plugin}，
  * 故 {@code user.dir}（即 plugin/）上溯一级到仓库根再进 {@code rendering-test/}。</p>
@@ -43,19 +44,19 @@ class EasingSolverTest {
     // ──────────────────────────────────────────────────────────
 
     @TestFactory
-    List<org.junit.jupiter.api.DynamicTest> sharedVectors() throws IOException {
+    List<DynamicTest> sharedVectors() throws IOException {
         JsonNode root = MAPPER.readTree(Files.newBufferedReader(VECTORS));
         // 容差以向量文件自带 tolerance 为准（与生成器锁定一致）
         double tol = root.has("tolerance") ? root.get("tolerance").asDouble() : TOLERANCE;
         assertEquals(TOLERANCE, tol, 0.0, "向量文件 tolerance 应为 1e-6（与两端常量一致）");
 
-        List<org.junit.jupiter.api.DynamicTest> tests = new ArrayList<>();
+        List<DynamicTest> tests = new ArrayList<>();
         JsonNode cases = root.get("cases");
         assertTrue(cases != null && cases.size() > 0, "easing-vectors.json 应含至少一条 case");
         for (JsonNode c : cases) {
             JsonNode easingNode = c.get("easing");
             // easing 节点直接反序列化为 Easing record —— EasingType 的 @JsonProperty wire 映射
-            // 与 bezier 字段自动解析，无需手写 type 字符串→enum 表（B1 任务推荐路径）。
+            // 与 bezier 字段自动解析，无需手写 type 字符串→enum 表。
             Easing easing = MAPPER.convertValue(easingNode, Easing.class);
             String label = easingNode.get("type").asText()
                     + (easingNode.has("bezier") ? " " + easingNode.get("bezier") : "");

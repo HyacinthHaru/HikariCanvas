@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.4 P1：AutoTimetableGenerator 单测（8+ case）。
+ * {@link AutoTimetableGenerator} 自动排图计算单测。
  */
 class AutoTimetableGeneratorTest {
 

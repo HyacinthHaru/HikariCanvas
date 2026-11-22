@@ -5,7 +5,7 @@
  * 回归测试：锁定「SVG 导入产物在前端能正确渲染、
  * 且 fillRule/归一化 d 的处理与后端一致」。
  *
- * 双端一致性说明（B0 已对齐，本测试锁定回归）：
+ * 双端一致性说明：
  *   前端  PreviewRenderer.drawPath  → ctx.fill(path, 'evenodd')
  *   后端  PathRenderer.java         → path.setWindingRule(WIND_EVEN_ODD)
  *   两端都把 fillRule:'evenodd' 映射到 even-odd 缠绕规则，逐函数一致。
@@ -128,7 +128,7 @@ describe('SVG import → render parity', () => {
     // 前端 PreviewRenderer.drawPath 对应：
     //   ctx.fill(parsed.path, p.fillRule === 'evenodd' ? 'evenodd' : 'nonzero')
     //
-    // 两端都把 fillRule:'evenodd' 映射到 even-odd 缠绕规则，逐函数一致（B0 已对齐）。
+    // 两端都把 fillRule:'evenodd' 映射到 even-odd 缠绕规则，逐函数一致。
     it('drawPath passes evenodd to ctx.fill — mirrors backend WIND_EVEN_ODD', async () => {
         const drawPath = await getDrawPath();
         const ctx = fakeCtx();

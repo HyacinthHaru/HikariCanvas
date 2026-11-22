@@ -2,6 +2,8 @@ package ac.haru.hikaricanvas.rail;
 
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Locale;
+
 /**
  * wall → 铁路网络的绑定（线路 + 本站 + 方向）。
  *
@@ -29,7 +31,7 @@ public record WallRailBinding(
     /** 规范化 direction：null / 非法值 → "both"。 */
     public static String normalizeDirection(@Nullable String raw) {
         if (raw == null) return DIRECTION_BOTH;
-        String s = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        String s = raw.trim().toLowerCase(Locale.ROOT);
         if (RailRun.DIRECTION_UP.equals(s) || RailRun.DIRECTION_DOWN.equals(s)
                 || DIRECTION_BOTH.equals(s)) {
             return s;

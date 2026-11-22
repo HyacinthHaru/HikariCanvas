@@ -135,10 +135,10 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 gen.writeNumberField("maxIterations", a.maxIterations());
                 writeActions(gen, provider, "body", a.body());  // 复用 if/repeat 分支递归写出
             }
-            // tween：补间动画包裹（docs/scripting-tween.md）
+            // tween：补间动画包裹（docs/scripting.md）
             case Action.TweenBlock a -> {
                 gen.writeNumberField("durationMs", a.durationMs());
-                writeEasing(gen, a.easing());                    // 与 0.6 timeline Easing 同 serde
+                writeEasing(gen, a.easing());                    // 与 timeline Easing 同 serde
                 writeActions(gen, provider, "body", a.body());
             }
             // 随机分支 / 置顶置底 / 取整 / 标题弹窗
@@ -178,7 +178,7 @@ public final class ActionSerializer extends JsonSerializer<Action> {
     }
 
     /**
-     * 写出 {@link Easing}（字段名 {@code "easing"}）：与 0.6 timeline Easing 同 wire 格式
+     * 写出 {@link Easing}（字段名 {@code "easing"}）：与 timeline Easing 同 wire 格式
      * ——{@code {"type":"linear"}} / {@code {"type":"cubicBezier","bezier":[x1,y1,x2,y2]}}。
      * null easing 按 {@link Easing#LINEAR} 写出（校验层保证到这里 easing 已不 null）。
      */

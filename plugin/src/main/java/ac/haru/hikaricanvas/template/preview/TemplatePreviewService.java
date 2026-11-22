@@ -11,6 +11,7 @@ import ac.haru.hikaricanvas.state.Element;
 import ac.haru.hikaricanvas.state.Layer;
 import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.state.TextElement;
+import ac.haru.hikaricanvas.template.ForbiddenTemplateException;
 import ac.haru.hikaricanvas.template.TemplateEntry;
 import ac.haru.hikaricanvas.template.TemplateRegistry;
 
@@ -19,11 +20,15 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 模板缩略图服务。给每个 {@code .canvas} pack 模板渲染一张缩略图供前端 Gallery 卡片显示。
@@ -86,11 +91,11 @@ public final class TemplatePreviewService {
      * @param callerUuid 请求方玩家 UUID；{@code null} 等同非 owner
      * @param hasBypass  调用方是否持 {@code canvas.template.use-others}
      */
-    public byte[] pngFor(String templateId, java.util.UUID callerUuid, boolean hasBypass) {
+    public byte[] pngFor(String templateId, UUID callerUuid, boolean hasBypass) {
         TemplateEntry entry;
         try {
             entry = registry.byIdForApply(templateId, callerUuid, hasBypass);
-        } catch (ac.haru.hikaricanvas.template.ForbiddenTemplateException e) {
+        } catch (ForbiddenTemplateException e) {
             return null;
         }
         if (entry == null || !entry.isPack()) return null;
@@ -109,9 +114,9 @@ public final class TemplatePreviewService {
     private static final long PACK_PREVIEW_MAX_TOTAL_BYTES = 256L * 1024 * 1024; // 256 MB
 
     /**
-     * pack 缩略图：现解 {@link TemplateEntry#packBytes()} 成预览 {@link ProjectState}，再走与 YAML 路径
-     * 同一条 {@link CanvasCompositor} 栅格化 + PNG 编码。解包 / 物化失败（{@link CanvasImportException}）
-     * 或编码失败 → 记 warn + 返 {@code null}（不缓存、下次重试），与 {@link #renderPreview} 容错纪律一致。
+     * pack 缩略图：现解 {@link TemplateEntry#packBytes()} 成预览 {@link ProjectState}，再经
+     * {@link CanvasCompositor} 栅格化 + PNG 编码。解包 / 物化失败（{@link CanvasImportException}）
+     * 或编码失败 → 记 warn + 返 {@code null}（不缓存、下次重试）。
      */
     private byte[] renderPackPreview(TemplateEntry entry) {
         try {
@@ -170,13 +175,13 @@ public final class TemplatePreviewService {
     }
 
     /**
-     * 逐层把每个 {@link TextElement} 的 {@code ${var:X|fallback=Y}} 收敛成预览态（复用 YAML 路径的
-     * {@link #resolvePlaceholdersForPreview}），再重建 {@link ProjectState} 仅替换 layers。重建照
+     * 逐层把每个 {@link TextElement} 的 {@code ${var:X|fallback=Y}} 收敛成预览态
+     * （{@link #resolvePlaceholdersForPreview}），再重建 {@link ProjectState} 仅替换 layers。重建照
      * {@code ProjectImporter.stripOrphanTracksAndCollect} 的 9 参构造，保留 version / canvas /
      * activeLayerId / timelines / activeTimelineId / tweenFps（history 预览不带、传 null）。
      */
     private static ProjectState convergePreviewVars(ProjectState state) {
-        List<Layer> converged = new java.util.ArrayList<>(state.layers().size());
+        List<Layer> converged = new ArrayList<>(state.layers().size());
         for (Layer l : state.layers()) {
             converged.add(new Layer(l.id(), l.name(), l.visible(), l.locked(),
                     l.opacity(), l.blendMode(), l.colorTag(),
@@ -188,12 +193,12 @@ public final class TemplatePreviewService {
     }
 
     /** {@code ${var:NAME|fallback=VALUE}}（含冒号，与模板参数 {@code ${param}} 不同源）。 */
-    private static final java.util.regex.Pattern PREVIEW_VAR =
-            java.util.regex.Pattern.compile("\\$\\{var:([^|}]+)(?:\\|fallback=([^}]*))?\\}");
+    private static final Pattern PREVIEW_VAR =
+            Pattern.compile("\\$\\{var:([^|}]+)(?:\\|fallback=([^}]*))?\\}");
 
     /** 预览专用：文本里的运行时变量占位符收敛为 fallback 值（无 fallback 用变量名末段）。 */
     private static List<Element> resolvePlaceholdersForPreview(List<Element> elements) {
-        List<Element> out = new java.util.ArrayList<>(elements.size());
+        List<Element> out = new ArrayList<>(elements.size());
         for (Element el : elements) {
             if (el instanceof TextElement t && t.text() != null && t.text().contains("${var:")) {
                 out.add(withText(t, previewResolve(t.text())));
@@ -206,13 +211,13 @@ public final class TemplatePreviewService {
 
     /** package-private 供测试直接验证纯替换逻辑。 */
     static String previewResolve(String text) {
-        java.util.regex.Matcher m = PREVIEW_VAR.matcher(text);
+        Matcher m = PREVIEW_VAR.matcher(text);
         StringBuilder sb = new StringBuilder();
         while (m.find()) {
             String fallback = m.group(2);
             String repl = fallback != null ? fallback
                     : m.group(1).substring(m.group(1).lastIndexOf('.') + 1);
-            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(repl));
+            m.appendReplacement(sb, Matcher.quoteReplacement(repl));
         }
         m.appendTail(sb);
         return sb.toString();

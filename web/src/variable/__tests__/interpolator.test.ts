@@ -1,5 +1,5 @@
 /**
- * 0.4.0-P2-H interpolator 单测。
+ * interpolator 单测。
  *
  * 用 Pinia + 真 useVariableStore 实例（store 不依赖 DOM，纯逻辑）。
  *
@@ -51,7 +51,7 @@ describe('interpolator.resolveFullName', () => {
     it('system.time + wallId → 字面 system.time', () => {
         expect(resolveFullName('server.time', 'w-abc')).toBe('server.time');
     });
-    // 0.4.0-P3-J：wall.* 注入
+    // wall.* 注入
     it('wall.id + wallId → system:<wallId>/wall.id', () => {
         expect(resolveFullName('wall.id', 'w-abc')).toBe('system:w-abc/wall.id');
     });
@@ -61,7 +61,7 @@ describe('interpolator.resolveFullName', () => {
     it('wall.X + wallId null → 字面 wall.X', () => {
         expect(resolveFullName('wall.id', null)).toBe('wall.id');
     });
-    // 0.4.0-P3-L：schedule.* 注入
+    // schedule.* 注入
     it('schedule.next_departure + wallId → schedule:<wallId>/next_departure', () => {
         expect(resolveFullName('schedule.next_departure', 'w-abc'))
             .toBe('schedule:w-abc/next_departure');
@@ -74,7 +74,7 @@ describe('interpolator.resolveFullName', () => {
         expect(resolveFullName('schedule.next_departure', null))
             .toBe('schedule.next_departure');
     });
-    // 0.4.0 bugfix3（Bug A）：用户直觉的 namespace/key 斜杠语法
+    // namespace/key 斜杠语法
     it('schedule/X + wallId → schedule:<wallId>/X (slash 语法)', () => {
         expect(resolveFullName('schedule/eta_seconds', 'w-abc'))
             .toBe('schedule:w-abc/eta_seconds');
@@ -215,7 +215,7 @@ describe('interpolator.interpolate', () => {
         expect(r.text).toBe('$1\\back');
     });
 
-    // 0.4.0-P3-J：wall.* 注入端到端
+    // wall.* 注入端到端
     it('16. ${var:wall.id} + wallId 注入命中 system:<wallId>/wall.id', () => {
         store.set('system:w-abc/wall.id', mkVar('system:w-abc', 'wall.id', 'w-abc'));
         const r = interpolate('Wall=${var:wall.id}', 'w-abc', store);
@@ -321,12 +321,11 @@ describe('interpolator.interpolate', () => {
         expect(r.text.substring(r.segments[0].start, r.segments[0].end)).toBe('5');
     });
 
-    // 0.7.4：rail 车次语义变量端到端 resolve。RailScheduleProvider 写
-    // schedule:<wallId>/next_cars，metadata 现以 namespace="schedule" 下发（不再是 daemon key
+    // rail 车次语义变量端到端 resolve。RailScheduleProvider 写
+    // schedule:<wallId>/next_cars，metadata 以 namespace="schedule" 下发（不再是 daemon key
     // schedule_rail）→ picker 选中插入 ${var:schedule/next_cars} → interpolator 注入 wallId →
-    // schedule:w-1/next_cars 命中。修复前 picker 会插入 ${var:schedule_rail/next_cars}，
-    // interpolator 不识别 schedule_rail 前缀 → 字面查询 miss → 误报"已删除"。
-    it('26b. rail 变量 ${var:schedule/next_cars} 注入 wallId 命中真实值（幽灵变量根因回归）', () => {
+    // schedule:w-1/next_cars 命中。
+    it('26b. rail 变量 ${var:schedule/next_cars} 注入 wallId 命中真实值', () => {
         store.set('schedule:w-1/next_cars', mkVar('schedule:w-1', 'next_cars', '6'));
         const r = interpolate('编组 ${var:schedule/next_cars} 节', 'w-1', store);
         expect(r.text).toBe('编组 6 节');
@@ -335,8 +334,7 @@ describe('interpolator.interpolate', () => {
     });
 
     it('26c. 旧 daemon key 形态 ${var:schedule_rail/next_cars} 不被注入 → miss（证明必须改 namespace）', () => {
-        // 即使 store 有 schedule:w-1/next_cars，旧 schedule_rail 前缀也 resolve 不到——
-        // 这正是修复前的 bug 形态，固化为回归保护：metadata 绝不能再下发 schedule_rail。
+        // 即使 store 有 schedule:w-1/next_cars，schedule_rail 前缀也 resolve 不到。
         store.set('schedule:w-1/next_cars', mkVar('schedule:w-1', 'next_cars', '6'));
         const r = interpolate('${var:schedule_rail/next_cars}', 'w-1', store);
         expect(r.text).toBe(UNRESOLVED);
@@ -344,7 +342,7 @@ describe('interpolator.interpolate', () => {
     });
 
     // ──────────────────────────────────────────────────────────
-    //  0.4.2 bugfix（Bug 1）：二次扫描兜底
+    //  二次扫描兜底
     // ──────────────────────────────────────────────────────────
 
     it('27. 嵌套 ${${var:X}} → 第一轮替换出新 ${var:Y}，第二轮清理', () => {

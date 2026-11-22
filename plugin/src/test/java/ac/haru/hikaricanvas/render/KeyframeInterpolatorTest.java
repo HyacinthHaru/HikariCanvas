@@ -5,6 +5,7 @@ import ac.haru.hikaricanvas.state.BrushPoint;
 import ac.haru.hikaricanvas.state.BrushStrokeElement;
 import ac.haru.hikaricanvas.state.CircleElement;
 import ac.haru.hikaricanvas.state.Easing;
+import ac.haru.hikaricanvas.state.EasingType;
 import ac.haru.hikaricanvas.state.Element;
 import ac.haru.hikaricanvas.state.Fill;
 import ac.haru.hikaricanvas.state.IconElement;
@@ -12,15 +13,19 @@ import ac.haru.hikaricanvas.state.ImageElement;
 import ac.haru.hikaricanvas.state.Keyframe;
 import ac.haru.hikaricanvas.state.KfValue;
 import ac.haru.hikaricanvas.state.Layer;
+import ac.haru.hikaricanvas.state.LinearGradient;
 import ac.haru.hikaricanvas.state.LoopMode;
 import ac.haru.hikaricanvas.state.PathElement;
 import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.state.RectElement;
 import ac.haru.hikaricanvas.state.RenderMode;
 import ac.haru.hikaricanvas.state.ShapeElement;
+import ac.haru.hikaricanvas.state.SolidFill;
+import ac.haru.hikaricanvas.state.Stop;
 import ac.haru.hikaricanvas.state.TextElement;
 import ac.haru.hikaricanvas.state.Timeline;
 import ac.haru.hikaricanvas.state.TriggerConfig;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -29,25 +34,18 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link KeyframeInterpolator} 纯函数单测（0.6 P2）。数学权威见 {@code docs/rendering.md §9}；
+ * {@link KeyframeInterpolator} 纯函数单测。数学权威见 {@code docs/rendering.md §9}；
  * 管线定位见 {@code docs/architecture.md §5.5}。
  *
- * <p>三组覆盖：</p>
- * <ul>
- *   <li>{@code mapTime}：ONCE 钳 / LOOP 取模 / PING_PONG 三角波 / durationMs≤0 降级（rendering.md §9）</li>
- *   <li>{@code sampleNumeric}：边界不外插 / 区间 LINEAR 手算 / 重合帧取后 / 含 Str 整轨 null / 空轨 null</li>
- *   <li>{@code interpolate}：六数值属性应用 + 引用共享（assertSame）+ opacity 钳 + 四舍五入 +
- *       非数值轨跳过 + 输出去 timelines；{@code withAnimated} 8 子类各一 case</li>
- * </ul>
- *
- * <p>纯算术 —— 不依赖 Bukkit / DB / 时钟，同包访问 package-private 的
- * {@code sampleNumeric} / {@code withAnimated}。</p>
+ * <p>覆盖 {@code mapTime}、{@code sampleNumeric}、{@code sampleColor}、{@code sampleFill}、
+ * {@code sampleText}、缓动接入与 {@code interpolate / withAnimated} 全子类语义。</p>
  */
 class KeyframeInterpolatorTest {
 
@@ -97,6 +95,14 @@ class KeyframeInterpolatorTest {
         return new Keyframe("kf-" + timeMs, "x", timeMs, KfValue.of(value), Easing.LINEAR);
     }
 
+    private static Keyframe kf(String prop, int timeMs, KfValue value) {
+        return new Keyframe(prop + "-" + timeMs, prop, timeMs, value, Easing.LINEAR);
+    }
+
+    private static Keyframe kf(String prop, int timeMs, KfValue value, Easing easing) {
+        return new Keyframe(prop + "-" + timeMs, prop, timeMs, value, easing);
+    }
+
     @Test
     void sampleNumeric_beforeFirstAndAfterLastNoExtrapolation() {
         List<Keyframe> kfs = List.of(numKf(100, 10.0), numKf(300, 30.0));
@@ -109,49 +115,40 @@ class KeyframeInterpolatorTest {
     @Test
     void sampleNumeric_linearWithinSegment() {
         List<Keyframe> kfs = List.of(numKf(0, 0.0), numKf(1000, 100.0));
-        // local = (250-0)/(1000-0) = 0.25 → 0 + 100*0.25 = 25
         assertEquals(25.0, KeyframeInterpolator.sampleNumeric(kfs, 250, null), 1e-9, "区间内 LINEAR 手算");
         assertEquals(50.0, KeyframeInterpolator.sampleNumeric(kfs, 500, null), 1e-9, "区间中点");
-        // 三帧：区间 [1000,2000] 上 t=1750 → local=0.75 → 100+(40-100)*0.75 = 55
         List<Keyframe> three = List.of(numKf(0, 0.0), numKf(1000, 100.0), numKf(2000, 40.0));
         assertEquals(55.0, KeyframeInterpolator.sampleNumeric(three, 1750, null), 1e-9, "第二段 LINEAR 手算");
     }
 
     @Test
     void sampleNumeric_coincidentFramesTakeLater() {
-        // 相邻 timeMs 相等（重合帧）：取后一帧值（落入重合组末位）
         List<Keyframe> kfs = List.of(numKf(0, 0.0), numKf(500, 10.0), numKf(500, 90.0), numKf(1000, 100.0));
-        // t=500 命中重合组：返回最大 i 使 timeMs<=500 的帧，但 t 不是首/末帧 → 进区间逻辑；
-        // i 落在第二个 500（index 2），区间 [500(idx2)=90, 1000=100]，local=(500-500)/(1000-500)=0 → 90
         assertEquals(90.0, KeyframeInterpolator.sampleNumeric(kfs, 500, null), 1e-9, "重合帧取后一帧值");
     }
 
     @Test
     void sampleNumeric_strValuesResolved() {
-        // P3（§9.5）：Str 值参与求值——无 resolver 时变量引用退 0、纯数字字符串本地解析
+        // rendering.md §9.5：Str 值参与求值——无 resolver 时变量引用退 0、纯数字字符串本地解析
         List<Keyframe> kfs = List.of(
                 numKf(0, 0.0),
                 new Keyframe("kf-str", "x", 500, KfValue.of("${var:foo}"), Easing.LINEAR),
                 numKf(1000, 100.0));
-        // 区间 [0,500)：0 → 0（${var:foo} 无 resolver 退 0），t=300 → 0
         assertEquals(0.0, KeyframeInterpolator.sampleNumeric(kfs, 300, null), 1e-9,
                 "无 resolver 变量引用退 0");
-        // 注入 resolver：${var:foo} → 50 → 区间 [0,500) 在 t=250 → 25
         assertEquals(25.0, KeyframeInterpolator.sampleNumeric(kfs, 250, raw -> 50.0), 1e-9,
                 "resolver 注入后变量值参与插值");
 
-        // 纯数字字符串无 resolver 也可用
         List<Keyframe> plain = List.of(
                 new Keyframe("k0", "x", 0, KfValue.of("10"), Easing.LINEAR),
                 new Keyframe("k1", "x", 1000, KfValue.of("20"), Easing.LINEAR));
         assertEquals(15.0, KeyframeInterpolator.sampleNumeric(plain, 500, null), 1e-9,
                 "纯数字字符串本地解析");
 
-        // 错型（FillV）仍整轨跳过
         List<Keyframe> bad = List.of(
                 numKf(0, 0.0),
                 new Keyframe("kf-fill", "x", 1000,
-                        KfValue.of(ac.haru.hikaricanvas.state.Fill.solid("#FF0000")), Easing.LINEAR));
+                        KfValue.of(Fill.solid("#FF0000")), Easing.LINEAR));
         assertNull(KeyframeInterpolator.sampleNumeric(bad, 500, null), "FillV 错型 → 整轨 null");
     }
 
@@ -163,11 +160,25 @@ class KeyframeInterpolatorTest {
 
     // ---------- interpolate ----------
 
-    /** addText 风格的最小文本元素（六数值字段可被动画覆盖；其余字段保留校验用）。 */
+    /** 最小文本元素（六数值字段可被动画覆盖；其余字段保留校验用）。 */
     private static TextElement text(String id, int x, int y, int w, int h, int rotation, Float opacity) {
         return new TextElement(id, x, y, w, h, rotation, false, true,
                 "hi", "inter", 24, "#000000", "left", 0f, 1.2f, false, null,
                 opacity, BlendMode.NORMAL, RenderMode.CLEAN, null, null);
+    }
+
+    private static TextElement text(String id) {
+        return text(id, 0, 0, 100, 50, 0, 1.0f);
+    }
+
+    private static RectElement rect(String id) {
+        return new RectElement(id, 0, 0, 100, 50, 0, false, true,
+                Fill.solid("#112233"), null, 1.0f, BlendMode.NORMAL, RenderMode.CLEAN);
+    }
+
+    private static ImageElement image(String id) {
+        return new ImageElement(id, 0, 0, 100, 50, 0, false, true,
+                "0123456789abcdef", null, 1.0f, BlendMode.NORMAL, RenderMode.CLEAN);
     }
 
     private static Layer layer(String id, Element... elements) {
@@ -177,7 +188,6 @@ class KeyframeInterpolatorTest {
 
     private static ProjectState state(Layer... layers) {
         List<Layer> ls = new ArrayList<>(List.of(layers));
-        // 6 字段构造：version / canvas / v1Elements / v2Layers / activeLayerId / history / timelines / activeTimelineId
         return new ProjectState(1L,
                 new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
                 null, ls, layers[0].id(),
@@ -195,7 +205,6 @@ class KeyframeInterpolatorTest {
     void interpolate_appliesSixNumericProperties() {
         TextElement t = text("e-1", 0, 0, 100, 50, 0, 1.0f);
         ProjectState base = state(layer("l-1", t));
-        // 在 t=500（区间中点）每属性从初值线性到目标值
         Timeline tl = timeline(1000, "e-1",
                 new Keyframe("k-x0", "x", 0, KfValue.of(0.0), Easing.LINEAR),
                 new Keyframe("k-x1", "x", 1000, KfValue.of(200.0), Easing.LINEAR),
@@ -225,18 +234,15 @@ class KeyframeInterpolatorTest {
         TextElement animated = text("e-1", 0, 0, 100, 50, 0, 1.0f);
         TextElement frozen = text("e-2", 10, 10, 20, 20, 0, 1.0f);
         Layer l1 = layer("l-1", animated, frozen);
-        Layer l2 = layer("l-2", text("e-3", 5, 5, 5, 5, 0, 1.0f));   // 整层无动画
+        Layer l2 = layer("l-2", text("e-3", 5, 5, 5, 5, 0, 1.0f));
         ProjectState base = state(l1, l2);
         Timeline tl = timeline(1000, "e-1",
                 new Keyframe("k0", "x", 0, KfValue.of(0.0), Easing.LINEAR),
                 new Keyframe("k1", "x", 1000, KfValue.of(200.0), Easing.LINEAR));
 
         ProjectState out = KeyframeInterpolator.interpolate(base, tl, 500);
-        // 无动画的 element 引用共享
         assertSame(frozen, out.layers().get(0).elements().get(1), "同层未动画 element 按引用共享");
-        // 无动画的整层引用共享
         assertSame(l2, out.layers().get(1), "无任何动画元素的 layer 按引用共享");
-        // 被动画的 element 是新实例
         assertTrue(out.layers().get(0).elements().get(0) != animated, "被动画 element 应为新 record");
     }
 
@@ -244,20 +250,18 @@ class KeyframeInterpolatorTest {
     void interpolate_noInterpolableTrackReturnsBaseSame() {
         TextElement t = text("e-1", 0, 0, 100, 50, 0, 1.0f);
         ProjectState base = state(layer("l-1", t));
-        // 轨 key 指向不存在的元素 → animated 命中但无元素替换 → 返回 base 同引用
         Timeline tlNoElem = timeline(1000, "e-MISSING",
                 new Keyframe("k0", "x", 0, KfValue.of(0.0), Easing.LINEAR),
                 new Keyframe("k1", "x", 1000, KfValue.of(200.0), Easing.LINEAR));
         assertSame(base, KeyframeInterpolator.interpolate(base, tlNoElem, 500),
                 "无可应用动画 → 返回 base 同一引用");
 
-        // P3：color 轨已生效；改用「变量颜色轨」（P3 不支持 → 整轨跳过）验证 base 同引用
+        // 变量颜色轨不支持插值 → 整轨跳过，验证返回 base 同引用
         Timeline tlVarColor = timeline(1000, "e-1",
                 new Keyframe("kc", "color", 0, KfValue.of("${var:c}"), Easing.LINEAR));
         assertSame(base, KeyframeInterpolator.interpolate(base, tlVarColor, 500),
-                "变量颜色轨 P3 跳过 → 返回 base 同一引用");
+                "变量颜色轨跳过 → 返回 base 同一引用");
 
-        // 空 tracks timeline → 直接返回 base
         Timeline empty = new Timeline("tl-e", "E", 1000, 20, LoopMode.LOOP, TriggerConfig.MANUAL, Map.of());
         assertSame(base, KeyframeInterpolator.interpolate(base, empty, 500),
                 "空 tracks → 返回 base 同一引用");
@@ -267,7 +271,6 @@ class KeyframeInterpolatorTest {
     void interpolate_opacityClampedXyRounded() {
         TextElement t = text("e-1", 0, 0, 100, 50, 0, 1.0f);
         ProjectState base = state(layer("l-1", t));
-        // opacity 目标 2.0（越界）→ 钳到 1.0；x 用非整中点检验四舍五入
         Timeline tl = timeline(1000, "e-1",
                 new Keyframe("ko0", "opacity", 0, KfValue.of(2.0), Easing.LINEAR),
                 new Keyframe("ko1", "opacity", 1000, KfValue.of(3.0), Easing.LINEAR),
@@ -276,13 +279,11 @@ class KeyframeInterpolatorTest {
         ProjectState out = KeyframeInterpolator.interpolate(base, tl, 500);
         Element e = out.layers().get(0).elements().get(0);
         assertEquals(1.0f, e.effectiveOpacity(), 1e-6, "opacity 越界 → 钳 [0,1]");
-        // x: 0→101 @0.5 = 50.5 → round = 51（HALF_UP）
         assertEquals(51, e.x(), "x=50.5 四舍五入到 51");
     }
 
     @Test
-    void interpolate_colorTrackAppliesP3() {
-        // 元素同时有数值轨（x）与 color 轨：P3 起两者都生效
+    void interpolate_colorAndNumericTracksApplyTogether() {
         TextElement t = text("e-1", 0, 0, 100, 50, 0, 1.0f);
         ProjectState base = state(layer("l-1", t));
         Timeline tl = timeline(1000, "e-1",
@@ -293,15 +294,13 @@ class KeyframeInterpolatorTest {
         ProjectState out = KeyframeInterpolator.interpolate(base, tl, 500);
         TextElement e = (TextElement) out.layers().get(0).elements().get(0);
         assertEquals(30, e.x(), "x 数值轨生效");
-        // P3：color 轨生效——#FF0000→#00FF00 中点（sRGB 线性空间，共享向量同源算法）
-        assertEquals(ac.haru.hikaricanvas.render.ColorLerp.lerpHex("#FF0000", "#00FF00", 0.5),
-                e.color(), "P3 起 color 轨参与插值");
+        assertEquals(ColorLerp.lerpHex("#FF0000", "#00FF00", 0.5),
+                e.color(), "color 轨参与插值");
     }
 
     @Test
     void interpolate_outputDropsTimelines() {
         TextElement t = text("e-1", 0, 0, 100, 50, 0, 1.0f);
-        // 给 base 一个 activeTimelineId + 含 timeline 的 state（走完整构造注入 timelines）
         Map<String, List<Keyframe>> tracks = new LinkedHashMap<>();
         tracks.put("e-1", List.of(
                 new Keyframe("k0", "x", 0, KfValue.of(0.0), Easing.LINEAR),
@@ -322,7 +321,6 @@ class KeyframeInterpolatorTest {
 
     // ---------- withAnimated：8 子类各一 case ----------
 
-    /** 六数值属性全覆盖的 props，用于断言动画字段被改。 */
     private static KeyframeInterpolator.AnimatedValues allProps() {
         Map<String, Double> p = new LinkedHashMap<>();
         p.put("x", 11.0);
@@ -443,7 +441,6 @@ class KeyframeInterpolatorTest {
 
     @Test
     void withAnimated_partialPropsKeepUnlistedFromBase() {
-        // 仅给 x：y/w/h/rotation/opacity 应保留元素基值
         TextElement src = text("e", 7, 8, 9, 10, 11, 0.3f);
         KeyframeInterpolator.AnimatedValues v = new KeyframeInterpolator.AnimatedValues();
         v.numbers = Map.of("x", 99.0);
@@ -465,5 +462,236 @@ class KeyframeInterpolatorTest {
         assertSame(base, KeyframeInterpolator.interpolate(base, null, 0),
                 "timeline null → 返回 base");
         assertNotNull(base, "前置 sanity");
+    }
+
+    /**
+     * color / fill / text 离散轨与缓动曲线端到端单测（数学权威见 {@code docs/rendering.md §9.2 / §9.4}）。
+     */
+    @Nested
+    class ColorFillTextAndEasing {
+
+        @Test
+        void sampleColor_boundariesTakeEndFrames() {
+            List<Keyframe> kfs = List.of(
+                    kf("color", 100, KfValue.of("#FF0000")),
+                    kf("color", 300, KfValue.of("#00FF00")));
+            assertEquals("#FF0000", KeyframeInterpolator.sampleColor(kfs, 0), "首帧前 → 首帧色");
+            assertEquals("#FF0000", KeyframeInterpolator.sampleColor(kfs, 100), "正好首帧");
+            assertEquals("#00FF00", KeyframeInterpolator.sampleColor(kfs, 300), "正好末帧");
+            assertEquals("#00FF00", KeyframeInterpolator.sampleColor(kfs, 9999), "末帧后（不外插）");
+        }
+
+        @Test
+        void sampleColor_withinSegmentMatchesColorLerp() {
+            List<Keyframe> kfs = List.of(
+                    kf("color", 0, KfValue.of("#FF0000")),
+                    kf("color", 1000, KfValue.of("#0000FF")));
+            assertEquals(ColorLerp.lerpHex("#FF0000", "#0000FF", 0.5),
+                    KeyframeInterpolator.sampleColor(kfs, 500), "区间中点 sRGB 线性空间");
+        }
+
+        @Test
+        void sampleColor_coincidentFramesTakeLater() {
+            List<Keyframe> kfs = List.of(
+                    kf("color", 0, KfValue.of("#000000")),
+                    kf("color", 500, KfValue.of("#111111")),
+                    kf("color", 500, KfValue.of("#FF0000")),
+                    kf("color", 1000, KfValue.of("#FFFFFF")));
+            assertEquals("#FF0000", KeyframeInterpolator.sampleColor(kfs, 500), "重合帧取后一帧色");
+        }
+
+        @Test
+        void sampleColor_variableTrackReturnsNull() {
+            List<Keyframe> kfs = List.of(
+                    kf("color", 0, KfValue.of("#FF0000")),
+                    kf("color", 1000, KfValue.of("${var:theme}")));
+            assertNull(KeyframeInterpolator.sampleColor(kfs, 500), "含变量颜色 → 整轨 null");
+        }
+
+        @Test
+        void sampleColor_nonStrValueReturnsNull() {
+            List<Keyframe> kfs = List.of(
+                    kf("color", 0, KfValue.of("#FF0000")),
+                    kf("color", 1000, KfValue.of(42.0)));
+            assertNull(KeyframeInterpolator.sampleColor(kfs, 500), "含 Num 错型 → 整轨 null");
+        }
+
+        @Test
+        void sampleColor_illegalHexStepsToLeft() {
+            List<Keyframe> kfs = List.of(
+                    kf("color", 0, KfValue.of("#FF0000")),
+                    kf("color", 1000, KfValue.of("not-a-color")));
+            assertEquals("#FF0000", KeyframeInterpolator.sampleColor(kfs, 500),
+                    "右端非法 hex → lerpHex 内 step 返左端");
+        }
+
+        @Test
+        void sampleFill_fillVAndStrHexNormalized() {
+            List<Keyframe> kfs = List.of(
+                    kf("fill", 0, KfValue.of("#FF0000")),
+                    kf("fill", 1000, KfValue.of(new SolidFill("#0000FF"))));
+            Fill out = KeyframeInterpolator.sampleFill(kfs, 500);
+            assertInstanceOf(SolidFill.class, out);
+            assertEquals(ColorLerp.lerpHex("#FF0000", "#0000FF", 0.5),
+                    ((SolidFill) out).color(), "Str hex 归一化后与 FillV 同样插值");
+        }
+
+        @Test
+        void sampleFill_linearSameStopCountMidpoint() {
+            LinearGradient g0 = new LinearGradient(0.0, List.of(
+                    new Stop(0.0, "#000000"), new Stop(1.0, "#FF0000")));
+            LinearGradient g1 = new LinearGradient(90.0, List.of(
+                    new Stop(0.0, "#FFFFFF"), new Stop(1.0, "#00FF00")));
+            List<Keyframe> kfs = List.of(
+                    kf("fill", 0, KfValue.of(g0)),
+                    kf("fill", 1000, KfValue.of(g1)));
+            Fill out = KeyframeInterpolator.sampleFill(kfs, 500);
+            assertInstanceOf(LinearGradient.class, out);
+            LinearGradient lg = (LinearGradient) out;
+            assertEquals(45.0, lg.angle(), 1e-9, "angle 线性中点");
+            assertEquals(ColorLerp.lerpHex("#000000", "#FFFFFF", 0.5),
+                    lg.stops().get(0).color(), "linear stop[0] 颜色同源");
+        }
+
+        @Test
+        void sampleFill_typeMismatchSteps() {
+            List<Keyframe> kfs = List.of(
+                    kf("fill", 0, KfValue.of(new SolidFill("#FF0000"))),
+                    kf("fill", 1000, KfValue.of(new LinearGradient(0.0, List.of(
+                            new Stop(0.0, "#000000"), new Stop(1.0, "#FFFFFF"))))));
+            Fill out = KeyframeInterpolator.sampleFill(kfs, 500);
+            assertInstanceOf(SolidFill.class, out);
+            assertEquals("#FF0000", ((SolidFill) out).color(), "类型不一致 → step 返左端 fill");
+        }
+
+        @Test
+        void sampleFill_variableTrackReturnsNull() {
+            List<Keyframe> kfs = List.of(
+                    kf("fill", 0, KfValue.of("#FF0000")),
+                    kf("fill", 1000, KfValue.of("${var:bg}")));
+            assertNull(KeyframeInterpolator.sampleFill(kfs, 500), "含变量 fill → 整轨 null");
+        }
+
+        @Test
+        void sampleText_stepSemantics() {
+            List<Keyframe> kfs = List.of(
+                    kf("text", 100, KfValue.of("A")),
+                    kf("text", 500, KfValue.of("B")),
+                    kf("text", 900, KfValue.of("C")));
+            assertEquals("A", KeyframeInterpolator.sampleText(kfs, 0), "首帧前 → 首帧");
+            assertEquals("A", KeyframeInterpolator.sampleText(kfs, 100), "正好首帧");
+            assertEquals("A", KeyframeInterpolator.sampleText(kfs, 300), "两帧间取前帧（不插值）");
+            assertEquals("B", KeyframeInterpolator.sampleText(kfs, 500), "正好第二帧");
+            assertEquals("B", KeyframeInterpolator.sampleText(kfs, 700), "第二段取前帧");
+            assertEquals("C", KeyframeInterpolator.sampleText(kfs, 900), "末帧");
+            assertEquals("C", KeyframeInterpolator.sampleText(kfs, 9999), "末帧后取末帧");
+        }
+
+        @Test
+        void sampleText_keepsVariableLiteral() {
+            List<Keyframe> kfs = List.of(
+                    kf("text", 0, KfValue.of("score=${var:user/x}")),
+                    kf("text", 1000, KfValue.of("done")));
+            assertEquals("score=${var:user/x}", KeyframeInterpolator.sampleText(kfs, 500),
+                    "text 轨保留变量字面，不在插值期 resolve");
+        }
+
+        @Test
+        void sampleText_nonStrReturnsNull() {
+            List<Keyframe> kfs = List.of(
+                    kf("text", 0, KfValue.of("A")),
+                    kf("text", 1000, KfValue.of(1.0)));
+            assertNull(KeyframeInterpolator.sampleText(kfs, 500), "含 Num 错型 → 整轨 null");
+        }
+
+        @Test
+        void interpolate_textColorAndTextTracksApply() {
+            TextElement t = text("e-1");
+            ProjectState base = state(layer("l-1", t));
+            Timeline tl = timeline(1000, "e-1",
+                    kf("color", 0, KfValue.of("#FF0000")),
+                    kf("color", 1000, KfValue.of("#0000FF")),
+                    kf("text", 0, KfValue.of("start")),
+                    kf("text", 1000, KfValue.of("end")));
+            ProjectState out = KeyframeInterpolator.interpolate(base, tl, 500);
+            TextElement e = (TextElement) out.layers().get(0).elements().get(0);
+            assertEquals(ColorLerp.lerpHex("#FF0000", "#0000FF", 0.5), e.color(), "color 轨生效");
+            assertEquals("start", e.text(), "text 离散轨 step 取前帧（@500 区间 [0,1000) 取首帧）");
+        }
+
+        @Test
+        void interpolate_rectFillTrackApplies() {
+            RectElement r = rect("e-1");
+            ProjectState base = state(layer("l-1", r));
+            Timeline tl = timeline(1000, "e-1",
+                    kf("fill", 0, KfValue.of("#FF0000")),
+                    kf("fill", 1000, KfValue.of("#0000FF")));
+            ProjectState out = KeyframeInterpolator.interpolate(base, tl, 500);
+            RectElement e = (RectElement) out.layers().get(0).elements().get(0);
+            assertInstanceOf(SolidFill.class, e.fill());
+            assertEquals(ColorLerp.lerpHex("#FF0000", "#0000FF", 0.5),
+                    ((SolidFill) e.fill()).color(), "rect fill 轨生效");
+        }
+
+        @Test
+        void interpolate_imageFillAndColorTracksIgnored() {
+            ImageElement im = image("e-1");
+            ProjectState base = state(layer("l-1", im));
+            Timeline tl = timeline(1000, "e-1",
+                    kf("fill", 0, KfValue.of("#FF0000")),
+                    kf("fill", 1000, KfValue.of("#0000FF")),
+                    kf("color", 0, KfValue.of("#000000")),
+                    kf("color", 1000, KfValue.of("#FFFFFF")));
+            ProjectState out = KeyframeInterpolator.interpolate(base, tl, 500);
+            Element e = out.layers().get(0).elements().get(0);
+            assertInstanceOf(ImageElement.class, e);
+            assertEquals(im, e, "image 的 fill/color 轨错配静默忽略 → 重建 record 各字段保持原值");
+        }
+
+        @Test
+        void interpolate_easingAffectsNumericValue() {
+            TextElement t = text("e-1");
+            ProjectState base = state(layer("l-1", t));
+            Easing easeIn = new Easing(EasingType.EASE_IN, null);
+            Timeline tl = timeline(1000, "e-1",
+                    kf("x", 0, KfValue.of(0.0), easeIn),
+                    kf("x", 1000, KfValue.of(200.0)));
+            ProjectState out = KeyframeInterpolator.interpolate(base, tl, 500);
+            Element e = out.layers().get(0).elements().get(0);
+            double eased = EasingSolver.ease(easeIn, 0.5);
+            int expectedX = (int) Math.round(200.0 * eased);
+            assertEquals(expectedX, e.x(), "easeIn 接入：x 走缓动曲线");
+            assertTrue(e.x() < 100, "easeIn @0.5 应慢于线性中点（x<100）");
+            assertTrue(eased < 0.5, "前置 sanity：easeIn(0.5) < 0.5");
+        }
+
+        /**
+         * 全等重合帧（损坏 blob 防御面——id/timeMs/value 全同的两帧）下取值不得错位：
+         * Span 自带索引，确保区间左端落在重合组末位，与 TS 端索引语义一致。
+         */
+        @Test
+        void sampleNumeric_identicalCoincidentFramesNoMisalignment() {
+            Keyframe dup1 = new Keyframe("dup", "x", 500, KfValue.of(999.0), Easing.LINEAR);
+            Keyframe dup2 = new Keyframe("dup", "x", 500, KfValue.of(999.0), Easing.LINEAR);
+            List<Keyframe> kfs = List.of(
+                    new Keyframe("a", "x", 0, KfValue.of(0.0), Easing.LINEAR),
+                    dup1, dup2,
+                    new Keyframe("z", "x", 1000, KfValue.of(1000.0), Easing.LINEAR));
+            assertEquals(999.2, KeyframeInterpolator.sampleNumeric(kfs, 600, null), 1e-9,
+                    "全等重合帧不得经 equals 反查错位");
+        }
+
+        @Test
+        void interpolate_largeNumericValueClampsToIntRange() {
+            // 超 int 范围的有限浮点关键帧值经 clampInt 钳到 Integer.MAX_VALUE，避免窄化回绕成负数。
+            RectElement r = rect("r1");
+            ProjectState base = state(layer("L", r));
+            Timeline tl = timeline(1000, "r1",
+                    kf("x", 0, KfValue.of(3_000_000_000.0)),
+                    kf("x", 1000, KfValue.of(3_000_000_000.0)));
+            ProjectState out = KeyframeInterpolator.interpolate(base, tl, 500);
+            Element e = out.layers().get(0).elements().get(0);
+            assertEquals(Integer.MAX_VALUE, e.x(), "x=3e9 钳到 Integer.MAX_VALUE（非回绕负值）");
+        }
     }
 }

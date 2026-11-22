@@ -156,7 +156,7 @@ public final class ProjectImporter {
         CanvasManifest manifest = CanvasManifest.parse(entries.get("manifest.json"), CANVAS_SPEC_MAX);
 
         // 2.5) pack 前置段：空参数——pack 用 default 收敛当工程导入，project 无 params.json
-        //      直接 no-op（entries 字节原样穿透，与重构前逐字节等价）。
+        //      直接 no-op（entries 字节原样穿透）。
         applySubstitution(entries, Map.of());
 
         // 3~6.5) build 段（物化 → 缺资源扫描 → assets → 孤儿轨 → replaceProject → scripts）
@@ -200,10 +200,7 @@ public final class ProjectImporter {
 
     /**
      * pack 参数前置段：条目里有 {@code params.json} 时，解析声明 + 校验用户填值 + 在 {@code project.json}
-     * 文本层单遍替换 {@code ${param}}，把替换结果写回 {@code entries}。
-     *
-     * <p>无 {@code params.json}（普通 project，或无参数 pack）→ 直接 return，{@code entries} 一字节不动——
-     * 保证既有 project 导入路径与重构前逐字节等价（这是既有 9 条用例不受影响的根据）。</p>
+     * 文本层单遍替换 {@code ${param}}，把替换结果写回 {@code entries}；无 {@code params.json} 时直接返回。
      */
     private void applySubstitution(Map<String, byte[]> entries, Map<String, Object> userParams)
             throws CanvasImportException {
@@ -218,8 +215,7 @@ public final class ProjectImporter {
 
     /**
      * build 段（步骤 3~6.5）：materialize → 缺资源扫描 → asset 摄入 → 孤儿轨丢弃 → replaceProject →
-     * scripts 导入。逻辑与重构前 {@link #importInto} 内联段完全一致，仅抽成方法供 {@code importInto} 与
-     * {@link #applyPack} 共用。
+     * scripts 导入。供 {@link #importInto} 与 {@link #applyPack} 共用。
      */
     private Built buildFromEntries(Session session, Map<String, byte[]> entries,
                                    CanvasManifest manifest, UUID uploader)
@@ -276,8 +272,7 @@ public final class ProjectImporter {
 
     /**
      * propagate 段（步骤 7~9）：全量快照广播 → 游戏内地图全画布重绘 → 持久化 → audit 留痕。
-     * 逻辑与重构前 {@link #importInto} 内联段完全一致。仅 {@code importInto} 调用；{@link #applyPack}
-     * 不调（其调用方自带 push / throttler / persist 尾段）。
+     * 仅 {@link #importInto} 调用；{@link #applyPack} 不调（其调用方自带 push / throttler / persist 尾段）。
      */
     private void propagate(Session session, Built built, CanvasManifest manifest, UUID uploader) {
         // 7) 全量快照广播（照 EditOpDispatcher 的 OkSnapshot 分支：从 session.projectState() 读）

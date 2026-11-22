@@ -11,14 +11,17 @@ import ac.haru.hikaricanvas.state.Fill;
 import ac.haru.hikaricanvas.state.Layer;
 import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.state.RectElement;
+import ac.haru.hikaricanvas.storage.AuditLog;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 
@@ -28,8 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.7.0-P2-3：{@link ScriptRunner} 执行管线。全 fake（同步调度替身 + 记录型
- * {@link ActionSink} + clock 注入 budget），无线程 sleep / 无 Bukkit。
+ * {@link ScriptRunner} 执行管线单测（同步调度替身 + 记录型 {@link ActionSink} + 可控时钟）。
  */
 class ScriptRunnerTest {
 
@@ -110,6 +112,48 @@ class ScriptRunnerTest {
         assertEquals(List.of("actions/1"), sink.blockIds, "坏条件 → false 空 else，后续继续");
     }
 
+    // ---------- RandomBranch 控制流 ----------
+
+    @Test
+    void randomBranch_thenPicked_whenRngBelowProbability() {
+        ScriptRunner r = runner();
+        r.setRngForTest(() -> 20);
+        r.submit(WALL, rule("r1", List.of(new Action.RandomBranch(50,
+                List.of(new Action.Log("then")),
+                List.of(new Action.Log("else"))))), ctx(0));
+        assertEquals(List.of("actions/0/then/0"), sink.blockIds);
+    }
+
+    @Test
+    void randomBranch_elsePicked_whenRngAboveProbability() {
+        ScriptRunner r = runner();
+        r.setRngForTest(() -> 80);
+        r.submit(WALL, rule("r1", List.of(new Action.RandomBranch(50,
+                List.of(new Action.Log("then")),
+                List.of(new Action.Log("else"))))), ctx(0));
+        assertEquals(List.of("actions/0/else/0"), sink.blockIds);
+    }
+
+    @Test
+    void randomBranch_alwaysThen_probability100() {
+        ScriptRunner r = runner();
+        r.setRngForTest(() -> 99);
+        r.submit(WALL, rule("r1", List.of(new Action.RandomBranch(100,
+                List.of(new Action.Log("certain")),
+                List.of(new Action.Log("never"))))), ctx(0));
+        assertEquals(List.of("actions/0/then/0"), sink.blockIds);
+    }
+
+    @Test
+    void randomBranch_neverThen_probability0() {
+        ScriptRunner r = runner();
+        r.setRngForTest(() -> 0);
+        r.submit(WALL, rule("r1", List.of(new Action.RandomBranch(0,
+                List.of(new Action.Log("never")),
+                List.of(new Action.Log("always"))))), ctx(0));
+        assertEquals(List.of("actions/0/else/0"), sink.blockIds);
+    }
+
     // ---------- runs/s 窗口 ----------
 
     @Test
@@ -143,7 +187,7 @@ class ScriptRunnerTest {
         List<Integer> seen = new ArrayList<>();
         sink.onExecute = () -> seen.add(ScriptRunner.CHAIN_DEPTH.get());
         r.submit(WALL, rule("r1", List.of(new Action.Log("x"))), ctx(3));
-        assertEquals(List.of(3), seen, "执行期 CHAIN_DEPTH = ctx.chainDepth（K1）");
+        assertEquals(List.of(3), seen, "执行期 CHAIN_DEPTH = ctx.chainDepth");
         assertNull(ScriptRunner.CHAIN_DEPTH.get(), "run 结束 finally 清 ThreadLocal");
         assertEquals(0, ScriptRunner.currentChainDepth(), "无上下文时 Router 读到 0");
     }
@@ -235,7 +279,7 @@ class ScriptRunnerTest {
         assertNull(ScriptRunner.CHAIN_DEPTH.get());
     }
 
-    // ---------- 0.7.1：playTimelineAwait 挂起续接 ----------
+    // ---------- playTimelineAwait 挂起续接 ----------
 
     @Test
     void playTimelineAwait_durationPositive_suspendsThenContinues() {
@@ -274,7 +318,7 @@ class ScriptRunnerTest {
         assertEquals(0, scheduler.scheduledDelays.size());
     }
 
-    // ---------- 0.7.1-P5：StopScript 中止 ----------
+    // ---------- StopScript 中止 ----------
 
     @Test
     void stopScript_abortsRemainingActions() {
@@ -285,7 +329,7 @@ class ScriptRunnerTest {
         assertEquals(List.of("actions/0"), sink.blockIds, "stopScript 后续动作 b 被中止");
     }
 
-    // ---------- 0.7.1-P5：WaitUntil 轮询 ----------
+    // ---------- WaitUntil 轮询 ----------
 
     @Test
     void waitUntil_satisfiedImmediately_continues() {
@@ -301,7 +345,7 @@ class ScriptRunnerTest {
     @Test
     void waitUntil_pollsUntilConditionTrue() {
         // 前 2 次评估 false（score=0），第 3 次起 true（score=10）——可变 lookup
-        java.util.concurrent.atomic.AtomicInteger evals = new java.util.concurrent.atomic.AtomicInteger();
+        AtomicInteger evals = new AtomicInteger();
         ConditionEvaluator polling = new ConditionEvaluator(LOG,
                 fullName -> fullName.endsWith("/score") ? (evals.incrementAndGet() >= 3 ? "10" : "0") : null);
         ScriptRunner r = new ScriptRunner(polling, sink, budget, null, LOG, scheduler, clock::get);
@@ -330,7 +374,7 @@ class ScriptRunnerTest {
     void waitUntil_pollingDoesNotExhaustBudget() {
         // 前 4 次 false 后 true；max-actions=3。WaitUntil(1)+after(2) ≤ 3。
         // 若轮询每次计费，5+ 次会超 3 → blocked；断言 after 执行证明轮询不计 Budget。
-        java.util.concurrent.atomic.AtomicInteger evals = new java.util.concurrent.atomic.AtomicInteger();
+        AtomicInteger evals = new AtomicInteger();
         ConditionEvaluator polling = new ConditionEvaluator(LOG,
                 fullName -> fullName.endsWith("/score") ? (evals.incrementAndGet() >= 5 ? "10" : "0") : null);
         ScriptBudget small = new ScriptBudget(
@@ -343,12 +387,12 @@ class ScriptRunnerTest {
         assertTrue(sink.blockIds.contains("actions/1"), "轮询不计 Budget，after 未被掐断执行");
     }
 
-    // ---------- 0.7.2-P3：RepeatUntil 动态循环 ----------
+    // ---------- RepeatUntil 动态循环 ----------
 
     @Test
     void repeatUntil_loopsUntilConditionTrue() {
         // 可变 lookup：前 2 次 score="0"（>5 false），第 3 次起 "10"（true）
-        java.util.concurrent.atomic.AtomicInteger evals = new java.util.concurrent.atomic.AtomicInteger();
+        AtomicInteger evals = new AtomicInteger();
         ConditionEvaluator polling = new ConditionEvaluator(LOG,
                 fullName -> fullName.endsWith("/score") ? (evals.incrementAndGet() >= 3 ? "10" : "0") : null);
         ScriptRunner r = new ScriptRunner(polling, sink, budget, null, LOG, scheduler, clock::get);
@@ -407,7 +451,7 @@ class ScriptRunnerTest {
         assertTrue(sink.blockIds.stream().filter("actions/0/body/0"::equals).count() < 100, "Budget 熔断不到 100 轮");
     }
 
-    // ---------- 0.7.1：Repeat 有界循环展开 ----------
+    // ---------- Repeat 有界循环展开 ----------
 
     @Test
     void repeat_expandsBodyCountTimes_sameBlockIdPrefix() {
@@ -493,20 +537,7 @@ class ScriptRunnerTest {
                 "展开撞 max-actions → 末步 blocked（试跑 trace 可见）");
     }
 
-    // ---------- 0.7.1：TRIGGER_DETAIL 透传 ----------
-
-    @Test
-    void triggerDetail_setDuringRun_clearedAfter() {
-        ScriptRunner r = runner();
-        List<String> seen = new ArrayList<>();
-        sink.onExecute = () -> seen.add(ScriptRunner.TRIGGER_DETAIL.get());
-        ScriptRule ru = new ScriptRule("r1", WALL, true, "r-1",
-                new Trigger.PlayerJoin(), List.of(new Action.Log("x")), "{}");
-        r.submit(WALL, ru, new TriggerContext(TriggerContext.Source.PLAYER_JOIN, 0, "Alice"));
-        assertEquals(List.of("Alice"), seen, "执行期 TRIGGER_DETAIL = ctx.detail");
-        assertNull(ScriptRunner.TRIGGER_DETAIL.get(), "run 结束 finally 清 ThreadLocal");
-        assertNull(ScriptRunner.currentTriggerDetail(), "无上下文时读到 null");
-    }
+    // ---------- TRIGGER_PLAYER 透传 ----------
 
     /** 触发玩家走独立 ThreadLocal（与 detail 分离），run 结束一并清。 */
     @Test
@@ -533,21 +564,21 @@ class ScriptRunnerTest {
         sink.onExecute = () -> seen.add(ScriptRunner.TRIGGER_PLAYER.get());
         r.submit(WALL, rule("r1", List.of(new Action.Log("a"))),
                 new TriggerContext(TriggerContext.Source.VARIABLE, 0, "user:w-1/score"));
-        assertEquals(java.util.Arrays.asList("sentinel", null), seen,
+        assertEquals(Arrays.asList("sentinel", null), seen,
                 "变量触发没有触发玩家");
     }
 
     @Test
-    void triggerDetail_waitContinuation_restored() {
+    void triggerPlayer_waitContinuation_restored() {
         ScriptRunner r = runner();
         List<String> seen = new ArrayList<>();
-        sink.onExecute = () -> seen.add(ScriptRunner.TRIGGER_DETAIL.get());
+        sink.onExecute = () -> seen.add(ScriptRunner.currentTriggerPlayer());
         r.submit(WALL, rule("r1", List.of(
                 new Action.Log("a"), new Action.Wait(100), new Action.Log("b"))),
-                new TriggerContext(TriggerContext.Source.PLAYER_JOIN, 0, "Bob"));
+                new TriggerContext(TriggerContext.Source.PLAYER_JOIN, 0, "Bob", "Bob"));
         scheduler.runPending();
-        assertEquals(List.of("Bob", "Bob"), seen, "续接段 TRIGGER_DETAIL 延续");
-        assertNull(ScriptRunner.TRIGGER_DETAIL.get());
+        assertEquals(List.of("Bob", "Bob"), seen, "续接段 TRIGGER_PLAYER 延续");
+        assertNull(ScriptRunner.currentTriggerPlayer());
     }
 
     // ---------- sink 异常兜底 ----------
@@ -576,10 +607,8 @@ class ScriptRunnerTest {
 
     @Test
     void blockedRun_withAudit_rateLimitedTo1Per10s() {
-        // AuditLog(null jdbi)：record() 内 NPE 被自吞走 SEVERE fallback（0.4.10 P3-4 既有纪律），
-        // 这里只侧证 K5 限频判定被走到且 10s 窗内只放行 1 次。
-        ac.haru.hikaricanvas.storage.AuditLog audit =
-                new ac.haru.hikaricanvas.storage.AuditLog(null, LOG);
+        // AuditLog(null jdbi)：record() 内异常自吞，这里通过 RecordingBudget 侧证 10s 窗内只放行 1 次
+        AuditLog audit = new AuditLog(null, LOG);
         ScriptRunner r = new ScriptRunner(conditions, sink, budget, audit, LOG, scheduler);
         ScriptRule ru = rule("r1", List.of(new Action.Log("x")));
         for (int i = 0; i < 13; i++) {
@@ -605,7 +634,7 @@ class ScriptRunnerTest {
         assertEquals(1, sink.blockIds.size(), "chain 掐断不占用 runs/s 窗额度");
     }
 
-    // ---------- 0.7.0-P3 A2（K11）：trace callback 恰一次 ----------
+    // ---------- trace callback 恰一次 ----------
 
     @Test
     void traceCallback_normalRun_firesExactlyOnce_withSteps() {
@@ -713,7 +742,7 @@ class ScriptRunnerTest {
         assertTrue(sink.blockIds.size() >= 1);
     }
 
-    // ---------- E1：TweenBlock 续接早于落盘修复（ScriptRunner × TweenScheduler 集成） ----------
+    // ---------- TweenBlock 末帧落盘后续接（ScriptRunner × TweenScheduler 集成） ----------
 
     /** 构建含一个 RectElement（x=0, y=0, w=100, h=50）的 ProjectState（补间 base）。 */
     private static ProjectState tweenBaseState(String elementId) {
@@ -742,12 +771,11 @@ class ScriptRunnerTest {
     }
 
     /**
-     * E1 顺序承诺（端到端）：TweenBlock 移动元素 x（0→100），其后一个读 x 的动作（{@code Log}）必须在
-     * 补间<b>末帧落盘之后</b>续接——证明续接不再早于落盘。用共享 {@code events} 记录「落盘 WRITE」与
-     * 「续接动作 AFTER」的先后，断言顺序为 [WRITE, AFTER]，且 AFTER 落盘值是目标 x=100（非起始 0）。
+     * 顺序承诺（端到端）：TweenBlock 移动元素 x（0→100），其后续动作必须在补间<b>末帧落盘之后</b>续接。
+     * 用共享 {@code events} 记录「落盘 WRITE」与「续接动作 AFTER」的先后，断言顺序为 [WRITE, AFTER]。
      */
     @Test
-    void e1_tweenBlock_continuationRunsAfterFinalApplyMany() {
+    void tweenBlock_continuationRunsAfterFinalApplyMany() {
         final List<String> events = new ArrayList<>();
         final AtomicLong tweenClock = new AtomicLong(0L);
         final ProjectState base = tweenBaseState("e-rect");
@@ -791,11 +819,11 @@ class ScriptRunnerTest {
     }
 
     /**
-     * E1：补间末帧 tick 异常（renderStatic 抛）时脚本<b>不永久挂起</b>——TweenScheduler 异常清理路径
+     * 补间末帧 tick 异常（renderStatic 抛）时脚本<b>不永久挂起</b>——TweenScheduler 异常清理路径
      * 仍触发续接回调，after 照常执行。
      */
     @Test
-    void e1_tweenBlock_tickException_doesNotHangScript() {
+    void tweenBlock_tickException_doesNotHangScript() {
         final AtomicLong tweenClock = new AtomicLong(0L);
         final ProjectState base = tweenBaseState("e-rect");
 
@@ -831,10 +859,10 @@ class ScriptRunnerTest {
     }
 
     /**
-     * E1：续接回调恰一次——TweenBlock 后接续接动作只跑一次（不因末帧 + 潜在重复触发而双发）。
+     * 续接回调恰一次——TweenBlock 后接续接动作只跑一次（不因末帧 + 潜在重复触发而双发）。
      */
     @Test
-    void e1_tweenBlock_continuationFiresExactlyOnce() {
+    void tweenBlock_continuationFiresExactlyOnce() {
         final AtomicLong tweenClock = new AtomicLong(0L);
         final ProjectState base = tweenBaseState("e-rect");
         TweenScheduler tween = new TweenScheduler(
@@ -894,9 +922,9 @@ class ScriptRunnerTest {
         final List<String> wallIds = new ArrayList<>();
         Runnable onExecute;
         String throwOn;
-        /** 0.7.1：playTimelineAwait 续接路径——某 blockId execute 返 error step（不抛）。 */
+        /** playTimelineAwait 续接路径——某 blockId execute 返 error step（不抛）。 */
         String errorOn;
-        /** 0.7.1：timelineDurationMs 返回值（>0 → Runner 挂起续接）。 */
+        /** timelineDurationMs 返回值（>0 → Runner 挂起续接）。 */
         long timelineDuration = 0L;
 
         @Override

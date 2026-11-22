@@ -5,6 +5,7 @@ import org.bukkit.map.MapCanvas;
 import org.bukkit.map.MapRenderer;
 import org.bukkit.map.MapView;
 
+import java.util.Collection;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -22,8 +23,8 @@ import java.util.concurrent.ConcurrentMap;
  * <p>{@code super(false)} = non-contextual，同一 view 所有 viewer 共享 canvas。
  * Placeholder / paint 所有玩家看到同一张，这样省 CPU。是否需要 per-player 待后续评估。</p>
  */
-// 非 final：让 WallRestorerTest 的 ThrowingRenderer 子类 override update 注入失败，
-// 测「restore 失败 → releaseToFree 回滚」不泄漏。运行期行为不变。
+// 非 final：供 WallRestorerTest 的 ThrowingRenderer 子类覆盖 update 注入渲染阶段异常，
+// 验证 bind 成功后渲染失败仍保留地图绑定。运行期行为不变。
 public class HikariCanvasRenderer extends MapRenderer {
 
     private final ConcurrentMap<Integer, byte[]> pixelsByMapId = new ConcurrentHashMap<>();
@@ -49,7 +50,7 @@ public class HikariCanvasRenderer extends MapRenderer {
      * 批量清除像素缓存（wall delete / mapPool.releaseWall 路径调用）。
      * 防止 mapId 复用时旧 wall 的像素显示在新 wall（跨 wall 像素泄漏）。
      */
-    public void invalidate(java.util.Collection<Integer> mapIds) {
+    public void invalidate(Collection<Integer> mapIds) {
         if (mapIds == null) return;
         for (Integer id : mapIds) {
             if (id != null) pixelsByMapId.remove(id);

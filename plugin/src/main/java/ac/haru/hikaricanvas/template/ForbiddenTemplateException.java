@@ -1,9 +1,11 @@
 package ac.haru.hikaricanvas.template;
 
+import java.util.UUID;
+
 /**
  * 调用方尝试 apply 一个不属于自己的 user-template，且无
  * {@code canvas.template.use-others} bypass 权限时由
- * {@link TemplateRegistry#byIdForApply(String, java.util.UUID, boolean)} 抛出。
+ * {@link TemplateRegistry#byIdForApply(String, UUID, boolean)} 抛出。
  *
  * <p>上游 WS dispatcher 应捕获并转 {@code FORBIDDEN} 错误码，不向客户端 echo
  * 内部异常细节。</p>

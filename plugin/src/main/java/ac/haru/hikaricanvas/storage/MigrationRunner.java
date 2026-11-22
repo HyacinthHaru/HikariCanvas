@@ -65,7 +65,7 @@ public final class MigrationRunner {
     private final boolean autoBackup;
     private final Path dbFilePath;
 
-    /** 兼容老 API：默认关闭自动备份。 */
+    /** 单测便捷构造：不启用自动备份。 */
     public MigrationRunner(Jdbi jdbi, Logger log) {
         this(jdbi, log, false, null);
     }

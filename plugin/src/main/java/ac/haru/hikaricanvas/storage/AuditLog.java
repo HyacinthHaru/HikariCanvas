@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jdbi.v3.core.Jdbi;
 
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -42,10 +43,9 @@ public final class AuditLog {
      * 上次清理时刻；{@code 0} = 还没清过。用 CAS 保证并发 record 只有一个线程真去 DELETE。
      * 初值 0 意味着进程内第一条审计就会顺带清一次（相当于「启动期清理」）。
      */
-    private final java.util.concurrent.atomic.AtomicLong lastPurgeAt =
-            new java.util.concurrent.atomic.AtomicLong(0L);
+    private final AtomicLong lastPurgeAt = new AtomicLong(0L);
 
-    /** 兼容老 API：没有 logger 时 fallback 路径只能吞错。建议用双参构造器。 */
+    /** 使用默认类 logger 与默认保留天数构造（单测便捷入口）。 */
     public AuditLog(Jdbi jdbi) {
         this(jdbi, Logger.getLogger(AuditLog.class.getName()));
     }
@@ -79,8 +79,7 @@ public final class AuditLog {
                     ? null
                     : JSON.writeValueAsString(details);
         } catch (Exception e) {
-            // details 序列化失败不能静默——补 WARNING 日志（对齐本方法 DB-insert catch
-            // 与 insertSignRecord 既有 fallback 约定）；写可追溯 marker 而非纯 null，保留审计上下文。
+            // details 序列化失败不能静默——记录 WARNING 日志并写入可追溯 marker，保留审计上下文。
             log.log(Level.WARNING, "AuditLog details serialization failed for event=" + event, e);
             detailsJson = "{\"_serialization_failed\":true}";
         }

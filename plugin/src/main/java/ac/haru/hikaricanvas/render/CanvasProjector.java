@@ -2,15 +2,22 @@ package ac.haru.hikaricanvas.render;
 
 import ac.haru.hikaricanvas.deploy.MapPacketSender;
 import ac.haru.hikaricanvas.session.Session;
+import ac.haru.hikaricanvas.state.Fill;
 import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.state.SolidFill;
 import ac.haru.hikaricanvas.storage.WallRepo;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import java.util.logging.Logger;
 
 /**
@@ -27,8 +34,8 @@ import java.util.logging.Logger;
  * async task 里调用，不必切主线程。</p>
  *
  * <p>实现 {@link AnimationTicker.FrameRenderer}——AnimationTicker 的逐帧出口
- * （{@link #hasViewers} / {@link #renderFrame}，含 per-map 帧间 diff + 新观察者全量补发），
- * 见 docs/architecture.md §5.5。</p>
+ * （{@link #renderFrame}，含观察者门控、per-map 帧间 diff 与新观察者全量补发），
+ * 见 {@code docs/architecture.md §5.5}。</p>
  */
 public final class CanvasProjector implements AnimationTicker.FrameRenderer {
 
@@ -52,16 +59,9 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
      */
     private static final int VIEWER_CHUNK_DISTANCE = 8;
 
-    /** 兼容构造器：不带主动推帧能力，回落 Paper 默认 sync。 */
-    public CanvasProjector(HikariCanvasRenderer canvasRenderer,
-                           CanvasCompositor compositor,
-                           PlaceholderRenderer placeholderRenderer,
-                           Logger log) {
-        this(canvasRenderer, compositor, placeholderRenderer, log, null, null);
-    }
-
     /**
-     * 完整构造器；mapPacketSender / wallRepo 任一为 null 即关闭主动推帧（fallback）。
+     * 构造投影器；{@code mapPacketSender} / {@code wallRepo} 任一为 null 时关闭主动推帧，
+     * 回落 Paper 默认 sync。
      */
     public CanvasProjector(HikariCanvasRenderer canvasRenderer,
                            CanvasCompositor compositor,
@@ -93,9 +93,9 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
         List<Integer> indices = region.coveredMapIndices(widthMaps, heightMaps);
         if (indices.isEmpty()) return 0;
 
-        // {@code ProjectState} 回到"pristine 初始态"时，不走 compositor
+        // ProjectState 回到"pristine 初始态"时，不走 compositor
         // 渲空白，而是重绘 placeholder（灰底 + HIKARICANVAS 水印 + slot 标签），
-        // 保留 confirm 阶段的视觉提示。触发条件：elements 空 && background=#FFFFFF（session 刚 confirm 时就是这个状态，undo 到底也会回到这）。
+        // 保留 confirm 阶段的视觉提示。触发条件：可见层全无元素 && background=#FFFFFF。
         // viewer 列表只算一次给本次 project 用（pristine / 正常分支共享）。
         // 计算稍贵（遍历 world.getPlayers()）；只在 mapPacketSender + wallRepo 齐全时算。
         List<Player> viewers = findViewersForWall(session.wallId());
@@ -209,7 +209,7 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
         try {
             for (Player p : world.getPlayers()) {
                 try {
-                    org.bukkit.Location loc = p.getLocation();
+                    Location loc = p.getLocation();
                     int pChunkX = loc.getBlockX() >> 4;
                     int pChunkZ = loc.getBlockZ() >> 4;
                     int dx = Math.abs(pChunkX - wallChunkX);
@@ -237,8 +237,8 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
     }
 
     /** 判 background 是否纯白 SolidFill（渐变 / 非白 / 半透明都不算 pristine）。 */
-    private static boolean isWhiteSolid(ac.haru.hikaricanvas.state.Fill bg) {
-        if (!(bg instanceof ac.haru.hikaricanvas.state.SolidFill s)) return false;
+    private static boolean isWhiteSolid(Fill bg) {
+        if (!(bg instanceof SolidFill s)) return false;
         String c = s.color();
         if (c == null) return false;
         return "#FFFFFF".equalsIgnoreCase(c) || "#FFFFFFFF".equalsIgnoreCase(c);
@@ -285,7 +285,7 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
         List<Player> viewers = findViewersForWall(wallId);
 
         // pristine 状态 → placeholder（与活跃 session 路径对称）
-        if (state.isPristineAcrossLayers() && isWhitePristineBg(state)) {
+        if (isPristine(state)) {
             int total = mapIds.size();
             int updated = 0;
             for (int i = 0; i < total; i++) {
@@ -329,18 +329,13 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
         return updated;
     }
 
-    /** Pristine 判定的背景部分，等同 {@link #isPristine}/{@link #isWhiteSolid} 但只看背景。 */
-    private static boolean isWhitePristineBg(ProjectState state) {
-        return isWhiteSolid(state.canvas().background());
-    }
-
     // ---------- AnimationTicker.FrameRenderer 实现（仅 Ticker 线程调） ----------
 
     /**
-     * 动画逐帧出口（docs/architecture.md §5.5）：viewer 查询（空且非 force → 跳过，
-     * <b>不 rasterize</b>——viewer-gated 真正省 CPU 的点；单次扫描）→
-     * rasterize 插值帧 → per-map 量化 → <b>帧间 diff</b>（只 update / 只发像素变了的 map，
-     * §3.4「基本的不浪费」）→ 新观察者出现时全量补发（diff 跳过的 map 对新 viewer 是缺帧）。
+     * 动画逐帧出口（{@code docs/architecture.md §5.5}）：viewer 查询（空且非 force → 跳过，
+     * <b>不 rasterize</b>——viewer-gated 省 CPU 的点；单次扫描）→
+     * rasterize 插值帧 → per-map 量化 → <b>帧间 diff</b>（只更新并推送像素发生变化的 map）→
+     * 新观察者出现时全量补发（diff 跳过的 map 对新 viewer 是缺帧）。
      *
      * <p>主 buffer 经 {@link CanvasCompositor#rasterize} 借自 {@link BufferPool}
      * （Ticker 线程 = 池 owner），切片完归还 —— 这是池化的释放点（buffer 逃逸出
@@ -361,7 +356,7 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
         }
         // 新观察者出现 → 本帧全量补发（unchanged map 对新 viewer 是缺帧）
         boolean forceFullPush = force;
-        java.util.Set<java.util.UUID> viewerIds = new java.util.HashSet<>(viewers.size());
+        Set<UUID> viewerIds = new HashSet<>(viewers.size());
         for (Player p : viewers) viewerIds.add(p.getUniqueId());
         if (diff.lastViewerIds == null || !diff.lastViewerIds.containsAll(viewerIds)) {
             forceFullPush = true;
@@ -389,17 +384,13 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
                 try {
                     byte[] pixels = compositor.toPaletteSlice(img, i, widthMaps);
                     boolean changed = diff.lastFrames[i] == null
-                            || !java.util.Arrays.equals(diff.lastFrames[i], pixels);
+                            || !Arrays.equals(diff.lastFrames[i], pixels);
                     if (changed) {
                         canvasRenderer.update(mapId, pixels);
                         diff.lastFrames[i] = pixels;
                         updated++;
                     }
                     if (changed || forceFullPush) {
-                        // forceFullPush 且本帧未变（changed=false）时 diff.lastFrames[i] 可能尚无
-                        // 基准 → 用本帧 pixels 兜底，杜绝 pushToViewers(...,null) 让新观察者缺帧
-                        // （docs/architecture.md §5.5）。
-                        if (!changed && diff.lastFrames[i] == null) diff.lastFrames[i] = pixels;
                         pushToViewers(viewers, mapId, diff.lastFrames[i]);
                     }
                 } catch (Exception e) {

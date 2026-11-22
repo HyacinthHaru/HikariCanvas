@@ -1,8 +1,12 @@
 package ac.haru.hikaricanvas.render;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.awt.geom.Path2D;
 import java.awt.geom.PathIterator;
+import java.awt.geom.Rectangle2D;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -27,7 +31,7 @@ class PathParserTest {
 
     private static final double EPS = 1e-6;
 
-    private static int countSegments(java.awt.geom.Path2D path) {
+    private static int countSegments(Path2D path) {
         int n = 0;
         double[] buf = new double[6];
         PathIterator it = path.getPathIterator(null);
@@ -362,7 +366,7 @@ class PathParserTest {
         assertEquals(0.0, r.endY(), 0.001);
         assertTrue(r.hasSegments());
         // path bbox 高度 ≈ 50（半圆）
-        java.awt.geom.Rectangle2D bbox = r.path().getBounds2D();
+        Rectangle2D bbox = r.path().getBounds2D();
         assertEquals(0.0, bbox.getMinX(), 0.1);
         assertEquals(100.0, bbox.getMaxX(), 0.5);
         // 半径 50，高度应 ≈ 50
@@ -394,8 +398,8 @@ class PathParserTest {
         // sweep=1：方向 1；sweep=0：方向 2，bbox 中心相反
         PathParser.Result r1 = PathParser.parse("M 0 0 A 50 50 0 0 1 100 0");
         PathParser.Result r0 = PathParser.parse("M 0 0 A 50 50 0 0 0 100 0");
-        java.awt.geom.Rectangle2D b1 = r1.path().getBounds2D();
-        java.awt.geom.Rectangle2D b0 = r0.path().getBounds2D();
+        Rectangle2D b1 = r1.path().getBounds2D();
+        Rectangle2D b0 = r0.path().getBounds2D();
         // 两条弧 minY / maxY 应相反符号
         // sweep=1：弧在 y > 0 区域 → maxY > 40
         // sweep=0：弧在 y < 0 区域 → minY < -40
@@ -410,8 +414,8 @@ class PathParserTest {
         // 用更小的角度区分：M 0 0 A 50 50 0 [large] 1 50 50（90° vs 270°）
         PathParser.Result rSmall = PathParser.parse("M 0 0 A 50 50 0 0 1 50 50");
         PathParser.Result rLarge = PathParser.parse("M 0 0 A 50 50 0 1 1 50 50");
-        java.awt.geom.Rectangle2D bSmall = rSmall.path().getBounds2D();
-        java.awt.geom.Rectangle2D bLarge = rLarge.path().getBounds2D();
+        Rectangle2D bSmall = rSmall.path().getBounds2D();
+        Rectangle2D bLarge = rLarge.path().getBounds2D();
         // 大弧 bbox 应更大（围绕半径 50 的圆）
         assertTrue(bLarge.getWidth() > bSmall.getWidth() + 10
                         || bLarge.getHeight() > bSmall.getHeight() + 10,
@@ -443,7 +447,7 @@ class PathParserTest {
         String d = "M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512z";
         PathParser.Result r = PathParser.parse(d);
         assertTrue(r.hasSegments(), "FA circle path should produce segments");
-        java.awt.geom.Rectangle2D bbox = r.path().getBounds2D();
+        Rectangle2D bbox = r.path().getBounds2D();
         // 圆心 (256, 256)，半径 256 → bbox 应该 ≈ 0..512 × 0..512
         assertTrue(Math.abs(bbox.getMinX() - 0) < 2.0, "minX ≈ 0, got " + bbox.getMinX());
         assertTrue(Math.abs(bbox.getMaxX() - 512) < 2.0, "maxX ≈ 512, got " + bbox.getMaxX());
@@ -457,7 +461,7 @@ class PathParserTest {
         String d = "M47.6 300.4L228.3 469.1c7.5 7 17.4 10.9 27.7 10.9s20.2-3.9 27.7-10.9L464.4 300.4c30.4-28.3 47.6-68 47.6-109.5v-5.8c0-69.9-50.5-129.5-119.4-141C347.8 41 314.1 53.4 288 75.9c-7.2 6.2-13.8 13-19.8 20.5l-12.2 15.4-12.2-15.4c-6-7.5-12.6-14.4-19.8-20.5C197.9 53.4 164.2 41 119.4 30C50.5 41.5 0 101.1 0 171v5.8c0 41.5 17.2 81.2 47.6 109.5z";
         PathParser.Result r = PathParser.parse(d);
         assertTrue(r.hasSegments(), "FA heart path should produce segments");
-        java.awt.geom.Rectangle2D bbox = r.path().getBounds2D();
+        Rectangle2D bbox = r.path().getBounds2D();
         // viewBox 是 0 0 512 512；heart 大致占据中心区域，宽接近 512
         assertTrue(bbox.getWidth() > 400, "heart width ≈ 512, got " + bbox.getWidth());
         assertTrue(bbox.getHeight() > 400, "heart height ≈ 470, got " + bbox.getHeight());
@@ -471,7 +475,7 @@ class PathParserTest {
         String d = "M316.9 18C311.6 7 300.4 0 288.1 0s-23.4 7-28.8 18L195 150.3 51.4 171.5c-12 1.8-22 10.2-25.7 21.7s-.7 24.2 7.9 32.7L137.8 328 113.2 474.7c-2 12 3 24.2 12.9 31.3s23 8 33.8 2.3l128.3-68.5 128.3 68.5c10.8 5.7 23.9 4.9 33.8-2.3s14.9-19.3 12.9-31.3L438.5 328 552.3 225.9c8.6-8.5 11.7-21.2 7.9-32.7s-13.7-19.9-25.7-21.7L391 150.3 316.9 18z";
         PathParser.Result r = PathParser.parse(d);
         assertTrue(r.hasSegments(), "FA star path should produce segments");
-        java.awt.geom.Rectangle2D bbox = r.path().getBounds2D();
+        Rectangle2D bbox = r.path().getBounds2D();
         // star viewBox 0 0 576 512；bbox 大致填满
         assertTrue(bbox.getWidth() > 500, "star width ≈ 576, got " + bbox.getWidth());
         assertTrue(bbox.getHeight() > 400, "star height ≈ 508, got " + bbox.getHeight());
@@ -484,8 +488,8 @@ class PathParserTest {
      * 「尽力而为、绝不抛异常」，且 CanvasCompositor 没有 per-element try-catch，一个畸形 svg
      * 就能让整墙 rasterize 失败。按 SVG 规范停在出错点，返回空 path。
      */
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(strings = {
+    @ParameterizedTest
+    @ValueSource(strings = {
             "L10 10",
             "l10 10 L20 20",
             "H50",

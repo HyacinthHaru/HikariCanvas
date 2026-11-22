@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { svgToElements } from '../svgToElements';
 
-describe('svgToElements viewBox mapping (Task 15)', () => {
+describe('svgToElements viewBox mapping', () => {
     it('viewBox="0 0 10 10" + targetWidth=100 targetHeight=100 → element coordinates scaled 10×', () => {
         // rect at x=1,y=1 width=2 height=3 in viewBox space
         // after 10× scale: x=10, y=10, w=20, h=30

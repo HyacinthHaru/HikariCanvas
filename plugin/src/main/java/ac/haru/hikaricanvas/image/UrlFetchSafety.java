@@ -27,10 +27,6 @@ public final class UrlFetchSafety {
         OK,
         INVALID_URL,
         UNSUPPORTED_SCHEME,
-        /** 保留 enum 项防外部 caller 模式匹配崩；新代码不再返回此 reason。 */
-        UNRESOLVABLE_HOST,
-        /** 保留 enum 项防外部 caller 模式匹配崩；新代码不再返回此 reason。 */
-        PRIVATE_ADDRESS,
     }
 
     public record CheckResult(Reason reason, String detail) {

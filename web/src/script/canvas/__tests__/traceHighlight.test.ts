@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P5-H：试跑高亮纯逻辑单测（buildHighlightFrames 逐帧累积 + stepper 步进时序 +
+ * 试跑高亮纯逻辑单测（buildHighlightFrames 逐帧累积 + stepper 步进时序 +
  * resultColorVar 配色 + 清理）。组件挂定时器的部分抽成纯函数 / 注入定时器测，无需真 timer。
  */
 import { describe, it, expect, vi } from 'vitest';
@@ -18,7 +18,7 @@ function step(blockId: string, result: ScriptTraceStep['result'], detail?: strin
     return { blockId, kind: 'action', result, ...(detail ? { detail } : {}) };
 }
 
-describe('resultColorVar — 结果态配色（K-UI-8）', () => {
+describe('resultColorVar — 结果态配色', () => {
     it('ok=green / skipped=overlay0 / blocked=yellow / error=red', () => {
         expect(resultColorVar('ok')).toBe('--ctp-green');
         expect(resultColorVar('skipped')).toBe('--ctp-overlay0');

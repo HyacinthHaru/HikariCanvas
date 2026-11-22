@@ -10,6 +10,9 @@ import ac.haru.hikaricanvas.state.EditSession;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import static ac.haru.hikaricanvas.web.WebHelpers.asPayloadMap;
 import static ac.haru.hikaricanvas.web.WebHelpers.mapOrEmpty;
@@ -30,14 +33,13 @@ import static ac.haru.hikaricanvas.web.WebHelpers.stringOrNull;
  */
 final class BrushOpDispatcher {
 
-    private static final java.util.logging.Logger LOG =
-            java.util.logging.Logger.getLogger(BrushOpDispatcher.class.getName());
+    private static final Logger LOG = Logger.getLogger(BrushOpDispatcher.class.getName());
 
     /**
      * 走 {@link SessionRateLimiter} 的 brush op。只有 {@code brush.end} —— 其余三个是
      * 「高频低消息」，限流会卡笔触流畅性（见类注释与 {@code docs/security.md §3.3}）。
      */
-    static final java.util.Set<String> RATE_LIMITED_OPS = java.util.Set.of("brush.end");
+    static final Set<String> RATE_LIMITED_OPS = Set.of("brush.end");
 
     /** 该 op 是否计入会话输入限流窗口。 */
     static boolean isRateLimited(String op) {
@@ -104,7 +106,7 @@ final class BrushOpDispatcher {
             // 兜底：op 解析期任意运行期异常不应静默逃逸（逃到 Javalin 只会被 onError 记一行，
             // 客户端永远等不到 ack，界面看着像"点了没反应"）。与 EditOpDispatcher 同款分支。
             // 错误脱敏：细节只进服务器日志，客户端拿固定 code。
-            LOG.log(java.util.logging.Level.WARNING, "brush op failed: op=" + in.op(), re);
+            LOG.log(Level.WARNING, "brush op failed: op=" + in.op(), re);
             ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR", "op processing failed"));
             return;
         }

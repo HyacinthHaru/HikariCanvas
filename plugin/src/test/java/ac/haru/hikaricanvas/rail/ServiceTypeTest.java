@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
- * 0.4.4 P1：ServiceType enum / i18n 单测。
+ * {@link ServiceType} 枚举解析与双语显示名单测。
  */
 class ServiceTypeTest {
 

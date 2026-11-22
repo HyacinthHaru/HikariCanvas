@@ -29,22 +29,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P5-D：端到端 smoke test。
- *
- * <p>不引 Bukkit 主线程 / MockBukkit，把所有子系统串起来（VariableStore + Interpolator +
- * APIImpl + PluginCleanupListener + PushRateLimiter）跑完整路径：</p>
- *
- * <ul>
- *   <li>{@link #endToEnd_userVariable_crud}：create + setValue + interpolate + delete</li>
- *   <li>{@link #endToEnd_pluginNamespacePushAndInterpolate}：API registerNamespace + setVariable + interpolate</li>
- *   <li>{@link #endToEnd_pluginDisableTriggersCleanup}：listener handleDisable → unregister + 30s purge</li>
- *   <li>{@link #endToEnd_rateLimitDropTail}：PushRateLimiter 5/s 超额 → 第 6 false</li>
- *   <li>{@link #endToEnd_aclSpoofDenied}：pluginA register / pluginB set 同 ns → PluginNamespaceException</li>
- *   <li>{@link #endToEnd_fallbackChain}：4 档 fallback 全测</li>
- * </ul>
- *
- * <p>本测试串完整路径但<b>不</b>覆盖个体模块的所有 case——那是单测的责任。smoke test 防回归
- * 的是"装配链"——某个 phase 改了 API 形态后所有调用方依然 compile + run 通畅。</p>
+ * 变量子系统端到端装配链冒烟单测（VariableStore + Interpolator + APIImpl +
+ * PluginCleanupListener + PushRateLimiter）。
  */
 class EndToEndSmokeTest {
 
@@ -54,12 +40,6 @@ class EndToEndSmokeTest {
     private VariableProviderDaemon daemon;
     private PluginNamespaceRegistry registry;
     private HikariCanvasAPIImpl api;
-    /**
-     * 0.4.10 P3-4：null jdbi 的 AuditLog —— record() 内 jdbi.useHandle 抛 NPE 被 catch，
-     * 走 log fallback（fire-and-forget），不破坏 checkAcl 拒绝路径。spoof 拒绝时执行
-     * recordNamespaceDenied → auditLog.record 这条新增路径，验证装配链通畅。
-     * （捕获 + 断言事件内容需给 AuditLog 加接口 —— storage/ 域，见 deferred。）
-     */
     private AuditLog auditLog;
 
     @BeforeEach
@@ -152,11 +132,8 @@ class EndToEndSmokeTest {
 
     @Test
     void endToEnd_rateLimitDropTail() {
-        // 5/s per-plugin（全局 5/s 同步限制让 per-plugin 也能完整触发）+ no circuit break.
-        // 0.4.8 hotfix: 用 fake clock 锁定同窗口避免 CI 慢机器跨 1s 边界 flaky；
-        // 之前用 System.currentTimeMillis，CI Linux 上 5 次 setVariable 可能跨过秒，
-        // 第 6 次进入下一窗口 → 不 drop → assertEquals fail。
-        long fixedNow = 1_700_000_000_000L; // 任意固定毫秒（windowSec = 1_700_000_000）
+        // 用固定虚拟时钟锁定同一 1s 窗口
+        long fixedNow = 1_700_000_000_000L;
         PushRateLimiter limiter = new PushRateLimiter(
                 new PushRateLimiter.Config(5, 1_000_000, 0L),
                 () -> fixedNow);
@@ -183,8 +160,6 @@ class EndToEndSmokeTest {
         Plugin pluginB = fakePlugin("PluginB");
         api.registerNamespace(pluginA, "alpha", new NamespaceInfo("A", "PluginA", "1.0"));
 
-        // 0.4.10 P3-4：spoof 被拒走 recordNamespaceDenied → auditLog.record（null jdbi 下 fallback
-        // 到 log，不抛）—— 验证该路径不破坏拒绝语义。事件内容断言需 AuditLog 接口化（storage 域）。
         PluginNamespaceException ex = assertThrows(PluginNamespaceException.class,
                 () -> api.setVariable(pluginB, "alpha", "k", "v", null));
         assertEquals(PluginNamespaceException.Code.NAMESPACE_ACL_DENIED, ex.code());

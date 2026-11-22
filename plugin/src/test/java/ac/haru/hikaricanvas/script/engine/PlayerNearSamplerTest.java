@@ -12,9 +12,9 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * 0.7.0-P3 B2 / K14：{@link PlayerNearSampler} 状态机单测（进入沿 / 离开重置 / 跨世界 /
+ * {@link PlayerNearSampler} 状态机单测（进入沿 / 离开重置 / 跨世界 /
  * 边界 / 离线清理 / 多玩家多规则独立 / 跳帧计数 + 热更）。全 fake：玩家位置源 + near
- * 规则源 + 记录型 sink，零 Bukkit。Router 全链贯通见 {@link EndToEndScriptTest} ⑨。
+ * 规则源 + 记录型 sink，零 Bukkit。Router 全链贯通见 {@link EndToEndScriptTest}。
  */
 class PlayerNearSamplerTest {
 
@@ -246,7 +246,7 @@ class PlayerNearSamplerTest {
         assertEquals("w-2:r-2@Steve", fired.get(1));
     }
 
-    // ── 0.7.1：离开沿（leaveEdge=true / playerLeaveRange） ──────────────
+    // ── 离开沿（leaveEdge=true / playerLeaveRange） ──────────────────────
 
     /** ⑪ 离开沿：先在范围内（不触发，离开沿不管进入），走出范围 → 触发一次。 */
     @Test

@@ -4,11 +4,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 
 /**
- * 填充描述。承载几何元素的 fill 字段，统一替代原本的纯色 hex 字符串。
+ * 填充描述联合类型（纯色 / 线性渐变 / 径向渐变）。
  *
  * <p><b>三种形态：</b></p>
  * <ul>
- *   <li>{@link SolidFill} — 纯色（v1 兼容形态）</li>
+ *   <li>{@link SolidFill} — 纯色</li>
  *   <li>{@link LinearGradient} — 线性渐变（角度 + N 停止点）</li>
  *   <li>{@link RadialGradient} — 径向渐变（中心 + 半径 + N 停止点）</li>
  * </ul>
@@ -17,9 +17,10 @@ import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
  * 字符串形态 {@code "#RRGGBB"} 等价于 {@code {"type":"solid","color":"#RRGGBB"}}，
  * 保留旧工程文件向后兼容。序列化统一输出 object 形态。</p>
  *
- * <p>仅 Rect / Circle / Shape / Path 元素的 {@code fill} 字段使用 {@code Fill}。
- * TextElement.color / IconElement.tint / Stroke.color / Effects.*.color 仍是
- * {@code String}（v1 不支持文本与描边的渐变）。</p>
+ * <p>{@link RectElement} / {@link CircleElement} / {@link ShapeElement} / {@link PathElement} /
+ * {@link BrushStrokeElement} / {@link IconElement} 的 {@code fill} 字段以及
+ * {@link ProjectState.Canvas#background()} 均使用 {@code Fill}；
+ * {@code TextElement.color} / {@code Stroke.color} / {@code Effects} 内颜色仍为 {@code String}。</p>
  */
 @JsonDeserialize(using = FillDeserializer.class)
 public sealed interface Fill permits SolidFill, LinearGradient, RadialGradient {

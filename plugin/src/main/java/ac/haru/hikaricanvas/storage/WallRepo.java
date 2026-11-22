@@ -6,12 +6,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import ac.haru.hikaricanvas.session.WallKey;
 import ac.haru.hikaricanvas.state.ProjectState;
 import org.bukkit.block.BlockFace;
+import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 
+import java.math.BigDecimal;
 import java.security.SecureRandom;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -243,9 +249,8 @@ public final class WallRepo {
      * 全部 wall。<b>单行坏数据跳过而非毒化整个查询</b>。
      *
      * <p>{@link #mapRow} 只对 {@code owner_uuid} 做单行降级；{@code project_json} 反序列化失败
-     * 或 {@code facing} 非法（{@code BlockFace.valueOf}）会抛 SQLException 冒泡到这里，原实现
-     * 一律 catch 后返回空表 —— 启动期 {@code WallRestorer} 因此恢复 0 面墙且不报错。改为逐行
-     * try/catch 跳过坏行并计数。</p>
+     * 或 {@code facing} 非法（{@code BlockFace.valueOf}）会抛 SQLException 冒泡到这里，因此逐行
+     * try/catch 跳过坏行并计数，避免单行损坏导致启动期 {@code WallRestorer} 跳过全部墙。</p>
      *
      * <p><b>泄漏检测不要用本方法</b>：它仍可能返回残缺集合，而 {@code MapPool.detectLeaks} 把
      * 传入集合当 live wall 全集，缺谁就释放谁的地图。那条路径走
@@ -297,12 +302,12 @@ public final class WallRepo {
      * 与 {@code data-model.md §7.1}「walls 表<b>无对应行</b>才视为泄漏」的语义一致：
      * 读失败 ≠ 表无行。</p>
      */
-    public Optional<java.util.Set<String>> loadAllWallIds() {
+    public Optional<Set<String>> loadAllWallIds() {
         try {
             List<String> ids = jdbi.withHandle(h -> h.createQuery("SELECT wall_id FROM walls")
                     .map((rs, ctx) -> rs.getString("wall_id"))
                     .list());
-            java.util.Set<String> out = new java.util.HashSet<>(ids.size() * 2);
+            Set<String> out = new HashSet<>(ids.size() * 2);
             for (String id : ids) {
                 if (id != null) out.add(id);
             }
@@ -314,12 +319,12 @@ public final class WallRepo {
     }
 
     /**
-     * 事务感知 {@link #loadAll()}。在调用方已持有的 {@link org.jdbi.v3.core.Handle} 上跑同一查询，
+     * 事务感知 {@link #loadAll()}。在调用方已持有的 {@link Handle} 上跑同一查询，
      * 让"读 walls 引用 → 删孤儿图"在单一 IMMEDIATE 写事务的一致视图内原子完成（图片上传 LRU
      * evict 路径用）。与 {@link #loadAll()} 不同：本方法**不吞异常**——它跑在外层事务内，
      * 异常应让外层事务回滚（宁可拒上传也不在不可信引用集下误删在用图）。
      */
-    public List<Wall> loadAllOn(org.jdbi.v3.core.Handle h) {
+    public List<Wall> loadAllOn(Handle h) {
         return h.createQuery("SELECT * FROM walls")
                 .map((rs, ctx) -> mapRow(rs))
                 .list();
@@ -445,16 +450,12 @@ public final class WallRepo {
     }
 
     /**
-     * 删除 walls 行。<b>返回是否真的删掉了</b>——调用方必须看返回值。
+     * 删除 walls 行。<b>返回是否真的删掉了</b>——调用方必须检查返回值。
      *
-     * <p>原实现是 void + catch 后只写日志：删除因 {@code SQLITE_BUSY}（默认 5s
-     * busy_timeout 内没抢到写锁，比如同时在跑图片配额清理的大事务）失败时，调用方
-     * {@code SessionManager.deleteWall} 照样返回成功。而它是<b>先</b>把这面墙的地图释放回
-     * FREE 池、<b>后</b>删行的，于是留下最坏的组合：walls 行还在（玩家看得到、还能 open），
-     * 它引用的地图却已被下一面墙借走 → 两面墙共用一张地图互相覆盖像素。
-     *
-     * <p>返回 false 时调用方应当把地图释放回滚掉（或者干脆把顺序改成先删行、成功了再放地图），
-     * 至少要让玩家知道这次删除没成功，而不是报个成功了事。</p>
+     * <p>遵循地图归还总不变式（已被存在的 {@code walls} 行认领的地图绝不能回 FREE）：
+     * {@code SessionManager.deleteWall} <b>先</b>调用本方法删除 {@code walls} 行，确认返回
+     * {@code true} <b>后</b>才调用 {@code MapPool.releaseWall} 归还地图与拆除展示框。若因
+     * {@code SQLITE_BUSY} 等原因返回 {@code false}，删除流程立即中止，地图保留 RESERVED 状态。</p>
      *
      * @return {@code true} = 确实删掉了行；{@code false} = 数据库写失败，或者本来就没有这一行
      */
@@ -470,8 +471,7 @@ public final class WallRepo {
             return true;
         } catch (Exception e) {
             log.log(Level.SEVERE, "delete failed: " + wallId
-                    + " — the wall row is still there while its maps may already have been"
-                    + " returned to the pool; caller must not report success", e);
+                    + " — aborting wall deletion so its maps remain reserved", e);
             return false;
         }
     }
@@ -507,7 +507,7 @@ public final class WallRepo {
      * 检测 project_json 是否为 v1 形态（含顶层 {@code elements} 但无 {@code layers}）。
      *
      * <p>极简空工程（既无 elements 也无 layers）返 {@code false} —— 它会被
-     * {@link ProjectState.JsonCreator} 当作 "新工程" 包装，本质上也是 v1 → v2
+     * {@link ProjectState} 的 {@code @JsonCreator} 当作 "新工程" 包装，本质上也是 v1 → v2
      * 升级，但行为等价于一次 noop migrate，无需特殊处理。</p>
      */
     public static boolean isV1Form(ObjectMapper mapper, String json) {
@@ -545,7 +545,7 @@ public final class WallRepo {
      *
      * <p>容错策略：单行 migrate 失败 → log warn + 该行 protocol_version 保留为 1，
      * 启动继续。下次启动会再尝试；运行期 {@code /canvas open <id>} 也会再次走 lazy 路径
-     * （因 {@link ProjectState.JsonCreator} 永远兼容 v1）。</p>
+     * （因 {@link ProjectState} 的 {@code @JsonCreator} 永远兼容 v1）。</p>
      *
      * @return 统计：scanned = 命中行数；migrated = 成功写回数；failed = 出错跳过数
      */
@@ -590,7 +590,7 @@ public final class WallRepo {
 
     // ---------- 私有 ----------
 
-    private Wall mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+    private Wall mapRow(ResultSet rs) throws SQLException {
         try {
             ProjectState ps = mapper.readValue(rs.getString("project_json"), ProjectState.class);
             WallKey key = new WallKey(
@@ -625,13 +625,13 @@ public final class WallRepo {
                     rs.getLong("created_at"),
                     rs.getLong("updated_at"));
         } catch (Exception e) {
-            throw new java.sql.SQLException("mapRow failed", e);
+            throw new SQLException("mapRow failed", e);
         }
     }
 
     /**
      * robust nullable-long 读取。SQLite JDBC 对 {@code INTEGER} 列的
-     * {@code getObject} 不保证返回 {@link Long}（可能是 {@link Integer} / {@link java.math.BigDecimal}
+     * {@code getObject} 不保证返回 {@link Long}（可能是 {@link Integer} / {@link BigDecimal}
      * 等），直接 {@code (Long)} 强转会 ClassCastException。统一走 {@link Number#longValue()}。
      */
     private static Long toLong(Object o) {

@@ -16,19 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P4-O：{@link PluginNamespaceRegistry} 单测。
- *
- * <p>覆盖：</p>
- * <ul>
- *   <li>正常注册 + owns 判定</li>
- *   <li>同 plugin 幂等注册（覆盖 info / 保留 registeredAt）</li>
- *   <li>跨 plugin 注册同 namespace 抛 {@link NamespaceConflictException}</li>
- *   <li>保留 namespace（user / system / papi / scoreboard / schedule）抛
- *       {@link IllegalArgumentException}</li>
- *   <li>非法格式抛 {@link IllegalArgumentException}</li>
- *   <li>unregisterAllByPlugin 返回正确列表 + 清空注册</li>
- *   <li>get 返 Optional 行为</li>
- * </ul>
+ * {@link PluginNamespaceRegistry} 命名空间所有权注册、冲突检测与卸载清理单测。
  */
 class PluginNamespaceRegistryTest {
 

@@ -9,7 +9,7 @@ import org.jetbrains.annotations.Nullable;
  * 内部倒排索引，跨 wall 信息泄露给浏览器既无用又是元数据嗅探面。其他字段透传。</p>
  *
  * <p>序列化形态见 {@code docs/protocol.md §3.2}（ready payload 的 {@code variables} 数组）
- * 与 {@code docs/dynamic-data.md §3.3}（HTTP 端点 P3 共用）。</p>
+ * 与 {@code docs/dynamic-data.md §3.3}（HTTP 端点共用）。</p>
  *
  * <p>{@code userglobal/*} namespace 额外携带 {@link #ownerUuid} / {@link #ownerName}
  * 字段（其他 namespace 为 null），让前端 Picker / Panel 区分"我的全局 / 其他全局"。
@@ -28,8 +28,7 @@ public record VariableDto(
         @Nullable String ownerName
 ) {
     /**
-     * 从内存 {@link Variable} 投影（无 owner 注入路径，保留向后兼容）；故意丢掉
-     * {@link Variable#referencedByWalls}。
+     * 从内存 {@link Variable} 投影（不含 owner 注入）；剥离 {@link Variable#referencedByWalls}。
      */
     public static VariableDto from(Variable v) {
         return new VariableDto(

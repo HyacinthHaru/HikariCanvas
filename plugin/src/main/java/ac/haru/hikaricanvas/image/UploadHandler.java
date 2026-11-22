@@ -1,70 +1,72 @@
 package ac.haru.hikaricanvas.image;
 
-import io.javalin.http.Context;
-import io.javalin.http.UploadedFile;
 import ac.haru.hikaricanvas.HikariCanvasConfig;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
 import ac.haru.hikaricanvas.state.ImageElement;
+import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.storage.AuditLog;
 import ac.haru.hikaricanvas.storage.ImageUploadDao;
 import ac.haru.hikaricanvas.storage.WallRepo;
+import io.javalin.http.Context;
+import io.javalin.http.UploadedFile;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.java.JavaPlugin;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.core.transaction.TransactionIsolationLevel;
 
 import javax.imageio.ImageIO;
-import javax.imageio.ImageReader;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.List;
+import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.SocketTimeoutException;
+import java.net.URI;
+import java.net.URL;
+import java.net.UnknownHostException;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.locks.ReentrantLock;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * {@code POST /api/upload} 处理器：multipart + 6 层校验栈 + 配额。
+ * {@code POST /api/upload} 与 {@code POST /api/upload/url} 处理器：6 层校验栈 + 三层配额。
  *
  * <h2>校验栈</h2>
  * <ol>
  *   <li>auth + permission：{@code X-Canvas-Session} header（或 query / multipart 字段）定位
- *       {@link Session} → 校验会话级 IP 绑定（{@code security.md §2.5}，HTTP 面与 WS 同一条
- *       {@code bindOrCheckIp}）→ 一次主线程 hop 查 {@code canvas.upload} 与
- *       {@code canvas.upload.bypass-limit}（{@code Bukkit.getPlayer} / {@code hasPermission}
- *       都是主线程专用 API，见 {@code resolveUploadPerms}）</li>
- *   <li>大小：{@code file.getSize()} ≤ {@code max-size-kb}</li>
- *   <li>Content-Type：客户端声明 MIME ∈ {@code allowed-mime}</li>
- *   <li>magic bytes：实际文件前 16 字节匹配 MIME（防止 Content-Type 假冒）</li>
- *   <li>ImageIO 隔离解码：单独 {@link ExecutorService} + 200ms 超时（防压缩炸弹 / 死循环）</li>
- *   <li>bbox sanity：{@code 0 < w/h ≤ 8192}；边长 > {@code downscale-max-edge} 自动 bilinear 缩</li>
- *   <li>配额三层：{@link ImageQuotaService#check}；磁盘超限 → LRU evict 后重试一次</li>
+ *       {@link Session} → 校验会话级 IP 绑定（{@code docs/security.md §2.5}）→ 一次主线程 hop 查
+ *       {@code canvas.upload} 与 {@code canvas.upload.bypass-limit}</li>
+ *   <li>大小：字节数 ≤ {@code max-size-kb}</li>
+ *   <li>Content-Type：客户端声明 MIME ∈ {@code allowed-mime} 且本 JVM 安装了对应 reader</li>
+ *   <li>magic bytes：实际文件前 12 字节匹配 MIME（{@link ImageDecodeGuard#detectMagicMime}）</li>
+ *   <li>ImageIO 隔离解码：{@link ImageDecodeGuard#decodeWithTimeout} 200ms 协作式超时 + 8192px 头部预检</li>
+ *   <li>bbox sanity：{@code 0 < w/h ≤ 8192}；边长 &gt; {@code downscale-max-edge} 自动 bilinear 缩放</li>
+ *   <li>配额三层：{@link ImageQuotaService#tryReserveQuotaOn}；磁盘超限 → 事务内 LRU evict</li>
  * </ol>
  *
  * <h2>响应</h2>
  * 成功：{@code 200 + { source, width, height, bytes }}（{@code source} 是 sha256[:16] hash）。
- * 失败：{@code 400 / 401 / 403 / 413 / 429} + JSON {@code { error, message }}。
+ * 失败：{@code 400 / 401 / 403 / 413 / 415 / 429} + JSON {@code { error, message }}。
  */
 public final class UploadHandler {
-
-    private static final long IMAGEIO_TIMEOUT_MS = 200L;
-    private static final int BBOX_MAX_EDGE = 8192;
 
     private final Logger log;
     private final ImageStorage storage;
@@ -74,8 +76,8 @@ public final class UploadHandler {
     private final HikariCanvasConfig.ImageConfig cfg;
     private final SessionManager sessionManager;
     private final WallRepo wallRepo;
-    private final ac.haru.hikaricanvas.storage.AuditLog auditLog;
-    private final ExecutorService decoderPool;
+    private final AuditLog auditLog;
+    private final ImageDecodeGuard decodeGuard;
 
     public UploadHandler(Logger log,
                          ImageStorage storage, ImageQuotaService quota,
@@ -83,7 +85,7 @@ public final class UploadHandler {
                          HikariCanvasConfig.ImageConfig cfg,
                          SessionManager sessionManager,
                          WallRepo wallRepo,
-                         ac.haru.hikaricanvas.storage.AuditLog auditLog) {
+                         AuditLog auditLog) {
         this.log = log;
         this.storage = storage;
         this.quota = quota;
@@ -93,30 +95,16 @@ public final class UploadHandler {
         this.sessionManager = sessionManager;
         this.wallRepo = wallRepo;
         this.auditLog = auditLog;
-        // 有界 ThreadPool 防 unbounded fork。线程上限 2 + 队列 8 =
-        // 同时最多 10 个上传等待，超出立即 AbortPolicy 拒（不堆积内存）。
-        this.decoderPool = new java.util.concurrent.ThreadPoolExecutor(
-                2, 2,
-                0L, java.util.concurrent.TimeUnit.MILLISECONDS,
-                new java.util.concurrent.ArrayBlockingQueue<>(8),
-                new ThreadFactory() {
-                    private final AtomicInteger n = new AtomicInteger();
-                    @Override public Thread newThread(Runnable r) {
-                        Thread t = new Thread(r, "hikari-image-decoder-" + n.incrementAndGet());
-                        t.setDaemon(true);
-                        return t;
-                    }
-                },
-                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+        this.decodeGuard = new ImageDecodeGuard();
     }
 
     public void shutdown() {
-        decoderPool.shutdownNow();
+        decodeGuard.shutdown();
     }
 
     // ---------- POST /api/upload/url ----------
 
-    /** URL fetch 上限：10 MB。超出立即 abort。 */
+    /** URL fetch 硬上限：10 MB。超出立即 abort。 */
     private static final long URL_MAX_BYTES = 10L * 1024 * 1024;
     /** URL fetch 总超时：30s。建立连接 + 读取合计。 */
     private static final int URL_TIMEOUT_MS = 30_000;
@@ -126,20 +114,19 @@ public final class UploadHandler {
      *
      * <p>流程：</p>
      * <ol>
-     *   <li>sessionId query 校验（同 file upload）</li>
-     *   <li>{@link UrlFetchSafety#check}：SSRF 防御 + http(s) 白名单</li>
-     *   <li>HttpURLConnection GET，30s 连接 / 读取超时，10 MB 上限</li>
-     *   <li>下载到内存 bytes，走 file upload 同款 6 层校验栈</li>
+     *   <li>sessionId + 会话级 IP 绑定校验（同 file upload）</li>
+     *   <li>{@link UrlFetchSafety#check}：绝对 URI 语法 + {@code http(s)} scheme 白名单校验
+     *       （不做 DNS / 内网地址黑名单过滤，外联风险由服主承担，见 {@link UrlFetchSafety}）</li>
+     *   <li>{@link HttpURLConnection} GET，30s 连接 / 读取超时，禁跟随重定向，10 MB 流式读取上限</li>
+     *   <li>校验 {@code images.max-size-kb} 后进入与文件上传共享的校验与落盘管线</li>
      * </ol>
      */
-    public void handleUrlUpload(io.javalin.http.Context ctx) {
-        // 1. sessionId（header 优先，其次 query / form）
+    public void handleUrlUpload(Context ctx) {
         String sessionId = sessionIdOf(ctx, true);
-        ac.haru.hikaricanvas.session.Session session = authSession(ctx, sessionId);
+        Session session = authSession(ctx, sessionId);
         if (session == null) return;
         UUID uploader = session.playerUuid();
         String uploaderName = session.playerName();
-        // 权限解析必须一次主线程 hop（同 handleUpload）。离线玩家拿不到 live Player → 拒。
         UploadPerms perms = resolveUploadPerms(session);
         if (!perms.canUpload()) {
             auditUploadRejected(uploader, uploaderName, sessionId, "missing_permission_url");
@@ -171,7 +158,7 @@ public final class UploadHandler {
             return;
         }
 
-        // 3. SSRF 防御
+        // 3. URI 语法与 http(s) scheme 校验
         UrlFetchSafety.CheckResult safety = UrlFetchSafety.check(url);
         if (!safety.ok()) {
             // 错误脱敏 — 不 echo URL 内容（可能含 token / id）
@@ -187,20 +174,17 @@ public final class UploadHandler {
         // 4. fetch（带超时 + 字节上限）
         byte[] bytes;
         String declaredMime;
-        // conn 提到 try 外，统一在 finally 里 disconnect()，避免任一拒绝分支
-        // （非 2xx / mime / size / stream 超限）early-return 时 keep-alive 套接字滞留。
-        java.net.HttpURLConnection conn = null;
+        HttpURLConnection conn = null;
         try {
-            java.net.URL netUrl = java.net.URI.create(url).toURL();
-            conn = (java.net.HttpURLConnection) netUrl.openConnection();
+            URL netUrl = URI.create(url).toURL();
+            conn = (HttpURLConnection) netUrl.openConnection();
             conn.setConnectTimeout(URL_TIMEOUT_MS / 2);
             conn.setReadTimeout(URL_TIMEOUT_MS / 2);
-            conn.setInstanceFollowRedirects(false);  // 重定向需手工处理 — v1 不跟随防 SSRF
+            conn.setInstanceFollowRedirects(false);
             conn.setRequestProperty("User-Agent", "HikariCanvas");
             conn.setRequestProperty("Accept", "image/png,image/jpeg,image/webp");
             int sc = conn.getResponseCode();
             if (sc < 200 || sc >= 300) {
-                // 非 2xx 时 drain + close error stream，避免半态连接占用
                 drainAndCloseQuietly(conn.getErrorStream());
                 auditUploadRejected(uploader, uploaderName, sessionId, "url_http_" + sc);
                 reject(ctx, 502, "UPLOAD_REJECTED", "remote returned status " + sc);
@@ -237,7 +221,7 @@ public final class UploadHandler {
                 return;
             }
             try (InputStream is = conn.getInputStream();
-                 java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream(
+                 ByteArrayOutputStream baos = new ByteArrayOutputStream(
                          advertised > 0 ? Math.min((int) advertised, 1 << 20) : 1 << 16)) {
                 byte[] buf = new byte[8192];
                 int n;
@@ -254,7 +238,7 @@ public final class UploadHandler {
                 }
                 bytes = baos.toByteArray();
             }
-        } catch (java.net.SocketTimeoutException ste) {
+        } catch (SocketTimeoutException ste) {
             auditUploadRejected(uploader, uploaderName, sessionId, "url_timeout");
             reject(ctx, 504, "UPLOAD_REJECTED", "remote fetch timeout");
             return;
@@ -272,20 +256,6 @@ public final class UploadHandler {
             return;
         }
 
-        // 5. 走相同 6 层校验栈（提取为 helper 复用 file path）
-        processDownloadedBytes(ctx, bytes, declaredMime, uploader, uploaderName, sessionId, bypass);
-    }
-
-    /**
-     * 从 file upload 与 URL upload 共用的"已得到 bytes 之后"的处理路径。
-     * 校验 magic bytes / decode / EXIF / bbox / quota / 持久化。
-     */
-    private void processDownloadedBytes(io.javalin.http.Context ctx, byte[] bytes,
-                                         String declaredMime, UUID uploader,
-                                         String uploaderName, String sessionId, boolean bypass) {
-        // URL 路径补 max-size-kb 配额（与 file 路径 handleUpload 等价）。原先 URL 路径
-        // 仅受硬编码 URL_MAX_BYTES=10MB 约束，绕过了可配的 images.max-size-kb（默认 2MB），
-        // 使该配置维度对 URL 入口形同虚设、与 file 路径行为不一致。这里以 cfg.maxSizeKb 为准。
         long maxBytes = (long) cfg.maxSizeKb() * 1024L;
         if (maxBytes > 0 && bytes.length > maxBytes) {
             auditUploadRejected(uploader, uploaderName, sessionId, "size_exceeded_url");
@@ -294,161 +264,22 @@ public final class UploadHandler {
             return;
         }
 
-        // magic bytes
-        String actualMime = detectMagicMime(bytes);
-        if (actualMime == null || !actualMime.equals(declaredMime)) {
-            auditUploadRejected(uploader, uploaderName, sessionId, "magic_mismatch_url");
-            reject(ctx, 400, "UPLOAD_REJECTED",
-                    "magic bytes mismatch: declared=" + declaredMime + " actual=" + actualMime);
-            return;
-        }
-
-        // decode
-        BufferedImage decoded;
-        try {
-            decoded = decodeWithTimeout(bytes);
-        } catch (TimeoutException te) {
-            auditUploadRejected(uploader, uploaderName, sessionId, "decode_timeout_url");
-            reject(ctx, 400, "UPLOAD_REJECTED", "decode timeout");
-            return;
-        } catch (Exception e) {
-            log.log(Level.WARNING, "url image decode failed", e);
-            auditUploadRejected(uploader, uploaderName, sessionId, "decode_failed_url");
-            reject(ctx, 400, "UPLOAD_REJECTED", "failed to decode image");
-            return;
-        }
-        if (decoded == null) {
-            auditUploadRejected(uploader, uploaderName, sessionId, "decode_null_url");
-            reject(ctx, 400, "UPLOAD_REJECTED", "ImageIO returned null");
-            return;
-        }
-        if ("image/jpeg".equals(actualMime)) {
-            decoded = ExifOrientation.autoRotateJpeg(bytes, decoded, log);
-        }
-
-        int w = decoded.getWidth();
-        int h = decoded.getHeight();
-        if (w <= 0 || h <= 0 || w > BBOX_MAX_EDGE || h > BBOX_MAX_EDGE) {
-            auditUploadRejected(uploader, uploaderName, sessionId, "bbox_out_of_range_url");
-            reject(ctx, 400, "UPLOAD_REJECTED", "bbox out of range: " + w + "x" + h);
-            return;
-        }
-        int maxEdge = cfg.downscaleMaxEdge();
-        if (Math.max(w, h) > maxEdge) {
-            decoded = downscale(decoded, maxEdge);
-        }
-
-        byte[] pngBytes;
-        try {
-            pngBytes = ImageStorage.encodePng(decoded);
-        } catch (IOException e) {
-            log.log(Level.WARNING, "url PNG encode failed", e);
-            auditUploadRejected(uploader, uploaderName, sessionId, "encode_failed_url");
-            reject(ctx, 500, "INTERNAL_ERROR", "encode failed");
-            return;
-        }
-        String hash = ImageStorage.sha256Hex16(pngBytes);
-        long pngLen = pngBytes.length;
-
-        ReentrantLock hashLock = storage.writeLockFor(hash);
-        hashLock.lock();
-        ImageQuotaService.QuotaResult qr;
-        ImageUploadDao.Row finalRow;
-        try {
-            final ImageUploadDao.Row candidate = new ImageUploadDao.Row(
-                    hash, pngLen, decoded.getWidth(), decoded.getHeight(),
-                    "image/png", uploader,
-                    System.currentTimeMillis(), System.currentTimeMillis());
-            try {
-                qr = jdbi.inTransaction(TransactionIsolationLevel.SERIALIZABLE, handle -> {
-                    handle.execute("UPDATE image_uploads SET last_used_at = last_used_at "
-                            + "WHERE hash = '__locker__'");
-                    // referenced 集合在持写锁的事务内 sweep（同一一致视图），消除跨 hash 误删竞态。
-                    // 惰性求值：只有真要 LRU evict 时才付这次全表扫描的代价。
-                    Optional<ImageUploadDao.Row> existing = imageDao.findByHashOn(handle, hash);
-                    return quota.tryReserveQuotaOn(handle, uploader, candidate, pngLen,
-                            existing.isPresent(),
-                            () -> storage.collectReferencedHashesOn(handle, wallRepo), bypass);
-                });
-            } catch (Exception e) {
-                log.log(Level.WARNING, "url upload transaction failed", e);
-                auditUploadRejected(uploader, uploaderName, sessionId, "persist_failed_url");
-                reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
-                return;
-            }
-            if (qr instanceof ImageQuotaService.DeniedPerDay dp) {
-                auditUploadRejected(uploader, uploaderName, sessionId, "quota_per_day_url");
-                reject(ctx, 429, "QUOTA_EXCEEDED",
-                        "per-day upload limit reached: " + dp.currentCount() + "/" + dp.limit());
-                return;
-            }
-            if (qr instanceof ImageQuotaService.DeniedDiskAfterLru dd) {
-                // 事务已 COMMIT，victim 的 DB 行已经删了——文件必须跟着删，否则物理孤儿
-                // 会让 sumBytes 永久低估真实磁盘占用。
-                for (String evictedHash : dd.evictedHashes()) {
-                    storage.deleteFileOnly(evictedHash);
-                }
-                auditUploadRejected(uploader, uploaderName, sessionId, "quota_disk_url");
-                reject(ctx, 413, "QUOTA_EXCEEDED_DISK",
-                        "disk full; cannot free " + dd.bytesShort() + " more bytes");
-                return;
-            }
-            ImageQuotaService.Reserved ok = (ImageQuotaService.Reserved) qr;
-            if (ok.inserted()) {
-                try {
-                    storage.writeFileAtomic(hash, pngBytes);
-                } catch (IOException e) {
-                    log.log(Level.WARNING, "url writeFileAtomic failed; rolling back " + hash, e);
-                    try {
-                        jdbi.useTransaction(TransactionIsolationLevel.SERIALIZABLE,
-                                handle -> imageDao.deleteOn(handle, hash));
-                    } catch (Exception rb) {
-                        log.log(Level.SEVERE,
-                                "compensation DELETE failed; orphan DB row: " + hash, rb);
-                    }
-                    // 本次写盘失败回滚了新行，但事务内已 DELETE 的 LRU victim 行不会
-                    // 随之复活（外层 transaction 已 commit）。必须把它们的磁盘文件一并删掉，
-                    // 否则物理孤儿（DB 行没了、文件还在）令 sumBytes 与真实磁盘永久漂移。
-                    for (String evictedHash : ok.evictedHashes()) {
-                        storage.deleteFileOnly(evictedHash);
-                    }
-                    auditUploadRejected(uploader, uploaderName, sessionId, "write_failed_url");
-                    reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
-                    return;
-                }
-            }
-            for (String evictedHash : ok.evictedHashes()) {
-                storage.deleteFileOnly(evictedHash);
-            }
-            finalRow = candidate;
-        } finally {
-            hashLock.unlock();
-        }
-
-        auditUploadOk(uploader, uploaderName, sessionId, hash, pngLen);
-        ctx.status(200).json(Map.of(
-                "source", hash,
-                "width", finalRow.width(),
-                "height", finalRow.height(),
-                "bytes", pngLen));
+        // 5. 走共享的解码、缩放、配额与持久化管线
+        ingestUploadedBytes(ctx, bytes, declaredMime, uploader, uploaderName, sessionId, bypass, "_url");
     }
 
     // ---------- POST /api/upload ----------
 
     /**
-     * 处理上传请求。返回 ack JSON。所有错误路径统一通过 {@link #reject} 写状态 + JSON。
+     * 处理 multipart 文件上传请求。所有错误路径统一通过 {@link #reject} 写状态 + JSON。
      */
     public void handleUpload(Context ctx) {
-        // 1. sessionId + permission
+        // 1. sessionId + permission（离线玩家拿不到 live Player，fail-closed 拒绝）
         String sessionId = sessionIdOf(ctx, true);
         Session session = authSession(ctx, sessionId);
         if (session == null) return;
         UUID uploader = session.playerUuid();
         String uploaderName = session.playerName();
-        // 权限检查 fail-closed。player == null（玩家离线）时不能 fail-open 放行 ——
-        // 与 WallOpDispatcher.wall.alias / SessionManager.open 同款离线处理：拿不到 live
-        // Player 即视为无 canvas.upload 权限直接拒（base 权限 fail-closed，bypass 权限同样
-        // 只在 live Player 上判定）。解析走一次主线程 hop，见 resolveUploadPerms。
         UploadPerms perms = resolveUploadPerms(session);
         if (!perms.canUpload()) {
             auditUploadRejected(uploader, uploaderName, sessionId, "missing_permission");
@@ -483,7 +314,6 @@ public final class UploadHandler {
         String declaredMime = file.contentType() == null
                 ? "application/octet-stream"
                 : file.contentType().toLowerCase(Locale.ROOT).trim();
-        // 去除 ;charset=... 等参数
         int sep = declaredMime.indexOf(';');
         if (sep > 0) declaredMime = declaredMime.substring(0, sep).trim();
         if (!cfg.allowedMime().contains(declaredMime)) {
@@ -498,60 +328,64 @@ public final class UploadHandler {
             return;
         }
 
-        // 4. 读 bytes + magic bytes 校验
+        // 4. 读 bytes
         byte[] bytes;
         try (InputStream in = file.content()) {
             bytes = in.readAllBytes();
         } catch (IOException e) {
-            // 不 echo IOException message（可能含 multipart tmp 路径 / 文件名 / 内部状态）
             log.log(Level.WARNING, "upload read failed", e);
             auditUploadRejected(uploader, uploaderName, sessionId, "read_failed");
             reject(ctx, 400, "UPLOAD_REJECTED", "failed to read uploaded file");
             return;
         }
-        String actualMime = detectMagicMime(bytes);
+
+        // 5. 走共享的解码、缩放、配额与持久化管线
+        ingestUploadedBytes(ctx, bytes, declaredMime, uploader, uploaderName, sessionId, bypass, "");
+    }
+
+    /**
+     * 文件上传与 URL 上传共用的后半段管线：magic bytes 校验 → 隔离解码 → JPEG EXIF 旋转 →
+     * bbox 校验与 bilinear 缩放 → PNG 编码与 sha256[:16] 计算 → 单事务配额/LRU 预留 → 原子写盘。
+     */
+    private void ingestUploadedBytes(Context ctx, byte[] bytes, String declaredMime,
+                                     UUID uploader, String uploaderName,
+                                     String sessionId, boolean bypass, String auditSuffix) {
+        String actualMime = ImageDecodeGuard.detectMagicMime(bytes);
         if (actualMime == null || !actualMime.equals(declaredMime)) {
-            auditUploadRejected(uploader, uploaderName, sessionId, "magic_mismatch");
+            auditUploadRejected(uploader, uploaderName, sessionId, "magic_mismatch" + auditSuffix);
             reject(ctx, 400, "UPLOAD_REJECTED",
-                    "magic bytes mismatch: declared=" + declaredMime
-                            + " actual=" + actualMime);
+                    "magic bytes mismatch: declared=" + declaredMime + " actual=" + actualMime);
             return;
         }
 
-        // 5. ImageIO 隔离解码（200ms 超时）
         BufferedImage decoded;
         try {
-            decoded = decodeWithTimeout(bytes);
+            decoded = decodeGuard.decodeWithTimeout(bytes);
         } catch (TimeoutException te) {
-            auditUploadRejected(uploader, uploaderName, sessionId, "decode_timeout");
+            auditUploadRejected(uploader, uploaderName, sessionId, "decode_timeout" + auditSuffix);
             reject(ctx, 400, "UPLOAD_REJECTED", "decode timeout (possible decompression bomb)");
             return;
         } catch (Exception e) {
-            // 不 echo ImageIO 异常 message（可能含 codec 内部细节、tmp 路径）
             log.log(Level.WARNING, "image decode failed", e);
-            auditUploadRejected(uploader, uploaderName, sessionId, "decode_failed");
+            auditUploadRejected(uploader, uploaderName, sessionId, "decode_failed" + auditSuffix);
             reject(ctx, 400, "UPLOAD_REJECTED", "failed to decode image");
             return;
         }
         if (decoded == null) {
-            auditUploadRejected(uploader, uploaderName, sessionId, "decode_null");
+            auditUploadRejected(uploader, uploaderName, sessionId, "decode_null" + auditSuffix);
             reject(ctx, 400, "UPLOAD_REJECTED", "ImageIO returned null (unsupported format?)");
             return;
         }
 
-        // 5.5. JPEG EXIF Orientation 自动旋转（手机照片常见 90°/180°/270°）。
-        // PNG / WebP 无 EXIF；ExifOrientation.read 走 JPEG magic 快速路径 fail-soft return 1。
         if ("image/jpeg".equals(actualMime)) {
             decoded = ExifOrientation.autoRotateJpeg(bytes, decoded, log);
         }
 
-        // 6. bbox sanity + downscale
         int w = decoded.getWidth();
         int h = decoded.getHeight();
-        if (w <= 0 || h <= 0 || w > BBOX_MAX_EDGE || h > BBOX_MAX_EDGE) {
-            auditUploadRejected(uploader, uploaderName, sessionId, "bbox_out_of_range");
-            reject(ctx, 400, "UPLOAD_REJECTED",
-                    "bbox out of range: " + w + "x" + h);
+        if (w <= 0 || h <= 0 || w > ImageDecodeGuard.BBOX_MAX_EDGE || h > ImageDecodeGuard.BBOX_MAX_EDGE) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "bbox_out_of_range" + auditSuffix);
+            reject(ctx, 400, "UPLOAD_REJECTED", "bbox out of range: " + w + "x" + h);
             return;
         }
         int maxEdge = cfg.downscaleMaxEdge();
@@ -559,21 +393,18 @@ public final class UploadHandler {
             decoded = downscale(decoded, maxEdge);
         }
 
-        // 7. PNG 编码 + hash 计算（事务外做 CPU 重活）
         byte[] pngBytes;
         try {
             pngBytes = ImageStorage.encodePng(decoded);
         } catch (IOException e) {
             log.log(Level.WARNING, "PNG encode failed", e);
-            auditUploadRejected(uploader, uploaderName, sessionId, "encode_failed");
+            auditUploadRejected(uploader, uploaderName, sessionId, "encode_failed" + auditSuffix);
             reject(ctx, 500, "INTERNAL_ERROR", "encode failed");
             return;
         }
         String hash = ImageStorage.sha256Hex16(pngBytes);
         long pngLen = pngBytes.length;
 
-        // 8. 单事务 quota+evict+insert（IMMEDIATE 写锁）。
-        //    per-hash lock 串行化同 hash 并发，避免两个 caller 同时写同一文件。
         ReentrantLock hashLock = storage.writeLockFor(hash);
         hashLock.lock();
         ImageQuotaService.QuotaResult qr;
@@ -586,56 +417,45 @@ public final class UploadHandler {
                     System.currentTimeMillis(), System.currentTimeMillis());
             try {
                 qr = jdbi.inTransaction(TransactionIsolationLevel.SERIALIZABLE, handle -> {
-                    // SQLite 下用 SAVEPOINT-style 不行；这里通过先发一条 no-op
-                    // UPDATE（影响 0 行也持锁）把事务从 DEFERRED 升级到 RESERVED 写锁，
-                    // 避免并发两个 caller 都先 read 然后争 write 撞 SQLITE_BUSY。
-                    // 配合 Database busy_timeout=5000 兜底。
+                    // 先发一条 no-op UPDATE 将事务升级到 RESERVED 写锁，避免并发先读后写撞 SQLITE_BUSY。
                     handle.execute("UPDATE image_uploads SET last_used_at = last_used_at "
                             + "WHERE hash = '__locker__'");
-                    // referenced 集合在持写锁的事务内 sweep（同一一致视图），事务内用作
-                    // LRU 排除集——消除"事务外快照、事务内 evict"的跨 hash 误删竞态。
-                    // 惰性求值：只有真要 LRU evict 时才付这次全表扫描的代价。
-                    // 重新查（持写锁内）以决定走 exists vs new
+                    // referenced 集合在持写锁的事务内惰性求值，仅在需要 LRU evict 时扫 walls 表。
                     Optional<ImageUploadDao.Row> existing = imageDao.findByHashOn(handle, hash);
-                    boolean alreadyExists = existing.isPresent();
                     return quota.tryReserveQuotaOn(
                             handle, uploader, candidate, pngLen,
-                            alreadyExists,
+                            existing.isPresent(),
                             () -> storage.collectReferencedHashesOn(handle, wallRepo), bypass);
                 });
             } catch (Exception e) {
                 log.log(Level.WARNING, "upload transaction failed", e);
-                auditUploadRejected(uploader, uploaderName, sessionId, "persist_failed");
+                auditUploadRejected(uploader, uploaderName, sessionId, "persist_failed" + auditSuffix);
                 reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
                 return;
             }
 
             if (qr instanceof ImageQuotaService.DeniedPerDay dp) {
-                auditUploadRejected(uploader, uploaderName, sessionId, "quota_per_day");
+                auditUploadRejected(uploader, uploaderName, sessionId, "quota_per_day" + auditSuffix);
                 reject(ctx, 429, "QUOTA_EXCEEDED",
                         "per-day upload limit reached: " + dp.currentCount() + "/" + dp.limit());
                 return;
             }
             if (qr instanceof ImageQuotaService.DeniedDiskAfterLru dd) {
-                // 事务已 COMMIT，victim 的 DB 行已经删了——文件必须跟着删，否则物理孤儿
-                // 会让 sumBytes 永久低估真实磁盘占用。
+                // 事务已 COMMIT，已 DELETE 的 LRU victim 行对应的磁盘文件须一并删除。
                 for (String evictedHash : dd.evictedHashes()) {
                     storage.deleteFileOnly(evictedHash);
                 }
-                auditUploadRejected(uploader, uploaderName, sessionId, "quota_disk");
+                auditUploadRejected(uploader, uploaderName, sessionId, "quota_disk" + auditSuffix);
                 reject(ctx, 413, "QUOTA_EXCEEDED_DISK",
                         "disk full; cannot free " + dd.bytesShort() + " more bytes");
                 return;
             }
 
             ImageQuotaService.Reserved ok = (ImageQuotaService.Reserved) qr;
-
-            // 事务 commit 后：(a) 写新文件 atomic move；(b) 清 LRU 已 evict 的孤儿文件
             if (ok.inserted()) {
                 try {
                     storage.writeFileAtomic(hash, pngBytes);
                 } catch (IOException e) {
-                    // 补偿：回滚 DB 行，避免孤儿 DB row
                     log.log(Level.WARNING, "writeFileAtomic failed; rolling back DB row " + hash, e);
                     try {
                         jdbi.useTransaction(TransactionIsolationLevel.SERIALIZABLE, handle ->
@@ -644,19 +464,14 @@ public final class UploadHandler {
                         log.log(Level.SEVERE,
                                 "compensation DELETE failed; orphan DB row may remain: " + hash, rb);
                     }
-                    // 事务已 commit，LRU victim 行已不在 DB；写新文件失败只回滚了新行，
-                    // 那些 victim 的磁盘文件必须同步删除，否则物理孤儿令磁盘配额永久漂移
-                    // （sumBytes 看不到该行，但文件占着空间），且回归到"误删他人
-                    // 图记录 + 文件残留"双重不一致。
                     for (String evictedHash : ok.evictedHashes()) {
                         storage.deleteFileOnly(evictedHash);
                     }
-                    auditUploadRejected(uploader, uploaderName, sessionId, "write_failed");
+                    auditUploadRejected(uploader, uploaderName, sessionId, "write_failed" + auditSuffix);
                     reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
                     return;
                 }
             }
-            // best-effort 删除 LRU 已 evict 的磁盘文件（DB row 已在事务内 DELETE）
             for (String evictedHash : ok.evictedHashes()) {
                 storage.deleteFileOnly(evictedHash);
             }
@@ -665,9 +480,7 @@ public final class UploadHandler {
             hashLock.unlock();
         }
 
-        // 上传成功 audit（磁盘写敏感操作，必须留痕便于审计 / 异常排查）
         auditUploadOk(uploader, uploaderName, sessionId, hash, pngLen);
-
         ctx.status(200).json(Map.of(
                 "source", hash,
                 "width", finalRow.width(),
@@ -678,16 +491,11 @@ public final class UploadHandler {
     // ---------- GET /api/upload/{source} ----------
 
     /**
-     * 要求 query string {@code ?sessionId=<id>} 校验，sessionId 只有通过 WS auth 才能拿到
-     * （契约见 {@code docs/protocol.md §3}），等价于 AUTHED 状态。修复任何人拿到 hash 即可
-     * 下载图片的 IDOR 风险（{@code docs/security.md §4.5}）。
-     *
-     * <p>失败统一 401 + {@code {"code":"UNAUTHORIZED"}}，不 echo 内部异常。</p>
+     * 图片读取端点：要求会话鉴权与会话级 IP 绑定（契约见 {@code docs/protocol.md §3} /
+     * {@code docs/security.md §4.5}）。失败统一返回 {@code 401 + {"code":"UNAUTHORIZED"}}。
      */
     public void handleDownload(Context ctx) {
-        // sessionId 校验 + 会话级 IP 绑定。等价于 POST /api/upload 的鉴权方式。
-        // 这个端点被 <img src> 直接使用，没法带 header，所以 sessionId 只能留在 query string；
-        // IP 绑定就是它的补偿措施——反代 access log 里捡到一条 URL 也换不到别处能用的凭据。
+        // 该端点被 <img src> 直接使用，sessionId 位于 query string，靠会话级 IP 绑定防止日志泄漏重放。
         String sessionId = sessionIdOf(ctx, false);
         Session downloadSession = sessionId == null || sessionId.isBlank()
                 ? null : sessionManager.byId(sessionId);
@@ -697,7 +505,6 @@ public final class UploadHandler {
         }
 
         String hash = ctx.pathParam("source");
-        // 去掉可选 .png 后缀
         if (hash.endsWith(".png")) hash = hash.substring(0, hash.length() - 4);
         if (!hash.matches("^[0-9a-f]{16}$")) {
             ctx.status(400);
@@ -709,8 +516,6 @@ public final class UploadHandler {
             return;
         }
         ctx.contentType("image/png");
-        // hash 唯一对应内容 → 强缓存 + immutable；但因 URL 带 sessionId 鉴权，
-        // 改 private（防止被中间代理跨用户缓存命中泄露内容）
         ctx.header("Cache-Control", "private, max-age=31536000, immutable");
         ctx.result(bytes);
     }
@@ -721,8 +526,6 @@ public final class UploadHandler {
         String sessionId = sessionIdOf(ctx, false);
         Session session = authSession(ctx, sessionId);
         if (session == null) return;
-        // 上报真实 per-wall image 元素数（按 source 去重，依 data-model.md §2），
-        // 取代原硬编码 0——让 perWall.used 对前端有意义（之前恒报 0/limit）。
         ImageQuotaService.Summary s =
                 quota.remaining(session.playerUuid(), countImageElementsInWall(session.projectState()));
         ctx.status(200).json(Map.of(
@@ -736,13 +539,8 @@ public final class UploadHandler {
     // ---------- helpers ----------
 
     /**
-     * HTTP 面的会话鉴权：解析 {@link Session} + 校验会话级 IP 绑定。失败时已写响应。
-     *
-     * <p><b>为什么 HTTP 面也要比对 IP</b>：{@code security.md §2.5} 的会话级 IP 绑定（方案 B）
-     * 此前只在 WS auth 那条路生效，HTTP 端点只查 {@code byId}。而 sessionId 会随 URL 落进
-     * 反代 access log、浏览器历史与 Referer —— 捡到一条日志行的人就能从任意 IP 调
-     * {@code /api/upload}、{@code /api/upload/url}（代服务器发外联请求）、{@code /api/upload/{'{'}source{'}'}}。
-     * 补上比对之后，泄漏的 sessionId 换不到别处能用的凭据。</p>
+     * HTTP 面的会话鉴权：解析 {@link Session} + 校验会话级 IP 绑定（{@code docs/security.md §2.5}），
+     * 防止通过日志或 Referer 泄漏的 sessionId 从其他 IP 重放。失败时已写响应。
      */
     private Session authSession(Context ctx, String sessionId) {
         Session s = resolveSession(ctx, sessionId);
@@ -754,7 +552,7 @@ public final class UploadHandler {
         return s;
     }
 
-    /** 通过 multipart {@code sessionId} 字段（或 query 参数）解析 {@link Session}；失败时已写响应。 */
+    /** 通过 header / query / form 参数解析 {@link Session}；失败时已写响应。 */
     private Session resolveSession(Context ctx, String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             reject(ctx, 401, "AUTH_FAILED", "missing sessionId");
@@ -769,13 +567,11 @@ public final class UploadHandler {
     }
 
     /**
-     * 会话级 IP 绑定比对（{@code security.md §2.5}）。与 WS 侧同一个
-     * {@code SessionManager.bindOrCheckIp}，取值口径也对齐：只认 socket peer 地址、
-     * 不解析 {@code X-Forwarded-For}（防伪造头）。
+     * 会话级 IP 绑定比对（{@code docs/security.md §2.5}）。与 WS 侧共用
+     * {@link SessionManager#bindOrCheckIp}，只认 socket peer 地址、不解析 {@code X-Forwarded-For}。
      *
-     * <p>回环地址互认是有意的：同一台机器上浏览器可能给 WS 和 HTTP 各挑一个地址族
-     * （{@code ::1} vs {@code 127.0.0.1}），不互认会把本机部署的合法上传全拒掉。
-     * 这不放宽安全性——两条连接本来就都来自本机。</p>
+     * <p>本机回环地址族互认（{@code ::1} 与 {@code 127.0.0.1}），避免同机部署时浏览器为 WS 与 HTTP
+     * 选用不同回环地址族而被误拒。</p>
      */
     private boolean sessionIpMatches(Context ctx, String sessionId, Session session) {
         String presented = httpClientIp(ctx);
@@ -794,10 +590,6 @@ public final class UploadHandler {
     /**
      * 取 sessionId：{@code X-Canvas-Session} header 优先，其次 query，最后 form。
      *
-     * <p>header 优先是为了让新版前端能把它从 URL 里挪走（query string 会落进反代
-     * access log / 浏览器历史 / Referer）。query 与 form 保留：
-     * {@code GET /api/upload/{'{'}source{'}'}} 被 {@code <img src>} 直接使用，带不了 header。</p>
-     *
      * @param allowForm 是否读 multipart / form 字段（只对 POST 端点开，GET 上读 form 会去解析 body）
      */
     static String sessionIdOf(Context ctx, boolean allowForm) {
@@ -810,7 +602,7 @@ public final class UploadHandler {
             String form = ctx.formParam("sessionId");
             return form == null || form.isBlank() ? null : form.trim();
         } catch (RuntimeException e) {
-            return null;   // 无 body / 非 form 编码
+            return null;
         }
     }
 
@@ -825,10 +617,7 @@ public final class UploadHandler {
 
     /**
      * 把各种写法的地址串归一：去 {@code /} 前缀、去 IPv6 方括号、去 IPv4 的 {@code :port}，
-     * 再过一遍 {@link java.net.InetAddress#getHostAddress()}。
-     *
-     * <p>不归一的话，{@code ::1} 与 {@code 0:0:0:0:0:0:0:1} 是同一个地址却比不相等，
-     * 合法请求会被当成凭据泄漏拒掉。输入是地址字面量，{@code getByName} 不会触发 DNS 查询。</p>
+     * 再过一遍 {@link InetAddress#getHostAddress()}。输入是地址字面量，不会触发 DNS 查询。
      */
     static String normalizeIp(String raw) {
         if (raw == null || raw.isBlank()) return "unknown";
@@ -842,8 +631,8 @@ public final class UploadHandler {
         }
         if (s.isBlank()) return "unknown";
         try {
-            return java.net.InetAddress.getByName(s).getHostAddress();
-        } catch (java.net.UnknownHostException | SecurityException e) {
+            return InetAddress.getByName(s).getHostAddress();
+        } catch (UnknownHostException | SecurityException e) {
             return s;
         }
     }
@@ -856,8 +645,8 @@ public final class UploadHandler {
     private static boolean isLoopback(String ip) {
         if (ip == null || ip.isBlank()) return false;
         try {
-            return java.net.InetAddress.getByName(normalizeIp(ip)).isLoopbackAddress();
-        } catch (java.net.UnknownHostException | SecurityException e) {
+            return InetAddress.getByName(normalizeIp(ip)).isLoopbackAddress();
+        } catch (UnknownHostException | SecurityException e) {
             return false;
         }
     }
@@ -882,44 +671,29 @@ public final class UploadHandler {
     private static final UploadPerms DENY_ALL = new UploadPerms(false, false, false);
 
     /** 承载本类的插件实例（{@code JavaPlugin.getProvidingPlugin}）；测试环境解析不出来 → null。 */
-    private volatile org.bukkit.plugin.Plugin owningPlugin;
+    private volatile Plugin owningPlugin;
     private volatile boolean owningPluginResolved;
 
     /**
-     * 一次主线程 hop 解析上传相关权限。
-     *
-     * <p><b>为什么不能在 Jetty 线程直接调</b>：{@code Bukkit.getPlayer(UUID)} 读的是主线程
-     * join/quit 时 mutate 的在线表，{@code Player.hasPermission} 读的是 LuckPerms 在主线程
-     * 重算的 {@code PermissibleBase}，两者都是主线程专用 API。裸调可能读到不一致的在线表
-     * （误拒合法上传）或半构造的权限对象（在权限重算窗口误判 bypass-limit = 绕过配额），
-     * Paper 上异步遍历在线表还可能抛 CME 让请求 500。WS 的 7 个 op dispatcher 早已统一走
-     * 主线程 hop，这几个 HTTP 端点是漏网的。</p>
-     *
-     * <p>超时 / scheduler 关停 / 中断 / callable 异常一律 <b>fail-closed</b>（全 false）——
-     * 这里既判 base 节点也判提权节点，宁可误拒不可误放。离线同样判 false，与本类原有
-     * 「拿不到 live Player 即视为无权限」的语义完全一致。</p>
+     * 解析上传相关权限：控制台会话直接授予（见 {@code docs/security.md §5.0}），
+     * 玩家会话走 {@link #resolveUploadPerms(UUID)} 主线程 hop。
      */
-    /**
-     * 解析上传相关权限。
-     *
-     * <p>本类在 {@code image} 包，够不到 package-private 的 {@code web.MainThreadPerms}，
-     * 所以自带一份主线程 hop。<b>但主体判定不在这里重复实现</b>——只问
-     * {@link ac.haru.hikaricanvas.session.Session#isConsole()}，判定逻辑的唯一定义仍在
-     * {@code session.Principal}。</p>
-     */
-    private UploadPerms resolveUploadPerms(ac.haru.hikaricanvas.session.Session session) {
+    private UploadPerms resolveUploadPerms(Session session) {
         if (session == null) return DENY_ALL;
-        // 控制台主体全授予：走下面的 Bukkit.getPlayer 路径对它恒 null → 恒 DENY_ALL，
-        // 结果就是控制台开出来的编辑器传不了图（见 docs/security.md §5.0）。
         if (session.isConsole()) return new UploadPerms(true, true, true);
         return resolveUploadPerms(session.playerUuid());
     }
 
+    /**
+     * 一次主线程 hop 解析玩家上传权限。
+     *
+     * <p>{@code Bukkit.getPlayer(UUID)} 与 {@code Player.hasPermission} 均为主线程专用 API；
+     * 超时 / 调度器关停 / 中断 / 异常或玩家离线一律 <b>fail-closed</b>（返回 {@link #DENY_ALL}）。</p>
+     */
     private UploadPerms resolveUploadPerms(UUID uploader) {
         if (uploader == null) return DENY_ALL;
-        org.bukkit.plugin.Plugin plugin = owningPlugin();
+        Plugin plugin = owningPlugin();
         if (plugin == null) {
-            // 测试装配（无插件上下文 / 单线程）：直接调，无主线程纪律问题
             return resolveUploadPermsDirect(uploader);
         }
         try {
@@ -929,9 +703,8 @@ public final class UploadHandler {
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             return DENY_ALL;
-        } catch (TimeoutException | java.util.concurrent.ExecutionException
-                | java.util.concurrent.RejectedExecutionException
-                | java.util.concurrent.CancellationException e) {
+        } catch (TimeoutException | ExecutionException
+                | RejectedExecutionException | CancellationException e) {
             log.warning("main-thread permission check failed for upload; denying: " + e);
             return DENY_ALL;
         }
@@ -947,15 +720,13 @@ public final class UploadHandler {
     }
 
     /**
-     * 懒解析承载本类的插件实例。用 {@code JavaPlugin.getProvidingPlugin} 而不是构造器注入，
-     * 是为了不动装配层签名；解析不出来（纯 JVM 单测，类不由 PluginClassLoader 加载）时返 null，
-     * 此时退回直接调用，与 {@code web.MainThreadPerms} 的 {@code plugin == null} 分支同义。
+     * 懒解析承载本类的插件实例。纯 JVM 单测环境返回 {@code null}，退回直接调用。
      */
-    private org.bukkit.plugin.Plugin owningPlugin() {
+    private Plugin owningPlugin() {
         if (owningPluginResolved) return owningPlugin;
-        org.bukkit.plugin.Plugin p = null;
+        Plugin p = null;
         try {
-            p = org.bukkit.plugin.java.JavaPlugin.getProvidingPlugin(UploadHandler.class);
+            p = JavaPlugin.getProvidingPlugin(UploadHandler.class);
         } catch (RuntimeException | LinkageError ignored) {
             // 非插件类加载器（单测）/ Bukkit 未初始化
         }
@@ -970,12 +741,11 @@ public final class UploadHandler {
 
     /**
      * 统计某 wall（{@link Session#projectState()}）全 layer 内 image 元素数，按 {@code source}
-     * 去重（data-model.md §2：同 hash 内容寻址，重复引用同一图只算一份）。null source 不计。
-     * projectState 为 null（尚未 confirm / SELECTING 态）时返 0。
+     * 去重（{@code docs/data-model.md §2}：同 hash 内容寻址，重复引用同一图只算一份）。
      */
-    private int countImageElementsInWall(ac.haru.hikaricanvas.state.ProjectState ps) {
+    private int countImageElementsInWall(ProjectState ps) {
         if (ps == null || ps.layers() == null) return 0;
-        Set<String> sources = new java.util.HashSet<>();
+        Set<String> sources = new HashSet<>();
         for (var layer : ps.layers()) {
             for (var el : layer.elements()) {
                 if (el instanceof ImageElement im && im.source() != null) {
@@ -987,14 +757,14 @@ public final class UploadHandler {
     }
 
     /**
-     * drain + close 一个 stream（典型为 {@link java.net.HttpURLConnection#getErrorStream()}）。
-     * 非 2xx 响应时不读完 error body 会让底层 keep-alive 连接半态滞留 / 无法复用。null / 异常均吞掉。
+     * drain + close 一个 stream（典型为 {@link HttpURLConnection#getErrorStream()}），
+     * 避免非 2xx 响应时底层 keep-alive 连接滞留。
      */
     private static void drainAndCloseQuietly(InputStream is) {
         if (is == null) return;
         try (is) {
             byte[] buf = new byte[4096];
-            int cap = 64 * 1024;  // 最多 drain 64KB error body，足够触发连接复用
+            int cap = 64 * 1024;
             int read = 0;
             int n;
             while (read < cap && (n = is.read(buf)) > 0) {
@@ -1005,14 +775,10 @@ public final class UploadHandler {
         }
     }
 
-    /**
-     * 成功上传 audit。包含 uploader / sha16 / bytes；不含文件名 / 内容
-     * （内容寻址下 hash 已足够定位文件）。
-     */
     private void auditUploadOk(UUID uploader, String uploaderName, String sessionId,
                                String sha16, long bytes) {
         if (auditLog == null) return;
-        java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+        LinkedHashMap<String, Object> details = new LinkedHashMap<>();
         details.put("sha16", sha16);
         details.put("bytes", bytes);
         auditLog.record("IMAGE_UPLOAD_OK",
@@ -1020,14 +786,10 @@ public final class UploadHandler {
                 uploaderName, sessionId, null, details);
     }
 
-    /**
-     * 拒绝上传 audit。{@code reason} 是稳定枚举 token（如 {@code size_exceeded}），
-     * 不含文件名 / 路径 / IO 异常 message 等敏感数据。
-     */
     private void auditUploadRejected(UUID uploader, String uploaderName, String sessionId,
                                      String reason) {
         if (auditLog == null) return;
-        java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+        LinkedHashMap<String, Object> details = new LinkedHashMap<>();
         details.put("reason", reason);
         auditLog.record("IMAGE_UPLOAD_REJECTED",
                 uploader == null ? null : uploader.toString(),
@@ -1035,91 +797,8 @@ public final class UploadHandler {
     }
 
     /**
-     * 在 {@link #decoderPool} 上单独线程解码，限时 {@value #IMAGEIO_TIMEOUT_MS} ms；
-     * 超时抛 {@link TimeoutException}。
-     *
-     * <p>{@code Future.cancel(true)} 只发 {@link Thread#interrupt()}，对 ImageIO 内部
-     * 解码循环大多无效（卡死线程永久占满 core=max=2 的有界池）。改走 {@link ImageReader} 的
-     * <b>协作式中止</b>：解码任务把 reader 发布到共享引用，超时时主线程跨线程调
-     * {@link ImageReader#abort()}（ImageIO 唯一可靠的中止点），interrupt 仅作 backstop。</p>
-     */
-    private BufferedImage decodeWithTimeout(byte[] bytes) throws Exception {
-        final java.util.concurrent.atomic.AtomicReference<ImageReader> readerRef =
-                new java.util.concurrent.atomic.AtomicReference<>();
-        Future<BufferedImage> fut;
-        try {
-            fut = decoderPool.submit((Callable<BufferedImage>) () ->
-                    decodeCooperative(bytes, readerRef));
-        } catch (java.util.concurrent.RejectedExecutionException ree) {
-            // bounded pool 满 → AbortPolicy 抛 → 转成上层可识别的 IOException。
-            throw new IOException("upload decoder busy; retry later", ree);
-        }
-        try {
-            return fut.get(IMAGEIO_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-        } catch (TimeoutException te) {
-            // 先协作式 abort（reader.abort 跨线程合法，是 ImageIO 实际会响应的中止），
-            // 再 interrupt 作 backstop。abort 让卡死的解码循环尽快退出归还有界池线程。
-            ImageReader r = readerRef.get();
-            if (r != null) {
-                try {
-                    r.abort();
-                } catch (RuntimeException ignored) {
-                    // best-effort
-                }
-            }
-            fut.cancel(true);
-            throw te;
-        }
-    }
-
-    /**
-     * 用 {@link ImageReader} 解码并把 reader 发布到 {@code readerRef}，使外部（超时）线程
-     * 能调 {@link ImageReader#abort()} 协作式中止。失败 / 无 reader 时 fail-soft 退回
-     * {@link ImageIO#read(InputStream)}（仍受外层 Future 超时 + interrupt 约束）。
-     */
-    private static BufferedImage decodeCooperative(
-            byte[] bytes,
-            java.util.concurrent.atomic.AtomicReference<ImageReader> readerRef) throws IOException {
-        try (javax.imageio.stream.ImageInputStream iis =
-                     ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
-            if (iis == null) {
-                return ImageIO.read(new ByteArrayInputStream(bytes));
-            }
-            java.util.Iterator<ImageReader> it = ImageIO.getImageReaders(iis);
-            if (!it.hasNext()) return null;  // 无 reader = 不支持的格式（同 ImageIO.read 返 null 语义）
-            ImageReader reader = it.next();
-            readerRef.set(reader);
-            try {
-                reader.setInput(iis, true, true);
-                // 解码前读头部尺寸（getWidth/getHeight 只解析头，不解码全图），
-                // 拦截"小体积但巨尺寸"的分配型炸弹（如 30000×30000 声明 → read(0) 分配 GB raster）
-                int pw = reader.getWidth(0);
-                int ph = reader.getHeight(0);
-                if (pw > BBOX_MAX_EDGE || ph > BBOX_MAX_EDGE) {
-                    throw new IOException("image dimensions too large: " + pw + "x" + ph
-                            + " > " + BBOX_MAX_EDGE);
-                }
-                return reader.read(0);
-            } catch (javax.imageio.IIOException abortOrFail) {
-                // abort() 触发的提前结束在多数 reader 下抛 IIOException("aborted") →
-                // 由外层 TimeoutException 路径处理，这里转成 IOException 让上层走 decode_failed/timeout。
-                throw new IOException("decode aborted or failed", abortOrFail);
-            } finally {
-                readerRef.set(null);
-                reader.dispose();
-            }
-        }
-    }
-
-    /**
-     * 本 JVM 的 ImageIO 到底有没有能读这个 MIME 的 reader。
-     *
-     * <p>{@code image/webp} 一直在默认白名单里，但标准 JDK 根本没有 WebP reader——白名单放行、
-     * magic 探测认得、然后必定死在解码那一步，报的还是笼统的"图片解码失败"，用户完全不知道
-     * 是格式不支持。放在 MIME 校验这层查一次，可以直接给出说得清的理由。</p>
-     *
-     * <p>不写死格式名而是问运行时：服主真装了 WebP 的 ImageIO 插件（启动期的 IIORegistry
-     * 过滤会保留它），WebP 上传就自然可用，不必再改代码或配置。</p>
+     * 本 JVM 的 {@link ImageIO} 是否存在能解码指定 MIME 的 reader（例如标准 JDK 默认无 WebP reader，
+     * 装了第三方 WebP ImageIO 插件时自动放行）。
      */
     static boolean canDecodeMime(String mime) {
         if (mime == null) return false;
@@ -1130,25 +809,6 @@ public final class UploadHandler {
     private static String noDecoderMessage(String mime) {
         return "this server cannot decode " + mime
                 + " (no image reader installed); please upload PNG or JPEG instead";
-    }
-
-    /** Magic bytes 真实 MIME 探测：前 16 字节即可识别 PNG/JPEG/WEBP。 */
-    static String detectMagicMime(byte[] b) {
-        if (b == null || b.length < 12) return null;
-        // PNG: 89 50 4E 47 0D 0A 1A 0A
-        if ((b[0] & 0xff) == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) {
-            return "image/png";
-        }
-        // JPEG: FF D8 FF
-        if ((b[0] & 0xff) == 0xFF && (b[1] & 0xff) == 0xD8 && (b[2] & 0xff) == 0xFF) {
-            return "image/jpeg";
-        }
-        // WEBP: 'RIFF' .... 'WEBP'
-        if (b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F'
-                && b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P') {
-            return "image/webp";
-        }
-        return null;
     }
 
     /** bilinear 缩放到最大边 = maxEdge，等比例。 */

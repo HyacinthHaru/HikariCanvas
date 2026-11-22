@@ -404,7 +404,7 @@ describe('textElementToMultiPolygon — holes + 多 polygon 保留', () => {
     });
 });
 
-describe('elementToMultiPolygonAsync — 0.4.10', () => {
+describe('elementToMultiPolygonAsync', () => {
     it('text 元素含内孔 → MultiPolygon 含 hole', async () => {
         mockFetchOk();
         const mockFont = makeMockFont({
@@ -462,21 +462,11 @@ describe('elementToMultiPolygonAsync — 0.4.10', () => {
 });
 
 /**
- * 0.4.10-bugfix-advance-sync：双源 advance 不一致 bug 回归测试。
- *
- * Bug：computeLayoutMultiPolygon 原走 fontkit `font.layout(line).positions[i].xAdvance × scale`
- * 摆位 glyph；PreviewRenderer 视觉位置走 TextLayout.layoutText + charAdvance（ASCII canonical
- * = round(fontSize * 0.5) = 16 px/char @ fontSize=32 / metrics 表存在时 round(base × size /
- * baseSize)）。fontkit hmtx 真实 advance ≈ 18 px/char @ fontSize=32 Inter → 5 字符累积偏差
- * ~10 px > "O" 内孔半径 ~6 px → 用户点击视觉 O 中央时坐标落在 polygon hole 外，Live Paint
- * 无法识别洞。
- *
- * 修法：computeLayoutMultiPolygon 改用 layoutText 同源摆位，只用 fontkit 拿 glyph.path。
- *
- * 回归断言：多字符 polygon 的字符簇中心 X ↔ layoutText PositionedGlyph[i].x + glyph_width/2
- * 必须 ≤ 1 px 差。
+ * 同源 advance 守卫：computeLayoutMultiPolygon 与 PreviewRenderer 统一走 TextLayout.layoutText
+ * 摆位 glyph，仅用 fontkit 取 glyph.path。多字符 polygon 的字符簇中心 X 与
+ * layoutText PositionedGlyph[i].x + glyph_width/2 偏差 ≤ 1 px。
  */
-describe('TextGlyphExtractor — 0.4.10-bugfix-advance-sync 同源 advance', () => {
+describe('TextGlyphExtractor — 同源 advance', () => {
     // mock fontkit advance 与 layoutText 不同步问题已修；本节专门防止回归到 fontkit advance。
     //
     // 注意：测试环境无字体 metrics 表 fetch（fetch 对 /fonts/*.metrics.json 不通），故
@@ -694,7 +684,7 @@ describe('TextGlyphExtractor — 0.4.10-bugfix-advance-sync 同源 advance', () 
     });
 });
 
-describe('LivePaint buildGraph — 0.4.10 text hole gap 集成', () => {
+describe('LivePaint buildGraph — text hole gap 集成', () => {
     /**
      * 端到端验证 bug 修复：text "O" 内孔在 buildGraph 输出中应作为 gap 可命中。
      * 旧代码：text bbox 占用整个 50×50 → 内孔位置 (25, 25) 落入 occupied → 不在 gap

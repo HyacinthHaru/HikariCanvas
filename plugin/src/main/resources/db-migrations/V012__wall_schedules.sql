@@ -1,4 +1,4 @@
--- 0.4.0 P3-L：兜底列车 Schedule 持久化（per-wall 时刻表）。详见 docs/dynamic-data.md §7.3。
+-- 手动列车时刻表持久化（详见 docs/dynamic-data.md §7.3）。
 --
 -- 一 wall 一份 schedule 元数据 + N 条 entry。ManualScheduleProvider 启动期 loadAll 拉所有
 -- schedule，按 wall 注册 4 个 schedule:<wallId>/* 变量（next_departure / next_destination /
@@ -12,7 +12,7 @@
 
 CREATE TABLE IF NOT EXISTS wall_schedules (
     wall_id        TEXT    PRIMARY KEY,
-    station_name   TEXT,                       -- 玩家命名站点（可空，编辑器可暴露给变量但 P3-L 不强制）
+    station_name   TEXT,                       -- 玩家命名站点（可空）
     updated_at     INTEGER NOT NULL,
     FOREIGN KEY (wall_id) REFERENCES walls(wall_id) ON DELETE CASCADE
 );

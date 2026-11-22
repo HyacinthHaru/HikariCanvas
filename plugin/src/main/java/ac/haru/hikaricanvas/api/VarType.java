@@ -4,8 +4,8 @@ package ac.haru.hikaricanvas.api;
  * 外部插件向 {@link HikariCanvasAPI} 声明变量类型时使用的 hint enum。
  *
  * <p>API 包独立的 {@code VarType}（不引用 {@code ac.haru.hikaricanvas.variable.VarType}）——
- * 让外部插件 import 路径稳定在 {@code ac.haru.hikaricanvas.api.*}，shadowJar relocate 时
- * 通过 {@code exclude ac/haru/hikaricanvas/api/**} 保持公开。</p>
+ * 让外部插件只依赖 {@code ac.haru.hikaricanvas.api.*} 公开边界（shadowJar 仅 relocate 第三方库，
+ * 不触碰 {@code ac.haru.hikaricanvas.api.*}，外部 import 路径稳定）。</p>
  *
  * <p>语义与内部 {@code ac.haru.hikaricanvas.variable.VarType} 一一对应，由
  * {@code HikariCanvasAPIImpl.convertVarType} 做转换。</p>

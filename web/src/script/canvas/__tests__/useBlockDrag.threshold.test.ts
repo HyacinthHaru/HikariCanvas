@@ -1,16 +1,13 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.1 触控板敏感度修复：拖动阈值（DRAG_THRESHOLD）。
+ * 触控板敏感度与拖动阈值（DRAG_THRESHOLD）测试。
  *
- * <p>背景：Mac 触控板 pointerdown 必带微移，旧实现 pointerdown 当帧即进拖动态 → 点积木里的
- * 字段（变量按钮 / 文本框）想编辑时一不小心就把整块拖走。修复：pointerdown 时只记 pending +
- * 挂临时监听，<b>指针移动超 {@link DRAG_THRESHOLD} 像素才真正启动拖动</b>；阈值内松手 = 点击
- * （不进拖动态、不 capture、不 selectRule、不 setDragging）。</p>
+ * <p>pointerdown 时只记 pending + 挂临时监听，<b>指针移动超 {@link DRAG_THRESHOLD} 像素才真正启动拖动</b>；
+ * 阈值内松手 = 点击（不进拖动态、不 capture、不 selectRule、不 setDragging）。</p>
  *
- * <p>关键不变性（P5 修复，绝不能破坏）：{@code tryCapture} 仍先于 {@code selectRule}——阈值模式下
- * pending 阶段不 select，超阈值时先 capture pending.target（pointerdown 时的原 DOM）再 selectRule，
- * capture 目标不被 v-for 重建打断。本测验证"小移动 = 点击不拖" + "大移动 = 拖动落树" + "select 仅在
- * 超阈值后发生"。</p>
+ * <p>关键不变性：{@code tryCapture} 先于 {@code selectRule}——阈值模式下 pending 阶段不 select，
+ * 超阈值时先 capture pending.target（pointerdown 时的原 DOM）再 selectRule，capture 目标不被
+ * v-for 重建打断。</p>
  */
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';

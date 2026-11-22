@@ -10,27 +10,33 @@ import ac.haru.hikaricanvas.script.ScriptRule;
 import ac.haru.hikaricanvas.script.ScriptStore;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionTestFactory;
+import ac.haru.hikaricanvas.state.EditSession;
+import ac.haru.hikaricanvas.state.Element;
+import ac.haru.hikaricanvas.state.ImageElement;
 import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.state.StatePatch;
+import ac.haru.hikaricanvas.state.TextElement;
 import ac.haru.hikaricanvas.storage.AuditLog;
 import ac.haru.hikaricanvas.storage.Database;
 import ac.haru.hikaricanvas.storage.ImageUploadDao;
 import ac.haru.hikaricanvas.storage.MigrationRunner;
 import ac.haru.hikaricanvas.storage.WallRepo;
 import ac.haru.hikaricanvas.web.OpPushCallback;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.logging.Logger;
 import java.util.zip.ZipEntry;
@@ -38,24 +44,21 @@ import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.8-A2 Task 12：{@link ProjectImporter} 编排（解包 → manifest → 物化 → assets →
- * 孤儿轨清理 → replaceProject → pushSnapshot → persist → audit）。
- *
- * <p>装配照真实架构：真 {@link WallRepo}（temp DB）做持久化、真 {@link AssetIngest} 做图片摄入、
- * 捕获式 {@link OpPushCallback} 验证 snapshot 广播、真 {@link AuditLog} 写 {@code PROJECT_IMPORT}。
- * session 经 {@link SessionTestFactory#withWallAndProject} 构造（projectState 与 editSession.state()
- * 共享引用，与 SessionManager confirm 路径一致）。</p>
+ * {@link ProjectImporter} 工程导入与模板 pack 套用管线单测。
  */
 class ProjectImporterTest {
 
     private static final Logger LOG = Logger.getLogger("project-importer-test");
 
-    private Path tmpDir;
+    @TempDir
+    Path tmpDir;
+
     private Database database;
     private WallRepo wallRepo;
     private AssetIngest assetIngest;
@@ -63,8 +66,7 @@ class ProjectImporterTest {
     private CapturingPush push;
 
     @BeforeEach
-    void setUp() throws Exception {
-        tmpDir = Files.createTempDirectory("hc-importer-");
+    void setUp() {
         database = new Database(LOG, tmpDir.resolve("d.db"));
         new MigrationRunner(database.jdbi(), LOG).run();
         ImageUploadDao dao = new ImageUploadDao(LOG, database.jdbi());
@@ -77,19 +79,8 @@ class ProjectImporterTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         if (database != null) database.close();
-        if (tmpDir != null && Files.exists(tmpDir)) {
-            try (var paths = Files.walk(tmpDir)) {
-                paths.sorted(Comparator.reverseOrder()).forEach(p -> {
-                    try {
-                        Files.deleteIfExists(p);
-                    } catch (IOException ignored) {
-                        // best-effort temp cleanup
-                    }
-                });
-            }
-        }
     }
 
     private ProjectImporter newImporter() {
@@ -233,7 +224,7 @@ class ProjectImporterTest {
         assertFalse(tracks.containsKey("ghost"), "孤儿轨必须从导入工程中清掉");
     }
 
-    // ---------- 缺资源扫描（0.8 Part A review：missing-font / missing-icon / missing-variable） ----------
+    // ---------- 缺资源扫描 ----------
 
     @Test
     void importInto_referencesMissingFont_warnsMissingFont() throws Exception {
@@ -287,13 +278,13 @@ class ProjectImporterTest {
         assertEquals(2, reloaded.state().layers().size(), "导入工程必须落库（project_json 更新）");
     }
 
-    // ---------- scripts.json 编排（0.8-A4 Task 18） ----------
+    // ---------- scripts.json 编排 ----------
 
     @Test
     void importInto_withScripts_persistsToScriptStoreWithReboundWallId() throws Exception {
-        Session session = freshSession(2, 1);   // wallId = "wall-1"
+        Session session = freshSession(2, 1);
         ScriptStore scriptStore = new ScriptStore(LOG, null, 16);
-        ScriptImporter scriptImporter = new ScriptImporter(scriptStore, java.util.Map::of);
+        ScriptImporter scriptImporter = new ScriptImporter(scriptStore, Map::of);
         ProjectImporter importer = new ProjectImporter(HikariCanvasConfig.ImportConfig.defaults(),
                 assetIngest, push, wallRepo, scriptImporter, auditLog, null, null);
 
@@ -320,12 +311,10 @@ class ProjectImporterTest {
     // ---------- helpers ----------
 
     private void seedWall(String wallId, int w, int h) {
-        // 直接 INSERT 一行 walls（避开 WallKey/MapPool 全装配），让 updateState 的 UPDATE 命中。
         long now = System.currentTimeMillis();
         String json;
         try {
-            json = new com.fasterxml.jackson.databind.ObjectMapper()
-                    .writeValueAsString(new ProjectState(w, h));
+            json = new ObjectMapper().writeValueAsString(new ProjectState(w, h));
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
@@ -377,7 +366,7 @@ class ProjectImporterTest {
         ImportResult r = newImporter().importInto(session, bos.toByteArray(), UUID.randomUUID());
 
         var el = session.projectState().layers().get(0).elements().get(0);
-        String source = ((ac.haru.hikaricanvas.state.ImageElement) el).source();
+        String source = ((ImageElement) el).source();
         assertFalse(declared.equals(source),
                 "声明 hash 与实际落盘 hash 不同时，元素引用必须被改写");
         assertTrue(r.warnings().stream().anyMatch(w -> "asset-rehashed".equals(w.kind())),
@@ -411,11 +400,141 @@ class ProjectImporterTest {
         assertFalse(push.snapshotPushed, "被闸拒的导入不该动会话工程");
     }
 
+    // ---------- Pack 套用管线（manifest.kind="pack"） ----------
+
+    @Nested
+    class PackApplication {
+
+        private static final String PACK_MANIFEST =
+                "{\"spec\":1,\"kind\":\"pack\",\"created_at\":1,\"name\":\"Demo\",\"wall\":{\"width\":2,\"height\":1}}";
+
+        private static String projectWith(String xExpr, String textExpr) {
+            return "{\"version\":3,\"canvas\":{\"widthMaps\":2,\"heightMaps\":1,\"background\":\"#FFFFFF\"},"
+                    + "\"layers\":[{\"id\":\"l1\",\"name\":\"L\",\"visible\":true,\"locked\":false,\"opacity\":1.0,"
+                    + "\"blendMode\":\"normal\",\"elements\":[{\"id\":\"e1\",\"type\":\"text\",\"x\":" + xExpr
+                    + ",\"y\":0,\"w\":80,\"h\":40,\"rotation\":0,\"text\":" + textExpr
+                    + ",\"fontId\":\"ark_pixel\",\"fontSize\":24,\"color\":\"#000000\",\"align\":\"left\","
+                    + "\"letterSpacing\":0.0,\"lineHeight\":1.2,\"vertical\":false}]}],\"activeLayerId\":\"l1\"}";
+        }
+
+        private static TextElement firstText(Session session) {
+            Element el = session.projectState().layers().get(0).elements().get(0);
+            return assertInstanceOf(TextElement.class, el);
+        }
+
+        @Test
+        void applyPack_numericFieldPlaceholder_materializesInt() throws Exception {
+            Session session = freshSession(2, 1);
+            byte[] pack = buildPack(PACK_MANIFEST,
+                    "[{\"id\":\"off\",\"type\":\"int\",\"label\":\"偏移\",\"default\":10},"
+                            + "{\"id\":\"title\",\"type\":\"string\",\"label\":\"标题\",\"default\":\"你好\",\"max_length\":8}]",
+                    projectWith("\"${off}\"", "\"${title}\""));
+
+            ProjectImporter.ApplyResult r = newImporter().applyPack(session, pack, Map.of(), UUID.randomUUID());
+
+            assertInstanceOf(EditSession.OpResult.OkSnapshot.class, r.result());
+            TextElement t = firstText(session);
+            assertEquals(10, t.x(), "数值占位符 ${off} 应 materialize 回 int 10");
+            assertEquals("你好", t.text(), "字符串占位符 ${title} 应替换为 default");
+        }
+
+        @Test
+        void applyPack_userParamOverridesNumericDefault() throws Exception {
+            Session session = freshSession(2, 1);
+            byte[] pack = buildPack(PACK_MANIFEST,
+                    "[{\"id\":\"off\",\"type\":\"int\",\"default\":10}]",
+                    projectWith("\"${off}\"", "\"hi\""));
+
+            newImporter().applyPack(session, pack, Map.of("off", 25), UUID.randomUUID());
+
+            assertEquals(25, firstText(session).x(), "用户填的 off=25 应覆盖 default 并解析回 int");
+        }
+
+        @Test
+        void applyPack_returnsOkSnapshot_andDoesNotPropagate() throws Exception {
+            Session session = freshSession(2, 1);
+            byte[] pack = buildPack(PACK_MANIFEST,
+                    "[{\"id\":\"title\",\"type\":\"string\",\"default\":\"你好\"}]",
+                    projectWith("0", "\"${title}\""));
+
+            ProjectImporter.ApplyResult r = newImporter().applyPack(session, pack, Map.of(), UUID.randomUUID());
+
+            assertInstanceOf(EditSession.OpResult.OkSnapshot.class, r.result());
+            assertEquals("你好", firstText(session).text());
+            assertFalse(push.snapshotPushed, "applyPack 不得自行广播 snapshot（propagate 交调用方）");
+        }
+
+        @Test
+        void applyPack_undeclaredPlaceholder_throwsMalformed() {
+            Session session = freshSession(2, 1);
+            CanvasImportException ex = assertThrows(CanvasImportException.class, () -> {
+                byte[] pack = buildPack(PACK_MANIFEST,
+                        "[{\"id\":\"title\",\"type\":\"string\",\"default\":\"你好\"}]",
+                        projectWith("0", "\"${nope}\""));
+                newImporter().applyPack(session, pack, Map.of(), UUID.randomUUID());
+            });
+            assertEquals("IMPORT_MALFORMED", ex.code());
+            assertFalse(push.snapshotPushed);
+        }
+
+        @Test
+        void applyPack_missingRequiredParam_throwsInvalidParam() {
+            Session session = freshSession(2, 1);
+            CanvasImportException ex = assertThrows(CanvasImportException.class, () -> {
+                byte[] pack = buildPack(PACK_MANIFEST,
+                        "[{\"id\":\"title\",\"type\":\"string\",\"required\":true}]",
+                        projectWith("0", "\"${title}\""));
+                newImporter().applyPack(session, pack, Map.of(), UUID.randomUUID());
+            });
+            assertEquals("IMPORT_INVALID_PARAM", ex.code());
+            assertFalse(push.snapshotPushed);
+        }
+
+        @Test
+        void packManifest_acceptedByManifestParse() throws Exception {
+            CanvasManifest m = CanvasManifest.parse(PACK_MANIFEST.getBytes(), ProjectImporter.CANVAS_SPEC_MAX);
+            assertEquals("pack", m.kind());
+        }
+
+        @Test
+        void importInto_packWithDefaults_substitutesAndPropagates() throws Exception {
+            Session session = freshSession(2, 1);
+            byte[] pack = buildPack(PACK_MANIFEST,
+                    "[{\"id\":\"off\",\"type\":\"int\",\"default\":7},"
+                            + "{\"id\":\"title\",\"type\":\"string\",\"default\":\"默认标题\",\"max_length\":8}]",
+                    projectWith("\"${off}\"", "\"${title}\""));
+
+            ImportResult r = newImporter().importInto(session, pack, UUID.randomUUID());
+
+            assertTrue(r.warnings().isEmpty());
+            assertTrue(push.snapshotPushed, "importInto 对 pack 走完整 propagate");
+            TextElement t = firstText(session);
+            assertEquals(7, t.x());
+            assertEquals("默认标题", t.text());
+        }
+    }
+
     private static byte[] buildCanvas(String manifest, String project) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         try (ZipOutputStream z = new ZipOutputStream(bos)) {
             z.putNextEntry(new ZipEntry("manifest.json"));
             z.write(manifest.getBytes());
+            z.closeEntry();
+            z.putNextEntry(new ZipEntry("project.json"));
+            z.write(project.getBytes());
+            z.closeEntry();
+        }
+        return bos.toByteArray();
+    }
+
+    private static byte[] buildPack(String manifest, String params, String project) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream z = new ZipOutputStream(bos)) {
+            z.putNextEntry(new ZipEntry("manifest.json"));
+            z.write(manifest.getBytes());
+            z.closeEntry();
+            z.putNextEntry(new ZipEntry("params.json"));
+            z.write(params.getBytes());
             z.closeEntry();
             z.putNextEntry(new ZipEntry("project.json"));
             z.write(project.getBytes());
@@ -441,7 +560,6 @@ class ProjectImporterTest {
         return bos.toByteArray();
     }
 
-    @SuppressWarnings("unused")
     private static byte[] png(int w, int h) throws IOException {
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         ByteArrayOutputStream bos = new ByteArrayOutputStream();

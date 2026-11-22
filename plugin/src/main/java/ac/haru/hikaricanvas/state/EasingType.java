@@ -1,5 +1,6 @@
 package ac.haru.hikaricanvas.state;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
@@ -19,8 +20,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * 未知值会直接抛 {@code InvalidFormatException} 穿透上来，整面墙加载失败而不是降级到线性。
  * 触发路径很现实：新版本存的墙回滚旧 jar 打开。放在枚举自己身上而不是靠各处 ObjectMapper
  * 配 {@code READ_UNKNOWN_ENUM_VALUES_AS_NULL}，是因为漏配一个 mapper 就前功尽弃。</p>
- *
- * @since 0.6
  */
 public enum EasingType {
     @JsonProperty("linear") LINEAR("linear"),
@@ -44,7 +43,7 @@ public enum EasingType {
      * Jackson 反序列化入口（delegating creator）：未知 wire 值返 {@code null} 而不抛，
      * 交 {@link Easing} 紧凑构造器兜成 {@code LINEAR}。见类注释。
      */
-    @com.fasterxml.jackson.annotation.JsonCreator
+    @JsonCreator
     static EasingType fromJson(String s) {
         return fromWire(s);
     }

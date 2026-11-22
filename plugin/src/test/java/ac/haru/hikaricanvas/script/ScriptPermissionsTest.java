@@ -80,7 +80,7 @@ class ScriptPermissionsTest {
         assertEquals(Set.of(), ScriptPermissions.requiredFacets(r));
     }
 
-    // ---------- 0.7.1：3 个新触发器权限面 ----------
+    // ---------- 触发器补充权限面 ----------
 
     @Test
     void global_rightClickWall() {
@@ -124,8 +124,8 @@ class ScriptPermissionsTest {
     }
 
     @Test
-    void new_071_actions_no_extra_facets() {
-        // 0.7.1 的 6 个新 action 均无附加权限面（仅走基础 canvas.script.edit）
+    void friendlyAndVariableActions_no_extra_facets() {
+        // 友好属性 / target=trigger 消息 / 随机 / 缩放 / 等待时间轴均无附加权限面（仅走基础 canvas.script.edit）
         ScriptRule r = rule(new Trigger.VariableChange("user/score"), List.of(
                 new Action.SetElementProperties("e-1", Map.of("x", "1"), "moveTo"),
                 new Action.NudgeElement("e-1", 1.0, 1.0),
@@ -148,7 +148,7 @@ class ScriptPermissionsTest {
                 ScriptPermissions.NODE_COMMAND), ScriptPermissions.requiredFacets(r));
     }
 
-    // ---------- 0.7.1-P5：停止 / 粒子 / 等待直到 ----------
+    // ---------- 停止 / 粒子 / 等待直到 ----------
 
     @Test
     void playParticle_requires_sound_facet() {
@@ -177,22 +177,24 @@ class ScriptPermissionsTest {
         assertEquals(Set.of(ScriptPermissions.NODE_SOUND), ScriptPermissions.requiredFacets(r));
     }
 
-    // ---------- 0.7.2-P2：copy / append / clone / delete 均只走基础 edit ----------
+    // ---------- copy / append / clone / delete / layer / round 均只走基础 edit ----------
 
     @Test
-    void p2_actions_only_base_edit() {
+    void copyAppendCloneDelete_actions_only_base_edit() {
         for (Action a : List.of(
                 new Action.CopyVariable("user/d", "user/s"),
                 new Action.AppendVariable("user/l", "x"),
                 new Action.CloneElement("e-1", 0, 0),
-                new Action.DeleteElement("e-1"))) {
+                new Action.DeleteElement("e-1"),
+                new Action.SetElementLayer("e-1", "front"),
+                new Action.RoundVariable("user/score", "round"))) {
             ScriptRule r = rule(new Trigger.VariableChange("user/score"), List.of(a));
             Set<String> f = ScriptPermissions.requiredFacets(r);
-            assertEquals(Set.of(), f, "0.7.2-P2 动作无附加权限面: " + a.wireType());
+            assertEquals(Set.of(), f, "动作无附加权限面: " + a.wireType());
         }
     }
 
-    // ---------- 0.7.2-P3：repeatUntil body 递归扫描 ----------
+    // ---------- repeatUntil / randomBranch 递归扫描 ----------
 
     @Test
     void repeatUntil_recursesIntoBody() {

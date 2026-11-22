@@ -12,8 +12,7 @@ import java.util.logging.Logger;
  * {@link Expr} 求值器。给定参数值映射，把 AST 解释为 {@link Object}（原值）或
  * {@code boolean}（条件分支）。
  *
- * <p>语义与 {@code docs/template-spec.md §6.2} 一致（{@code && || !} 与 truthy 链
- * 是回归红线，保持不动）：</p>
+ * <p>基础与扩展语义（契约见 {@code docs/scripting.md} 与 {@code docs/template-pack.md}）：</p>
  * <ul>
  *   <li><b>truthy</b>（用于 {@code &&} / {@code ||} / {@code !} / {@code visible_when} 顶层）：
  *       {@code null = false}；{@code Boolean} 取自身；{@code Number != 0 → true}；
@@ -24,18 +23,14 @@ import java.util.logging.Logger;
  *       比较，否则 {@code Objects.toString} 后 string 比较</li>
  *   <li><b>{@code Identifier}</b>：从 {@code params} 取值；未声明 → 抛
  *       {@link UndeclaredParamException}（loader 阶段应已拦截，这里是兜底）</li>
- * </ul>
- *
- * <p><b>扩展语义（契约 docs/scripting.md）</b>：</p>
- * <ul>
  *   <li><b>比较 {@code < <= > >=}</b>：两侧任一可按 {@link StrictNumber#PATTERN}
  *       完整匹配（或本身是 {@code Number}）→ 双侧 {@code StrictNumber.parse} 数值比较；
  *       否则 {@code String.compareTo} 字典序（null 当空串）</li>
  *   <li><b>算术 {@code + - * /} 恒数值</b>：双侧 {@code StrictNumber} 强转（{@code +}
  *       不做字符串拼接）；除零 → {@code 0.0} + FINE log，不抛</li>
  *   <li><b>{@code var("fullName")}</b>：走构造注入的 {@code varResolver}；resolver 为
- *       null（模板路径）→ 抛 {@link VarUnsupportedException}；resolver 返 null（变量
- *       miss）→ eval 为 {@code null}（truthy=false）</li>
+ *       null 时抛 {@link IllegalStateException}；resolver 返 null（变量 miss）→
+ *       eval 为 {@code null}（truthy=false）</li>
  * </ul>
  */
 public final class ExpressionEvaluator {
@@ -47,24 +42,17 @@ public final class ExpressionEvaluator {
         }
     }
 
-    /** 在无 resolver 的路径（模板 visible_when）里用了 {@code var(...)}。 */
-    public static final class VarUnsupportedException extends RuntimeException {
-        public VarUnsupportedException() {
-            super("var(...) is not available in this context (no variable resolver)");
-        }
-    }
-
     /** {@code var("fullName")} 解析器；null 结果 = 变量 miss（eval 为 null）。 */
     private final @Nullable Function<String, String> varResolver;
     /** 除零 FINE log 用；可 null（跳过记录）。 */
     private final @Nullable Logger log;
 
-    /** 模板路径兼容构造：无 resolver，{@code var(...)} 求值抛 {@link VarUnsupportedException}。 */
-    public ExpressionEvaluator() {
-        this(null, null);
+    /** 构造求值器——注入变量 resolver（fullName → 当前值 / null）。 */
+    public ExpressionEvaluator(@Nullable Function<String, String> varResolver) {
+        this(varResolver, null);
     }
 
-    /** 脚本路径构造——注入变量 resolver（fullName → 当前值 / null）。 */
+    /** 脚本路径构造——注入变量 resolver（fullName → 当前值 / null）与可选 logger。 */
     public ExpressionEvaluator(@Nullable Function<String, String> varResolver,
                                @Nullable Logger log) {
         this.varResolver = varResolver;
@@ -87,7 +75,7 @@ public final class ExpressionEvaluator {
         }
         if (expr instanceof Expr.VarRef ref) {
             if (varResolver == null) {
-                throw new VarUnsupportedException();
+                throw new IllegalStateException("var(...) is not available without a variable resolver");
             }
             return varResolver.apply(ref.fullName());
         }

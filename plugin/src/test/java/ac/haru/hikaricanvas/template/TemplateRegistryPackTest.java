@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link TemplateRegistry} 对 {@code .canvas} pack 的加载（Slice 2 P1）。
+ * {@link TemplateRegistry} 对 {@code .canvas} pack 的加载单测。
  *
  * <p>验证：server 目录里的 {@code *.canvas}（{@code manifest.kind="pack"}）被登记为 pack 条目
  * （id = 文件名去后缀 / {@link TemplateEntry#isPack()} / {@code packBytes} 原样存 / 合成

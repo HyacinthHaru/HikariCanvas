@@ -1,11 +1,11 @@
 /**
- * 0.6 P3（B3）：sRGB 线性空间色彩 / Fill 插值双端一致性测试——前端半边。
+ * sRGB 线性空间色彩 / Fill 插值双端一致性测试——前端半边。
  *
  * 两段防线：
  * 1. 读仓库根 `rendering-test/color-lerp-vectors.json`（Python 参照生成），`lerpHex` 输出
  *    与 expected **精确字符串匹配**（大写 hex、alpha 规则）。Java 端 ColorLerpVectorsTest
  *    跑同一份；任一端漂移即红（rendering.md §9.4 / §9.6）。
- * 2. `lerpFill` 细则 case 清单——与 B1 Java 侧 ColorLerpTest 双端对称：同类型同 stop 数逐
+ * 2. `lerpFill` 细则 case 清单——与 Java 侧 ColorLerpTest 双端对称：同类型同 stop 数逐
  *    stop 插值、类型 / stop 数不一致 / null → step（返左端帧）。
  *
  * 向量定位同 easing.test.ts：`import.meta.url` 锚定 + `../../../../rendering-test` 回仓库根。
@@ -84,7 +84,7 @@ describe('lerpHex alpha + parse rules (rendering.md §9.4)', () => {
     });
 });
 
-// ---------- lerpFill 细则（与 B1 Java ColorLerpTest 双端对称） ----------
+// ---------- lerpFill 细则（与 Java ColorLerpTest 双端对称） ----------
 
 function solid(color: string): SolidFill {
     return { type: 'solid', color };

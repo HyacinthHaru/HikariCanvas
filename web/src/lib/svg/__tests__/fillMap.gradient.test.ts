@@ -17,7 +17,7 @@ function makeGradientDoc(defsXml: string, shapeAttrs: Record<string, string>) {
     return { root, shape };
 }
 
-describe('fillMap gradient (Task 14)', () => {
+describe('fillMap gradient', () => {
     it('linearGradient x1=0% x2=100% → angle=0 + correct stops', () => {
         const { root, shape } = makeGradientDoc(
             `<linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="0%">

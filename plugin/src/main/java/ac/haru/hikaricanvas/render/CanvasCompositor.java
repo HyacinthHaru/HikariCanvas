@@ -20,12 +20,15 @@ import ac.haru.hikaricanvas.variable.VariableStore;
 import java.awt.AlphaComposite;
 import java.awt.Composite;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Logger;
 
 /**
@@ -75,15 +78,14 @@ public final class CanvasCompositor {
     /** 残留占位符告警的节流窗口。与 {@code GlowRenderer.WARN_INTERVAL_NANOS} 同口径。 */
     private static final long RESIDUAL_WARN_INTERVAL_NANOS = 60_000_000_000L;  // 60s
     /** wallId → 上次告警的 nanoTime。 */
-    private static final java.util.concurrent.ConcurrentMap<String, Long> LAST_RESIDUAL_WARN =
-            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final ConcurrentMap<String, Long> LAST_RESIDUAL_WARN =
+            new ConcurrentHashMap<>();
 
     /**
      * 残留占位符告警，每面墙每 60s 最多一条。
      *
-     * <p>写坏的 <code>${var:</code>（比如行尾缺 <code>}</code>）会让**每一帧**都撞到这里，
-     * 而墙是持续重绘的——原来无节流，任何玩家在文本里打一个残缺占位符就能把服务器日志刷爆。
-     * 按 wallId 分桶是为了多面墙同时出问题时不互相掩盖。</p>
+     * <p>写坏的 {@code ${var:}（如行尾缺 {@code }}）会在每次重绘时命中兜底替换；按 {@code wallId}
+     * 独立节流既防止日志刷爆，也避免多面墙同时出错时互相掩盖。</p>
      */
     private static void warnResidualThrottled(String wallId) {
         String key = wallId == null ? "<no-wall>" : wallId;
@@ -273,7 +275,7 @@ public final class CanvasCompositor {
             // 并发结构修改（ConcurrentModificationException / 撕裂读）。state.layers() 已是
             // unmodifiableList live 视图；这里 List.copyOf 锁住层引用，每层 elements 也各取
             // 一次浅拷贝（Element 是 record 不可变，只需复制容器）。调用方
-            // ProjectionThrottler.flushLocked 在 EditSession 监视器内调本方法，保证这一步浅拷贝
+            // ProjectionThrottler 在 EditSession 监视器内调本方法，保证这一步浅拷贝
             // 自身不与结构修改并发——拷贝完成后即便锁释放，迭代也只看快照。
             List<Layer> layerSnapshot = List.copyOf(state.layers());
 
@@ -594,9 +596,9 @@ public final class CanvasCompositor {
      *
      * <p>有 rotation 时 {@code getClipBounds} 给的是反变换后的外接盒（超集），只会裁得更保守。</p>
      */
-    static java.awt.Rectangle visibleBounds(Graphics2D g) {
+    static Rectangle visibleBounds(Graphics2D g) {
         try {
-            java.awt.Rectangle r = g.getClipBounds();
+            Rectangle r = g.getClipBounds();
             if (r == null || r.width <= 0 || r.height <= 0) return null;
             return r;
         } catch (RuntimeException ignored) {

@@ -11,10 +11,10 @@ import org.jetbrains.annotations.Nullable;
  * 脚本动作写变量再触发下游脚本时由 TriggerRouter 读
  * {@link ScriptRunner#CHAIN_DEPTH} 得 depth+1。</p>
  *
- * <p><b>triggerPlayer</b>（"谁触发的"）与 detail 分开走：{@code sendMessage} /
- * {@code showTitle} 的 {@code target=trigger} 要按玩家名找人，必须有个结构化字段。
- * 早先复用 detail 当玩家名，遇到 playerKill（detail 是 {@code victim→killer} 拼接串）
- * 就永远找不到人，消息静默丢失。各触发源取值见 {@code scripting.md} 附录 A.1：
+ * <p><b>triggerPlayer</b>（"谁触发的"）与 detail 分离：{@code sendMessage} /
+ * {@code showTitle} 的 {@code target=trigger} 按结构化玩家名查找在线目标，不解析自由文本
+ * {@code detail}（例如 {@code playerKill} 的 {@code detail} 为 {@code victim→killer}）。
+ * 各触发源取值见 {@code docs/scripting.md} 附录 A.1：
  * 进服 / 退服 / 靠近 / 离开 / 右键墙 = 事件里那名玩家；playerKill = 击杀者；
  * 变量变化 / 定时 / 墙就绪 / 试跑 = null（没有触发玩家）。</p>
  */

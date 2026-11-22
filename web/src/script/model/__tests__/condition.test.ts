@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P5-G：condition 模型 ↔ 字符串双向转换单测。
+ * condition 模型 ↔ 字符串双向转换单测。
  *
  * <p>重点：① {@link buildConditionString} 各 operand 形态 / 转义 / 数字形态 / 括号 / joiner / 空；
  * ② {@link tryParseCondition} 往返幂等 + 各形态 + <b>稳健性</b>（复杂 / 非法串一律 null，绝不误解析）。</p>

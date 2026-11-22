@@ -1,10 +1,5 @@
 package ac.haru.hikaricanvas.i18n;
 
-import static org.junit.jupiter.api.Assertions.*;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.*;
-import java.util.logging.Logger;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
@@ -13,7 +8,28 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.StringReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.logging.Logger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
 class MessagesTest {
+    private static final String EN_US_FIXTURE = """
+            command:
+              no-session: "<gray>No active session.</gray>"
+              open-editor: "<gray>Open editor: <url></gray>"
+            """;
+
+    private static final String ZH_CN_FIXTURE = """
+            command:
+              no-session: "<gray>当前没有进行中的会话。</gray>"
+            """;
+
     private Messages messages;
 
     /**
@@ -21,17 +37,13 @@ class MessagesTest {
      * TextComponent nodes. Avoids PlainTextComponentSerializer which triggers Adventure SPI
      * ServiceLoader conflict on test classpath (Paper devbundle + MockBukkit both register
      * PlainTextComponentSerializer$Provider → IllegalStateException "found multiple").
-     *
-     * NOTE: only supports pure TextComponent trees (the output shape MiniMessage produces for
-     * this project's YML strings). Non-TextComponent nodes (e.g. TranslatableComponent from
-     * <lang:…>, KeybindComponent from <keybind:…>) are explicitly rejected so misuse surfaces
-     * immediately rather than silently dropping content.
      */
     private static String plain(Component c) {
         StringBuilder sb = new StringBuilder();
         plainInto(c, sb);
         return sb.toString();
     }
+
     private static void plainInto(Component c, StringBuilder sb) {
         if (c instanceof TextComponent tc) {
             sb.append(tc.content());
@@ -40,16 +52,16 @@ class MessagesTest {
         }
         for (Component child : c.children()) plainInto(child, sb);
     }
-    private YamlConfiguration res(String name) {
-        return YamlConfiguration.loadConfiguration(new InputStreamReader(
-            getClass().getResourceAsStream("/lang-test/" + name), StandardCharsets.UTF_8));
+
+    private static YamlConfiguration yaml(String content) {
+        return YamlConfiguration.loadConfiguration(new StringReader(content));
     }
 
     @BeforeEach
     void setUp() {
         messages = new Messages(Logger.getLogger("test"));
-        messages.putLocale("en_us", res("en_us.yml"));
-        messages.putLocale("zh_cn", res("zh_cn.yml"));
+        messages.putLocale("en_us", yaml(EN_US_FIXTURE));
+        messages.putLocale("zh_cn", yaml(ZH_CN_FIXTURE));
         messages.setDefaultLocale("en_us");
     }
 
@@ -99,12 +111,6 @@ class MessagesTest {
 
     @Test
     void plain_rendersNamedParam_asPlainText() {
-        // 0.9.7：plain() 把 Component 出成纯文本 String（WS error message 字段用）。
-        // 用现成带 <url> 占位符的 key（command.open-editor = "<gray>Open editor: <url></gray>"）
-        // 验证：① 占位符被填充；② 无 MiniMessage 标签残留（不含 '<'）。
-        // 注意 plain() 不走 PlainTextComponentSerializer（测试 classpath 上其 static init 抛
-        // ExceptionInInitializerError——Paper devbundle + MockBukkit 双份 Provider），
-        // 改用与本类 plain(Component) 同款递归 flatten，输出等价。
         String s = messages.plain("en_us", "command.open-editor",
                 Placeholder.unparsed("url", "http://x/42"));
         assertEquals("Open editor: http://x/42", s);

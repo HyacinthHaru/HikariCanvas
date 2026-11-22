@@ -37,11 +37,8 @@ public final class TextLayout {
     private static final String LINE_START_FORBIDDEN = "）】」』。，、？！：；)].,!?:;";
 
     /**
-     * 前后端一致的"标准"字符宽度。
+     * 前后端一致的规则型回退字符宽度（当 {@link FontMetricsTable} 缺字或表尚未加载时使用）。
      *
-     * <p>浏览器 {@code ctx.measureText} 和 Java {@code FontMetrics.charWidth} 即使加载
-     * 同一 TTF/OTF 也会返回不同值，导致 softWrap 换行点前后端不同。规避方案：两端不读
-     * font metrics，统一用规则型宽度：</p>
      * <ul>
      *   <li>码点 {@code < 0x2E80}（ASCII + 拉丁 + 一般标点）：{@code round(fontSize * 0.5)}</li>
      *   <li>其他（CJK / 假名 / 全角）：{@code fontSize}</li>
@@ -53,10 +50,10 @@ public final class TextLayout {
     }
 
     /**
-     * \u57FA\u4E8E {@link FontMetricsTable} \u7684\u771F\u5B9E\u5B57\u7B26 advance\uFF1B\u7F3A\u5B57 / \u8868\u672A\u52A0\u8F7D\u65F6 fallback
-     * \u5230 {@link #canonicalCharWidth}\u3002\u6240\u6709 layout \u5B50\u65B9\u6CD5\u7684\u7EDF\u4E00\u5165\u53E3\u3002
+     * 基于 {@link FontMetricsTable} 的真实字符 advance；缺字或表未加载时回退到
+     * {@link #canonicalCharWidth}。所有 layout 子方法的统一入口。
      *
-     * <p>fontId \u6765\u81EA {@link TextElement#fontId()}\uFF1B\u4E3A null \u76F4\u63A5\u8D70 canonical\u3002</p>
+     * <p>{@code fontId} 来自 {@link TextElement#fontId()}；为 {@code null} 时直接走回退宽度。</p>
      */
     public static int charAdvance(String fontId, char c, int fontSize) {
         int real = FontMetricsTable.advance(fontId, c, fontSize);
@@ -109,7 +106,8 @@ public final class TextLayout {
     /**
      * 给定 TextElement，返回每个字符的绘制位置列表。{@code letterSpacing} 已累计进 x。
      *
-     * <p>用 {@link #canonicalCharWidth}，不需要 FontMetrics。</p>
+     * <p>字符步进走 {@link #charAdvance}（查 {@link FontMetricsTable} 真实字形宽度，
+     * 缺字或未加载时回退 {@link #canonicalCharWidth}），不依赖运行期 AWT {@code FontMetrics}。</p>
      *
      * <p>调用方用 {@code Graphics2D.drawString(glyph.ch(), glyph.x(), glyph.baselineY())}
      * 逐字符绘制而非整行一次 drawString —— letterSpacing 需要按整数像素独立控制，

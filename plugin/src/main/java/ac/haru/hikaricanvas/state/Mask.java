@@ -28,14 +28,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record Mask(String d, boolean inverted, Integer featherPx) {
 
-    /** 双参构造器：兼容 0.4.6 之前的代码 / 测试。 */
+    /** 双参兼容构造器：省略 {@code featherPx}（无羽化）。 */
     public Mask(String d, boolean inverted) {
         this(d, inverted, null);
     }
 
     /**
-     * Jackson 反序列化入口。{@code featherPx} 缺失时 null；旧 .canvas 文件 / 旧前端发
-     * 来的 patch 不带此字段自动走 null path，行为与 0.4.6 之前完全一致。
+     * Jackson 反序列化入口。{@code featherPx} 缺省时为 {@code null}（无羽化）。
      */
     @JsonCreator
     public static Mask of(

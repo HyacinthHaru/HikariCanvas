@@ -78,7 +78,7 @@ class ExpressionParserTest {
 
     @Test
     void specCanonicalExample() {
-        // 来自 docs/template-spec.md §6.2: show_english == true && name != ""
+        // show_english == true && name != ""
         Expr e = p.parse("show_english == true && name != \"\"");
         Expr.Binary and = assertInstanceOf(Expr.Binary.class, e);
         assertEquals(Expr.Op.AND, and.op());
@@ -105,13 +105,11 @@ class ExpressionParserTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.7.0-P2(K2)：比较 / 算术 / var() 文法扩展
-    //  （原 rejectsArithmetic 已过时——文法升级为支持算术的超集）
+    //  比较 / 算术 / var() 文法
     // ──────────────────────────────────────────────────────────
 
     @Test
     void arithmeticNowParses() {
-        // 0.7.0-P2 前这是 ParseException;现在是合法 ADD
         Expr e = p.parse("a + 1");
         Expr.Binary add = assertInstanceOf(Expr.Binary.class, e);
         assertEquals(Expr.Op.ADD, add.op());

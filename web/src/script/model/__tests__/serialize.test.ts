@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P4-A：blockLayout 编解码 + autoLayout 单测（纯逻辑，vitest node）。
+ * blockLayout 编解码 + autoLayout 单测（纯逻辑，vitest node）。
  */
 import { describe, expect, it } from 'vitest';
 import {

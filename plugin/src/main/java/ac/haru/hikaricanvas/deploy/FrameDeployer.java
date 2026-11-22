@@ -9,7 +9,10 @@ import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Rotation;
 import org.bukkit.World;
+import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.Item;
 import org.bukkit.entity.ItemFrame;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.MapMeta;
@@ -17,12 +20,19 @@ import org.bukkit.map.MapView;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.util.BoundingBox;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.logging.Level;
 
 /**
  * 按 {@link WallResolver.Result.Ok} 的墙面矩形批量挂物品框 + 填 Placeholder 像素；
- * 提供按 wall 移除、publish 标签写 PDC，以及保护 listener 用的"是否属于 HikariCanvas"接口。
+ * 提供按 wall 移除、画框修复，以及保护 listener 用的"是否属于 HikariCanvas"接口。
  *
  * <p>契约见 {@code docs/architecture.md §7.2}、PDC key 规范见 {@code docs/data-model.md §3.2}。
  * PDC key = {@code wall_id / slot}（{@code published_at} 不再写入；现有 PDC 数据保留无害）。</p>
@@ -100,8 +110,8 @@ public final class FrameDeployer {
         //    b) 空框（PDC 在但 item 被撸掉 / 不是 FILLED_MAP）→ emptyFrames，待 setItem 重新塞回
         //    c) 完全不存在 → 待 deployFor spawn
         //    MC 左键撸 ItemFrame 第一次去内容，第二次才打掉 entity；很多玩家只撸第一下就发现"画没了"
-        java.util.Set<Integer> present = new java.util.HashSet<>();
-        java.util.Map<Integer, ItemFrame> emptyFrames = new java.util.HashMap<>();
+        Set<Integer> present = new HashSet<>();
+        Map<Integer, ItemFrame> emptyFrames = new HashMap<>();
         int scanned = 0;
         int deadOrInvalid = 0;
         int wallMatched = 0;
@@ -128,13 +138,11 @@ public final class FrameDeployer {
                 emptyFrames.keySet(), expected, wallBlocksReplaced));
 
         // 3) 给"画框还在但内容被撸掉"的 slot 直接 setItem，不需要 spawn 新 entity
-        java.util.Set<Integer> reAttachedSlots = reAttachMapsToEmptyFrames(wallId, wall, mapIds, emptyFrames);
+        Set<Integer> reAttachedSlots = reAttachMapsToEmptyFrames(wallId, wall, mapIds, emptyFrames);
         int framesReAttached = reAttachedSlots.size();
 
         // 4) 完全缺失的 slot 走原 spawn 路径。
-        //    只跳过"完整 present"和"成功 reattach"的 slot；reattach 失败的空框（坏 mapId /
-        //    MapView 缺失）不进 skipSlots，交给 deployFor 重新 spawn，避免永久空框。
-        java.util.Set<Integer> skipSlots = new java.util.HashSet<>(present);
+        Set<Integer> skipSlots = new HashSet<>(present);
         skipSlots.addAll(reAttachedSlots);
         int framesRespawned = deployFor(wallId, wall, mapIds, skipSlots);
         plugin.getLogger().fine("[wall.refresh " + wallId + "] framesRespawned=" + framesRespawned
@@ -148,10 +156,10 @@ public final class FrameDeployer {
      * @return 成功 reattach 的 slot 集合。失败的 slot（mapId 越界 / MapView 缺失）<b>不</b>纳入返回，
      *         由 {@link #repairFor} 交给 {@link #deployFor} 重新 spawn，避免永久空框。
      */
-    private java.util.Set<Integer> reAttachMapsToEmptyFrames(String wallId, WallResolver.Result.Ok wall,
-                                           List<Integer> mapIds,
-                                           java.util.Map<Integer, ItemFrame> emptyFrames) {
-        java.util.Set<Integer> reAttached = new java.util.HashSet<>();
+    private Set<Integer> reAttachMapsToEmptyFrames(String wallId, WallResolver.Result.Ok wall,
+                                                   List<Integer> mapIds,
+                                                   Map<Integer, ItemFrame> emptyFrames) {
+        Set<Integer> reAttached = new HashSet<>();
         int total = wall.mapCount();
         for (var entry : emptyFrames.entrySet()) {
             int slot = entry.getKey();
@@ -207,13 +215,13 @@ public final class FrameDeployer {
      * 画框挂在墙面前一格，位置完全由几何决定，没有必要（也不该）为了找它们去遍历世界上
      * 所有实体。调用前须先 {@link #loadWallChunks}。
      */
-    private java.util.List<ItemFrame> framesAroundWall(WallResolver.Result.Ok wall) {
+    private List<ItemFrame> framesAroundWall(WallResolver.Result.Ok wall) {
         World world = wall.world();
-        org.bukkit.util.BoundingBox box = new org.bukkit.util.BoundingBox(
+        BoundingBox box = new BoundingBox(
                 wall.minX() - 1, wall.minY() - 1, wall.minZ() - 1,
                 maxX(wall) + 2, maxY(wall) + 2, maxZ(wall) + 2);
-        java.util.List<ItemFrame> out = new java.util.ArrayList<>();
-        for (org.bukkit.entity.Entity e : world.getNearbyEntities(box)) {
+        List<ItemFrame> out = new ArrayList<>();
+        for (Entity e : world.getNearbyEntities(box)) {
             if (e instanceof ItemFrame f) out.add(f);
         }
         return out;
@@ -260,7 +268,7 @@ public final class FrameDeployer {
                     case WEST  -> { blockX = wall.minX();                     blockZ = wall.minZ() + col; }
                     default -> throw new IllegalStateException("unsupported facing: " + facing);
                 }
-                org.bukkit.block.Block b = world.getBlockAt(blockX, blockY, blockZ);
+                Block b = world.getBlockAt(blockX, blockY, blockZ);
                 if (b.getType().isAir()) {
                     b.setType(Material.STONE, false);
                     replaced++;
@@ -274,7 +282,7 @@ public final class FrameDeployer {
      * 共享部署逻辑。{@code skipSlots} 非 null 时跳过这些 slot（refresh 路径用，只补缺失）。
      */
     private int deployFor(String wallId, WallResolver.Result.Ok wall,
-                          List<Integer> mapIds, java.util.Set<Integer> skipSlots) {
+                          List<Integer> mapIds, Set<Integer> skipSlots) {
         World world = wall.world();
         int width = wall.width();
         int height = wall.height();
@@ -347,7 +355,7 @@ public final class FrameDeployer {
         mapItem.setItemMeta(meta);
 
         // 防御 1：支撑方块仍 AIR（极小概率：replaceMissingWallBlocks 之后又有 player 撸到）→ 再补
-        org.bukkit.block.Block support = world.getBlockAt(blockX, blockY, blockZ);
+        Block support = world.getBlockAt(blockX, blockY, blockZ);
         if (support.getType().isAir()) {
             plugin.getLogger().warning("[spawnSlot] support still AIR at (" + blockX + "," + blockY
                     + "," + blockZ + ") slot=" + slotIndex + "; placing STONE again");
@@ -355,15 +363,11 @@ public final class FrameDeployer {
         }
 
         // 防御 2：frameLoc 处的方块必须 air，否则 ItemFrame 无法 spawn
-        org.bukkit.block.Block frontBlock = world.getBlockAt(
+        Block frontBlock = world.getBlockAt(
                 blockX + facing.getModX(),
                 blockY + facing.getModY(),
                 blockZ + facing.getModZ());
         if (!frontBlock.getType().isAir()) {
-            // 只清"能被放置动作直接覆盖"的方块：草、雪层、水、火之类自然长出来 / 流过来的东西
-            // （WallResolver 在选区时就是拿它们当 FRAME_SPACE_BLOCKED 拒掉的）。
-            // 玩家真放上去的方块（箱子、告示牌、任意建材）**不动**——这一格宁可不挂画框，
-            // 也不能让插件替玩家把方块删了。缺的那一格清干净后再点一次刷新即可补上。
             if (!frontBlock.isReplaceable()) {
                 plugin.getLogger().warning("[spawnSlot] front block at " + frontBlock.getLocation()
                         + " is " + frontBlock.getType() + "; someone placed a block in the frame"
@@ -375,29 +379,14 @@ public final class FrameDeployer {
             frontBlock.setType(Material.AIR, false);
         }
 
-        // 防御 3：清掉 frameLoc 1 格内残留的 Item 掉落物（撸破的画框 / 地图 item 可能掉在这）
-        //         + 清掉"自己 wall + 同 slot 上次失败 spawn 留下的"幽灵 ItemFrame。
-        //
-        // 掉落物只删画框和地图这两种：它们就是本插件自己弄掉的东西。原实现对范围内**所有**
-        // 掉落物一律 remove()，玩家扔在墙根的钻石、死在这里掉的一整套装备都会在 confirm /
-        // 重启恢复时被无声销毁。
-        //
-        // 关键约束 A（邻接 wall confirm 误删）：
-        //   不动 PDC wall_id != current 的 ItemFrame —— ItemFrame bbox 半径 ~0.25 + query box
-        //   半径 0.8 = 1.05 格 > 标准 1 格间距，相邻 wall 的 frame bbox 会被 getNearbyEntities
-        //   抓到。
-        // 关键约束 B（同 wall 邻接 slot 互删导致只剩 1 frame）：
-        //   同 wall_id 但邻接 slot 也会被 query box 抓到（slot 间距 1 + bbox 0.5 + box 0.8 相交）。
-        //   光看 wall_id 会把刚 spawn 的兄弟 slot 当残骸删。必须额外要求 PDC slot == current slot
-        //   才算"真正同位置的失败 spawn 残留"。
-        //   PDC 不带 wall_id 的 vanilla ItemFrame（玩家自己挂的画框 / 地图）也不动——
-        //   位置占用问题由 WallResolver 在 confirm 之前的 OCCUPIED 检查拒绝。
-        for (org.bukkit.entity.Entity e : world.getNearbyEntities(frameLoc, 0.8, 0.8, 0.8)) {
-            if (e instanceof org.bukkit.entity.Item drop) {
+        // 防御 3：清掉 frameLoc 邻近残留的画框/地图掉落物（绝不触碰玩家掉落的其他物品），
+        // 以及同一 wall + 同一 slot 上次失败 spawn 留下的残留 ItemFrame（不动邻接 wall 或邻接 slot）。
+        for (Entity e : world.getNearbyEntities(frameLoc, 0.8, 0.8, 0.8)) {
+            if (e instanceof Item drop) {
                 Material dropped = drop.getItemStack().getType();
                 if (dropped != Material.ITEM_FRAME && dropped != Material.GLOW_ITEM_FRAME
                         && dropped != Material.FILLED_MAP && dropped != Material.MAP) {
-                    continue;   // 玩家的东西，不碰
+                    continue;
                 }
                 plugin.getLogger().fine("[spawnSlot] removing stray " + dropped + " at "
                         + e.getLocation() + " for slot=" + slotIndex);
@@ -411,7 +400,6 @@ public final class FrameDeployer {
                             + slotIndex + ") at " + e.getLocation());
                     e.remove();
                 }
-                // 其他 wall_id / 同 wall 但不同 slot / PDC 缺失的 ItemFrame：跳过，不动
             }
         }
 
@@ -427,7 +415,7 @@ public final class FrameDeployer {
                 pdc.set(slotKey, PersistentDataType.INTEGER, finalSlot);
             });
         } catch (Exception e) {
-            plugin.getLogger().log(java.util.logging.Level.WARNING,
+            plugin.getLogger().log(Level.WARNING,
                     "[spawnSlot] world.spawn threw for slot=" + slotIndex
                             + " loc=" + frameLoc + " facing=" + facing, e);
             return false;

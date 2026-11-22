@@ -8,6 +8,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 时间轴。契约见 {@code docs/timeline.md §2.1} 与 {@code docs/protocol.md §7}；
@@ -23,8 +24,6 @@ import java.util.Map;
  *
  * <p>{@code fps} 受 config {@code timeline.max-fps} 钳（op 层 clamp，默 60；默认值 20，
  * 见 architecture.md §5.5）。</p>
- *
- * @since 0.6
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -54,7 +53,7 @@ public record Timeline(
                 frozen.put(e.getKey(),
                         raw == null ? List.of()
                                     : raw.stream()
-                                         .filter(java.util.Objects::nonNull)
+                                         .filter(Objects::nonNull)
                                          .toList());
             }
             tracks = Collections.unmodifiableMap(frozen);

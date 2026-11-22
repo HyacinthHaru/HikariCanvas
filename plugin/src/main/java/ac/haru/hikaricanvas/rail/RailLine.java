@@ -2,6 +2,8 @@ package ac.haru.hikaricanvas.rail;
 
 import org.jetbrains.annotations.Nullable;
 
+import java.util.UUID;
+
 /**
  * 铁路线路。一条线路含多个站点（{@link RailStation}）+ 多个车次（{@link RailRun}）。
  *
@@ -22,7 +24,7 @@ public record RailLine(
         String name,
         @Nullable String code,
         @Nullable String color,
-        java.util.UUID ownerUuid,
+        UUID ownerUuid,
         String ownerName,
         long createdAt,
         long updatedAt

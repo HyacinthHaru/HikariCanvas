@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P4-D2：BlockPalette 渲染 smoke。
+ * BlockPalette 渲染 smoke。
  *
  * <p>验证：按 category 分组渲染 9 个可拖动作积木（含 if）；触发器不在 palette；
  * 项 pointerdown 触发 emit('paletteDown', kind, ev)；lock 态加 hc-palette-locked 类
@@ -42,7 +42,7 @@ describe('BlockPalette 渲染 smoke', () => {
         }
     });
 
-    it('0.7.1：友好元素分组渲染 9 项（含 nudgeElement）+ nudgeElement 不重复', async () => {
+    it('友好元素分组渲染 9 项（含 nudgeElement）+ nudgeElement 不重复', async () => {
         const w = mount(BlockPalette);
         await nextTick();
         // 友好元素分组标题
@@ -62,13 +62,13 @@ describe('BlockPalette 渲染 smoke', () => {
         await nextTick();
         expect(w.find('[data-block-kind="wallReady"]').exists()).toBe(false);
         expect(w.find('[data-block-kind="timer"]').exists()).toBe(false);
-        // 0.7.1-P2：3 个新触发器也不在 palette（帽子从「新建规则」来，不从 palette 拖）。
+        // 触发器不在 palette（帽子从「新建规则」来，不从 palette 拖）。
         expect(w.find('[data-block-kind="rightClickWall"]').exists()).toBe(false);
         expect(w.find('[data-block-kind="playerLeaveRange"]').exists()).toBe(false);
         expect(w.find('[data-block-kind="playerQuit"]').exists()).toBe(false);
     });
 
-    it('0.7.1-P2：repeat 在「控制」分组（与 if 同组，control category）', async () => {
+    it('repeat 在「控制」分组（与 if 同组，control category）', async () => {
         const w = mount(BlockPalette);
         await nextTick();
         // repeat 可拖项存在

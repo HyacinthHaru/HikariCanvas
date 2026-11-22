@@ -54,8 +54,7 @@ public final class ProjectState {
             List<Guide> guides      // null/empty = 无参考线
     ) {
         public Canvas {
-            // widthMaps/heightMaps 上限校验，防远程 OOM（48GB heap）。
-            // 32×32 = 1024 maps 上限符合 PROPOSAL.md §3.1 设计上限。
+            // widthMaps/heightMaps 上限校验（最大 32×32 = 1024 maps），防远程超大画布导致 OOM。
             if (widthMaps < 1 || widthMaps > 32) {
                 throw new IllegalArgumentException("widthMaps out of range [1, 32]: " + widthMaps);
             }
@@ -333,7 +332,7 @@ public final class ProjectState {
         layers.add(to, l);
     }
 
-    // ---------- 0.6 v3：timeline 级 mutator（TimelineOperations 使用）----------
+    // ---------- timeline 级 mutator（TimelineOperations 使用）----------
 
     /** 追加时间轴到列表末尾。 */
     public void addTimeline(Timeline t) {
@@ -398,7 +397,7 @@ public final class ProjectState {
             this.activeLayerId = this.layers.get(0).id();
         }
 
-        // 0.6 v3：timelines 一并还原 —— Timeline record 不可变（tracks 深冻结），
+        // timelines 一并还原 —— Timeline record 不可变（tracks 深冻结），
         // 按引用共享即安全，无须再深拷贝（与 layers 的 element ArrayList 不同）
         this.timelines.clear();
         this.timelines.addAll(snap.timelines());

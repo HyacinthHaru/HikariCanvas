@@ -138,7 +138,6 @@ class FillDegenerateTest {
     @Test
     void rasterizeRectWithZeroDimBboxLinearGradient() {
         // 0 宽元素 + 渐变：4 角投影到方向向量 minP=maxP=0 → x1==x2 && y1==y2 → 纯色 fallback
-        // 这是 M11-B 早就有的检查，本测试只是固化
         EditSession es = new EditSession(new ProjectState(1, 1));
         es.addElement("rect", Map.of(
                 "x", 10, "y", 10, "w", 0, "h", 0,

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P4-B：useBlockCanvas pan/zoom 纯逻辑 + composable 行为单测。
+ * useBlockCanvas pan/zoom 纯逻辑 + composable 行为单测。
  *
  * <p>核心是缩放锚点数学：ctrl+wheel 以光标为锚缩放，<b>光标下 world 点缩放前后不变</b>。
  * 纯函数（{@link computeZoomPan} / {@link screenToWorldPure} / {@link clampZoom}）逐项测；

@@ -40,11 +40,9 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * P1 端到端接缝：{@link TemplateRegistry} 从磁盘加载一个 {@code .canvas} pack →
+ * 端到端接缝测试：{@link TemplateRegistry} 从磁盘加载一个 {@code .canvas} pack →
  * 取 {@link TemplateEntry#packBytes()} → 喂 {@link ProjectImporter#applyPack} → 参数替换 + 物化
- * 落到会话工程。两个 slice 各自单测了半边（registry 加载 / applyPack 独立跑），本用例是唯一把
- * <b>registry 存下来的那份字节真的走一遍套用</b>的验证——防接缝回归（entry 存了但 applyPack 拿不到 /
- * 字节形态对不上）。
+ * 落到会话工程。
  */
 class TemplatePackApplyIntegrationTest {
 
@@ -53,7 +51,9 @@ class TemplatePackApplyIntegrationTest {
     @TempDir
     Path serverDir;
 
-    private Path tmpDir;
+    @TempDir
+    Path tmpDir;
+
     private Database database;
     private WallRepo wallRepo;
     private AssetIngest assetIngest;
@@ -61,8 +61,7 @@ class TemplatePackApplyIntegrationTest {
     private CapturingPush push;
 
     @BeforeEach
-    void setUp() throws Exception {
-        tmpDir = Files.createTempDirectory("hc-pack-e2e-");
+    void setUp() {
         database = new Database(LOG, tmpDir.resolve("d.db"));
         new MigrationRunner(database.jdbi(), LOG).run();
         ImageUploadDao dao = new ImageUploadDao(LOG, database.jdbi());
@@ -75,19 +74,8 @@ class TemplatePackApplyIntegrationTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         if (database != null) database.close();
-        if (tmpDir != null && Files.exists(tmpDir)) {
-            try (var paths = Files.walk(tmpDir)) {
-                paths.sorted(Comparator.reverseOrder()).forEach(p -> {
-                    try {
-                        Files.deleteIfExists(p);
-                    } catch (IOException ignored) {
-                        // best-effort temp cleanup
-                    }
-                });
-            }
-        }
     }
 
     @Test
@@ -147,7 +135,7 @@ class TemplatePackApplyIntegrationTest {
         z.closeEntry();
     }
 
-    /** 捕获 pushSnapshot 的 fake（同 ProjectImporterPackTest）。 */
+    /** 捕获 pushSnapshot 的 fake。 */
     private static final class CapturingPush implements OpPushCallback {
         @Override
         public boolean pushSnapshot(String sessionId, ProjectState state) {

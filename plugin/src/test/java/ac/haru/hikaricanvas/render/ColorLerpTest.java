@@ -7,6 +7,7 @@ import ac.haru.hikaricanvas.state.LinearGradient;
 import ac.haru.hikaricanvas.state.RadialGradient;
 import ac.haru.hikaricanvas.state.SolidFill;
 import ac.haru.hikaricanvas.state.Stop;
+import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 
@@ -23,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 
 /**
- * {@link ColorLerp} 双端共享向量 runner + sRGB 线性空间细则单测（0.6 P3）。
+ * {@link ColorLerp} 双端共享向量 runner + sRGB 线性空间细则单测。
  * 数学权威见 {@code docs/rendering.md §9.4}；一致性验证范式见 §9.6。
  *
  * <p>共享 {@code rendering-test/color-lerp-vectors.json}（第三方 Python 参照实现生成，
@@ -44,11 +45,11 @@ class ColorLerpTest {
     // ──────────────────────────────────────────────────────────
 
     @TestFactory
-    List<org.junit.jupiter.api.DynamicTest> sharedVectors() throws IOException {
+    List<DynamicTest> sharedVectors() throws IOException {
         JsonNode root = MAPPER.readTree(Files.newBufferedReader(VECTORS));
         JsonNode cases = root.get("cases");
         assertTrue(cases != null && cases.size() > 0, "color-lerp-vectors.json 应含至少一条 case");
-        List<org.junit.jupiter.api.DynamicTest> tests = new ArrayList<>();
+        List<DynamicTest> tests = new ArrayList<>();
         for (JsonNode c : cases) {
             String a = c.get("a").asText();
             String b = c.get("b").asText();

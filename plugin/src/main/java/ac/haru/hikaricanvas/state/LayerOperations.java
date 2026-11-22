@@ -5,6 +5,7 @@ import ac.haru.hikaricanvas.render.DirtyRegion;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import static ac.haru.hikaricanvas.state.ElementValidator.boolValue;
@@ -30,7 +31,7 @@ final class LayerOperations {
      * 图层颜色标签允许值（Catppuccin 色名）。null = 无标签。
      * 任何其他字符串都会被 updateLayer 拒为 INVALID_PAYLOAD。
      */
-    static final java.util.Set<String> ALLOWED_COLOR_TAGS = java.util.Set.of(
+    static final Set<String> ALLOWED_COLOR_TAGS = Set.of(
             "red", "peach", "yellow", "green", "blue", "mauve", "overlay0");
 
     private final ProjectState state;

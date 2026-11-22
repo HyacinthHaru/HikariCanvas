@@ -1,31 +1,56 @@
 package ac.haru.hikaricanvas.script.engine;
 
+import ac.haru.hikaricanvas.HikariCanvasConfig;
+import ac.haru.hikaricanvas.HikariCanvasConfig.CommandTemplate;
+import ac.haru.hikaricanvas.HikariCanvasConfig.ParamSpec;
 import ac.haru.hikaricanvas.render.AnimationTicker;
 import ac.haru.hikaricanvas.script.Action;
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.script.ScriptRule;
+import ac.haru.hikaricanvas.script.Trigger;
+import ac.haru.hikaricanvas.session.WallKey;
+import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.storage.AuditLog;
+import ac.haru.hikaricanvas.storage.Database;
+import ac.haru.hikaricanvas.storage.MigrationRunner;
+import ac.haru.hikaricanvas.storage.UserGlobalVariableDao;
 import ac.haru.hikaricanvas.storage.WallRepo;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.VariableStore;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.title.Title;
+import org.bukkit.block.BlockFace;
+import org.bukkit.entity.Player;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
+import java.lang.reflect.Proxy;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
+import java.util.UUID;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import java.util.random.RandomGenerator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.7.0-P2-4：{@link ActionExecutor} 8 动作（fake store/ticker；plugin=null 直跑路径）。
- *
- * <p>playSound 的"声音存在 + 在线玩家收包"真路径需要 Bukkit server，留批次 3 MVP
- * 游戏内验证；这里覆盖 scope / 依赖缺失 / wall 缺失 各拒绝分支。</p>
+ * {@link ActionExecutor} 动作执行、命令审计与变量越权守卫单元测试。
  */
 class ActionExecutorTest {
 
@@ -56,7 +81,7 @@ class ActionExecutorTest {
             public void close() {
             }
         });
-        store = new VariableStore(new NoopDao(), w -> {
+        store = new VariableStore(new NoopUserVariableDao(), w -> {
         });
         ticker = new ElementPropertyApplierTest.FakeTicker();
     }
@@ -69,8 +94,8 @@ class ActionExecutorTest {
         return new ActionExecutor(null, null, null, null, null, log);
     }
 
-    /** 0.7.1：注入确定性随机源（setRandomVariable 测试用）。 */
-    private ActionExecutor executorWithRng(java.util.random.RandomGenerator rng) {
+    /** 注入确定性随机源（setRandomVariable 测试用）。 */
+    private ActionExecutor executorWithRng(RandomGenerator rng) {
         ActionExecutor ex = new ActionExecutor(store, ticker, null, null, null, log);
         ex.setRngForTest(rng);
         return ex;
@@ -168,8 +193,6 @@ class ActionExecutorTest {
                 "超 2^53 整数精确域不收整");
     }
 
-    // ---------- 0.7.3-ultrareview：formatNumber 非有限 → "0"（变量库污染修复）----------
-
     @Test
     void formatNumber_nonFinite_returnsZero() {
         assertEquals("0", ActionExecutor.formatNumber(Double.POSITIVE_INFINITY),
@@ -253,7 +276,7 @@ class ActionExecutorTest {
         assertEquals("error", step.result());
     }
 
-    // ---------- playSound（拒绝分支；真路径留批次 3 游戏内 MVP） ----------
+    // ---------- playSound（拒绝分支覆盖） ----------
 
     @Test
     void playSound_badScope_errorStep() {
@@ -272,7 +295,7 @@ class ActionExecutorTest {
 
     @Test
     void playSound_wallMissing_errorStep() {
-        // null-jdbi WallRepo：loadById 内部吞异常返 empty（既有防御纪律）
+        // null-jdbi WallRepo：loadById 内部吞异常返 empty
         WallRepo repo = new WallRepo(log, null);
         ActionExecutor ex = new ActionExecutor(store, ticker, null, repo, null, log);
         TraceStep step = ex.execute(WALL, "b",
@@ -281,11 +304,11 @@ class ActionExecutorTest {
         assertTrue(step.detail().contains("wall"), step.detail());
     }
 
-    // ---------- runCommand（0.7.0-P3 A1：命令模板系统接线） ----------
+    // ---------- runCommand（命令模板系统接线） ----------
 
     @Test
     void runCommand_withoutTemplates_blockedStep() {
-        // 旧 6 参构造（templates supplier 缺）→ 模板恒查无 → blocked
+        // 6 参构造（templates supplier 缺）→ 模板恒查无 → blocked
         TraceStep step = executor().execute(WALL, "b",
                 new Action.RunCommand("give-reward", Map.of("player", "Bob")));
         assertEquals("blocked", step.result());
@@ -294,11 +317,10 @@ class ActionExecutorTest {
 
     @Test
     void runCommand_renderError_errorStep() {
-        var tpls = Map.of("announce", new ac.haru.hikaricanvas.HikariCanvasConfig.CommandTemplate(
-                "say {msg}", Map.of("msg",
-                        ac.haru.hikaricanvas.HikariCanvasConfig.ParamSpec.defaults())));
+        var tpls = Map.of("announce", new CommandTemplate(
+                "say {msg}", Map.of("msg", ParamSpec.defaults())));
         ActionExecutor ex = new ActionExecutor(null, null, null, null, null,
-                () -> tpls, java.util.List::of, null, log);
+                () -> tpls, List::of, null, log);
         // 参数缺失 → error step（不 blocked——模板在，是规则方填错）
         TraceStep step = ex.execute(WALL, "b",
                 new Action.RunCommand("announce", Map.of()));
@@ -308,13 +330,11 @@ class ActionExecutorTest {
 
     @Test
     void runCommand_renderOk_okStep_andDispatchFailureContained() {
-        var tpls = Map.of("announce", new ac.haru.hikaricanvas.HikariCanvasConfig.CommandTemplate(
-                "say {msg}", Map.of("msg",
-                        ac.haru.hikaricanvas.HikariCanvasConfig.ParamSpec.defaults())));
+        var tpls = Map.of("announce", new CommandTemplate(
+                "say {msg}", Map.of("msg", ParamSpec.defaults())));
         ActionExecutor ex = new ActionExecutor(null, null, null, null, null,
-                () -> tpls, java.util.List::of, null, log);
-        // plugin=null 直跑：Bukkit.dispatchCommand 在单测无 server 环境抛 → work 内自吞
-        // （三层隔离），step 仍 ok（提交语义；同 playSound 范式）
+                () -> tpls, List::of, null, log);
+        // plugin=null 直跑：Bukkit.dispatchCommand 在单测无 server 环境抛 → work 内自吞，step 仍 ok
         TraceStep step = ex.execute(WALL, "b",
                 new Action.RunCommand("announce", Map.of("msg", "hello")));
         assertEquals("ok", step.result());
@@ -347,7 +367,7 @@ class ActionExecutorTest {
                 r.getMessage().equals("[script w-1] raw ${var:user/n}")));
     }
 
-    // ---------- 0.7.1：setElementProperties / nudge（委托 applier） ----------
+    // ---------- setElementProperties / nudge（委托 applier） ----------
 
     @Test
     void setElementProperties_delegatesToApplyMany() {
@@ -406,11 +426,11 @@ class ActionExecutorTest {
         assertEquals("error", step.result());
     }
 
-    // ---------- 0.7.1：sendMessage ----------
+    // ---------- sendMessage / showTitle ----------
 
     @Test
     void sendMessage_noTriggerPlayer_okSkip() {
-        ScriptRunner.TRIGGER_PLAYER.remove(); // 无触发玩家
+        ScriptRunner.TRIGGER_PLAYER.remove();
         TraceStep step = executor().execute(WALL, "b",
                 new Action.SendMessage("hi", "chat", "trigger"));
         assertEquals("ok", step.result());
@@ -427,7 +447,6 @@ class ActionExecutorTest {
 
     @Test
     void sendMessage_withTriggerPlayer_okStep_dispatchContained() {
-        // 触发玩家有值，plugin=null 直跑：Bukkit.getPlayerExact 无 server 抛 → work 内自吞（三层隔离）
         ScriptRunner.TRIGGER_PLAYER.set("Alice");
         try {
             TraceStep step = executor().execute(WALL, "b",
@@ -440,38 +459,45 @@ class ActionExecutorTest {
     }
 
     /**
-     * 触发玩家读的是 TRIGGER_PLAYER 不是 TRIGGER_DETAIL。
-     *
-     * <p>playerKill 的 detail 是 {@code victim→killer} 拼接串，早先拿它当玩家名去
-     * getPlayerExact 必然找不到人，消息静默丢失。这里模拟那个形态：只有 detail 有值时
-     * 必须按"无触发玩家"跳过，不许把拼接串当人名用。</p>
+     * sendMessage / showTitle 的 target=trigger 只读 {@link ScriptRunner#currentTriggerPlayer()}，
+     * 不把 {@link TriggerContext#detail()}（如 {@code Victim→Killer}）当作玩家名。
      */
     @Test
-    void sendMessage_detailIsNotUsedAsPlayerName() {
-        ScriptRunner.TRIGGER_DETAIL.set("Victim→Killer");
-        ScriptRunner.TRIGGER_PLAYER.remove();
-        try {
-            TraceStep step = executor().execute(WALL, "b",
-                    new Action.SendMessage("hi", "chat", "trigger"));
-            assertEquals("ok", step.result());
-            assertTrue(step.detail().contains("no trigger player"), step.detail());
-            assertFalse(step.detail().contains("→"), "detail 串不该被当成玩家名: " + step.detail());
-        } finally {
-            ScriptRunner.TRIGGER_DETAIL.remove();
-        }
+    void triggerTarget_detailIsNotUsedAsPlayerName() {
+        ScriptRunner runner = new ScriptRunner(
+                new ConditionEvaluator(log, store),
+                executor(),
+                new ScriptBudget(HikariCanvasConfig.ScriptsConfig.defaults()),
+                null,
+                log,
+                new ScriptRunner.TaskScheduler() {
+                    @Override public void execute(Runnable task) { task.run(); }
+                    @Override public void schedule(Runnable task, long delayMs) {}
+                    @Override public void shutdown() {}
+                });
+        ScriptRule rule = new ScriptRule("r-1", WALL, true, "test",
+                new Trigger.PlayerKill(),
+                List.of(
+                        new Action.SendMessage("hi", "chat", "trigger"),
+                        new Action.ShowTitle("Hi", "Sub", 200, 1000, 200, "trigger")),
+                "{}");
+        List<List<TraceStep>> traces = new ArrayList<>();
+        runner.submit(WALL, rule,
+                new TriggerContext(TriggerContext.Source.PLAYER_KILL, 0, "Victim→Killer", null),
+                traces::add);
+
+        assertEquals(1, traces.size());
+        List<TraceStep> steps = traces.get(0);
+        assertEquals(3, steps.size());
+        assertTrue(steps.get(1).detail().contains("no trigger player"), steps.get(1).detail());
+        assertFalse(steps.get(1).detail().contains("→"), steps.get(1).detail());
+        assertTrue(steps.get(2).detail().contains("no trigger player"), steps.get(2).detail());
+        assertFalse(steps.get(2).detail().contains("→"), steps.get(2).detail());
     }
 
-    // ---------- 0.7.2-P3：sendMessage target 分流（trigger / all 广播）----------
-
-    /**
-     * target=all：不读 TRIGGER_DETAIL（即使无触发玩家也不"跳过"），走 {@code
-     * Bukkit.getOnlinePlayers()} 广播分支。plugin=null 直跑：无 server 时
-     * getOnlinePlayers 抛 → work 内自吞（三层隔离）→ 仍返 ok（detail 标 broadcast/all）。
-     * 结构性断言：detail <b>不含</b>"无触发玩家"，证明走了广播分支而非 trigger-skip。
-     */
     @Test
     void sendMessage_targetAll_takesBroadcastBranch_notTriggerSkip() {
-        ScriptRunner.TRIGGER_PLAYER.remove(); // 无触发玩家
+        ScriptRunner.TRIGGER_PLAYER.remove();
         TraceStep step = executor().execute(WALL, "b",
                 new Action.SendMessage("大家好", "chat", "all"));
         assertEquals("ok", step.result());
@@ -479,7 +505,6 @@ class ActionExecutorTest {
                 "target=all 应走广播分支，不应因无触发玩家而跳过: " + step.detail());
     }
 
-    /** target=all 即使有触发玩家也走广播分支（不只发触发者）。 */
     @Test
     void sendMessage_targetAll_withTriggerPlayer_stillBroadcast() {
         ScriptRunner.TRIGGER_PLAYER.set("Alice");
@@ -487,7 +512,6 @@ class ActionExecutorTest {
             TraceStep step = executor().execute(WALL, "b",
                     new Action.SendMessage("大家好", "actionbar", "all"));
             assertEquals("ok", step.result());
-            // 广播 detail 不应是 trigger 玩家专属的 "msg→Alice"
             assertFalse(step.detail().contains("Alice"),
                     "target=all 广播 detail 不应标触发玩家名: " + step.detail());
         } finally {
@@ -495,22 +519,73 @@ class ActionExecutorTest {
         }
     }
 
-    /** target=trigger 无触发玩家仍按现有逻辑跳过（向后兼容回归）。 */
     @Test
-    void sendMessage_targetTrigger_noPlayer_okSkip() {
+    void showTitle_targetAll_takesBroadcastBranch() {
         ScriptRunner.TRIGGER_PLAYER.remove();
-        TraceStep step = executor().execute(WALL, "b",
-                new Action.SendMessage("hi", "chat", "trigger"));
-        assertEquals("ok", step.result());
-        assertTrue(step.detail().contains("no trigger player"), step.detail());
+        TraceStep step = executor().execute(WALL, "a/0",
+                new Action.ShowTitle("Big News", "Sub", 500, 2000, 500, "all"));
+        assertEquals("ok", step.result(), step::detail);
+        assertTrue(step.detail().contains("broadcast"), step.detail());
     }
 
-    // ---------- 0.7.1：setRandomVariable ----------
+    @Test
+    void showTitle_targetTrigger_noTriggerPlayer_skipOk() {
+        ScriptRunner.TRIGGER_PLAYER.remove();
+        TraceStep step = executor().execute(WALL, "a/0",
+                new Action.ShowTitle("Hi", "there", 200, 3000, 200, "trigger"));
+        assertEquals("ok", step.result(), step::detail);
+        assertTrue(step.detail().contains("skipped"), step.detail());
+    }
+
+    @Test
+    void showTitle_targetTrigger_withTriggerPlayer_routesToTriggerPlayer() {
+        ScriptRunner.TRIGGER_PLAYER.set("Alice");
+        try {
+            TraceStep step = executor().execute(WALL, "a/0",
+                    new Action.ShowTitle("Hi", "there", 200, 3000, 200, "trigger"));
+            assertEquals("ok", step.result(), step::detail);
+            assertEquals("title -> Alice", step.detail());
+        } finally {
+            ScriptRunner.TRIGGER_PLAYER.remove();
+        }
+    }
+
+    @Test
+    void showTitleTo_dispatchesAdventureShowTitleWithMillisDurations() {
+        List<Title> shown = new ArrayList<>();
+        Player proxyPlayer = (Player) Proxy.newProxyInstance(
+                Player.class.getClassLoader(),
+                new Class<?>[]{Player.class},
+                (proxy, method, args) -> {
+                    if ("showTitle".equals(method.getName()) && args != null && args.length == 1
+                            && args[0] instanceof Title t) {
+                        shown.add(t);
+                        return null;
+                    }
+                    if ("sendTitle".equals(method.getName())) {
+                        throw new AssertionError("不应调用已弃用的 Bukkit sendTitle");
+                    }
+                    return null;
+                });
+
+        ActionExecutor.showTitleTo(proxyPlayer, "Big News", "Subtitle", 350, 2500, 750);
+
+        assertEquals(1, shown.size());
+        Title t = shown.get(0);
+        assertEquals(Component.text("Big News"), t.title());
+        assertEquals(Component.text("Subtitle"), t.subtitle());
+        assertNotNull(t.times());
+        assertEquals(Duration.ofMillis(350), t.times().fadeIn());
+        assertEquals(Duration.ofMillis(2500), t.times().stay());
+        assertEquals(Duration.ofMillis(750), t.times().fadeOut());
+    }
+
+    // ---------- setRandomVariable ----------
 
     @Test
     void setRandomVariable_seeded_deterministic() {
         store.create("user:w-1", "roll", VarType.NUMBER, "0", "manual");
-        ActionExecutor ex = executorWithRng(new java.util.Random(42));
+        ActionExecutor ex = executorWithRng(new Random(42));
         TraceStep step = ex.execute(WALL, "b",
                 new Action.SetRandomVariable("user/roll", 1.0, 1.0));
         assertEquals("ok", step.result());
@@ -520,7 +595,7 @@ class ActionExecutorTest {
     @Test
     void setRandomVariable_integerRange_inBounds() {
         store.create("user:w-1", "roll", VarType.NUMBER, "0", "manual");
-        ActionExecutor ex = executorWithRng(new java.util.Random(7));
+        ActionExecutor ex = executorWithRng(new Random(7));
         for (int i = 0; i < 50; i++) {
             ex.execute(WALL, "b", new Action.SetRandomVariable("user/roll", 0.0, 10.0));
             int v = Integer.parseInt(valueOf("user:w-1/roll"));
@@ -543,7 +618,7 @@ class ActionExecutorTest {
         assertEquals("error", step.result());
     }
 
-    // ---------- 0.7.1：scaleVariable ----------
+    // ---------- scaleVariable ----------
 
     @Test
     void scaleVariable_multiply() {
@@ -590,7 +665,7 @@ class ActionExecutorTest {
         assertEquals("error", step.result());
     }
 
-    // ---------- 0.7.1：playTimelineAwait（execute 做 play；挂起由 Runner） ----------
+    // ---------- playTimelineAwait（execute 做 play；挂起由 Runner） ----------
 
     @Test
     void playTimelineAwait_play_ok() {
@@ -621,7 +696,7 @@ class ActionExecutorTest {
         assertEquals("error", step.result());
     }
 
-    // ---------- 0.7.1：timelineDurationMs ----------
+    // ---------- timelineDurationMs ----------
 
     @Test
     void timelineDurationMs_noWallRepo_returnsZero() {
@@ -632,13 +707,21 @@ class ActionExecutorTest {
     // ---------- 防御 + 三层隔离 ----------
 
     @Test
-    void waitAndIf_reachingExecutor_defensiveErrorStep() {
+    void runnerOwnedActions_reachingExecutor_defensiveErrorStep() {
         assertEquals("error", executor().execute(WALL, "b", new Action.Wait(100)).result());
         assertEquals("error", executor().execute(WALL, "b",
                 new Action.If("1 == 1", List.of(), List.of())).result());
+        TraceStep ru = executor().execute(WALL, "b",
+                new Action.RepeatUntil("1 == 1", 3, List.of(new Action.Log("x"))));
+        assertEquals("error", ru.result());
+        assertEquals("repeatUntil is handled by ScriptRunner", ru.detail());
+        TraceStep tb = executor().execute(WALL, "b",
+                new Action.TweenBlock(500L, null, List.of()));
+        assertEquals("error", tb.result());
+        assertEquals("tweenBlock is handled by ScriptRunner", tb.detail());
     }
 
-    // ---------- 0.7.1-P5：playParticle / stopScript / waitUntil ----------
+    // ---------- playParticle / stopScript / waitUntil ----------
 
     @Test
     void playParticle_repoMissing_errorStep() {
@@ -672,7 +755,7 @@ class ActionExecutorTest {
         assertEquals("error", step.result());
     }
 
-    // ---------- 0.7.2-P2：copyVariable / appendVariable（变量积木真实现） ----------
+    // ---------- copyVariable / appendVariable ----------
 
     @Test
     void copyVariable_copiesSourceToTarget() {
@@ -740,7 +823,7 @@ class ActionExecutorTest {
         assertEquals("error", step.result());
     }
 
-    // ---------- 0.7.2-P2：cloneElement / deleteElement（dispatch 到 ElementPropertyApplier） ----------
+    // ---------- cloneElement / deleteElement / setElementLayer（委托 ElementPropertyApplier） ----------
 
     @Test
     void cloneElement_noApplier_error() {
@@ -807,7 +890,41 @@ class ActionExecutorTest {
         assertEquals(List.of("e-9"), deleteCalls, "applyDelete 经 seam 落到 delete()");
     }
 
-    // ---------- 0.7.3-ultrareview：roundVariable StrictNumber 对齐 ----------
+    @Test
+    void setElementLayer_noApplier_error() {
+        TraceStep step = executor().execute(WALL, "actions/0",
+                new Action.SetElementLayer("el-1", "front"));
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("ElementPropertyApplier"), step.detail());
+    }
+
+    @Test
+    void setElementLayer_frontAndBack_dispatchToReorderToEdge() {
+        List<String> calls = new ArrayList<>();
+        ElementPropertyApplier applier = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        throw new AssertionError("不应走 apply()");
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome reorderToEdge(
+                            String w, String e, String mode) {
+                        calls.add(e + ":" + mode);
+                        return ElementPropertyApplier.SessionOutcome.applied();
+                    }
+                }, null, null, log);
+        ActionExecutor ex = new ActionExecutor(store, ticker, applier, null, null, log);
+        TraceStep s1 = ex.execute(WALL, "actions/0", new Action.SetElementLayer("el-3", "front"));
+        TraceStep s2 = ex.execute(WALL, "actions/1", new Action.SetElementLayer("el-5", "back"));
+        assertEquals("ok", s1.result(), s1::detail);
+        assertEquals("ok", s2.result(), s2::detail);
+        assertEquals(List.of("el-3:front", "el-5:back"), calls);
+    }
+
+    // ---------- roundVariable ----------
 
     @Test
     void roundVariable_floor_ok() {
@@ -817,6 +934,15 @@ class ActionExecutorTest {
                 new Action.RoundVariable("user/v", "floor"));
         assertEquals("ok", step.result(), () -> String.valueOf(step.detail()));
         assertEquals("3", valueOf("user:w-1/v"), "floor(3.7) = 3");
+    }
+
+    @Test
+    void roundVariable_negative_floor() {
+        store.create("user:w-1", "neg", VarType.NUMBER, "-2.7", "manual");
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.RoundVariable("user/neg", "floor"));
+        assertEquals("ok", step.result(), step::detail);
+        assertEquals("-3", valueOf("user:w-1/neg"));
     }
 
     @Test
@@ -836,7 +962,6 @@ class ActionExecutorTest {
         TraceStep step = executor().execute(WALL, "b",
                 new Action.RoundVariable("user/v", "round"));
         assertEquals("ok", step.result());
-        // Java Math.round(2.5) = 3（half-up，非 half-even）
         assertEquals("3", valueOf("user:w-1/v"), "round(2.5) = 3（half-up）");
     }
 
@@ -847,14 +972,20 @@ class ActionExecutorTest {
         TraceStep step = executor().execute(WALL, "b",
                 new Action.RoundVariable("user/v", "round"));
         assertEquals("ok", step.result());
-        // Java Math.round(-2.5) = -2（向正无穷的 half-up 非对称）
         assertEquals("-2", valueOf("user:w-1/v"), "round(-2.5) = -2（Java Math.round 语义）");
     }
 
     @Test
+    void roundVariable_nonNumeric_error() {
+        store.create("user:w-1", "text", VarType.STRING, "abc", "manual");
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.RoundVariable("user/text", "round"));
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("not numeric"), step.detail());
+    }
+
+    @Test
     void roundVariable_nanString_error() {
-        // "NaN" 不符合 StrictNumber 文法 → error step（不写回，变量值不变）。
-        // 旧 Double.parseDouble("NaN") 会写脏 "NaN"；静默按 0 又吞错——取整非数值一律 error。
         store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
         store.setValue("user:w-1/v", "NaN", null);
         TraceStep step = executor().execute(WALL, "b",
@@ -866,7 +997,6 @@ class ActionExecutorTest {
 
     @Test
     void roundVariable_infinityString_error() {
-        // "Infinity" 不符合 StrictNumber 文法 → error step（不写回）
         store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
         store.setValue("user:w-1/v", "Infinity", null);
         TraceStep step = executor().execute(WALL, "b",
@@ -877,7 +1007,6 @@ class ActionExecutorTest {
 
     @Test
     void roundVariable_hexString_error() {
-        // "0x1p4"（Double.parseDouble 接受但 StrictNumber 拒）→ error step
         store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
         store.setValue("user:w-1/v", "0x1p4", null);
         TraceStep step = executor().execute(WALL, "b",
@@ -888,7 +1017,6 @@ class ActionExecutorTest {
 
     @Test
     void roundVariable_trailingSuffix_error() {
-        // "5d"（Double.parseDouble 旧版接受但 StrictNumber 拒）→ error step
         store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
         store.setValue("user:w-1/v", "5d", null);
         TraceStep step = executor().execute(WALL, "b",
@@ -915,22 +1043,281 @@ class ActionExecutorTest {
                 "异常进 WARNING log（三层隔离）");
     }
 
-    // ---------- fakes ----------
+    // ---------- runCommand SCRIPT_COMMAND_EXECUTED 审计 ----------
 
-    /** no-op 持久化 Dao（照 VariableStoreTest.FakeUserVariableDao 范式，内存即弃）。 */
-    private static final class NoopDao extends UserVariableDao {
-        NoopDao() {
-            super(Logger.getLogger("test"), null);
+    @Nested
+    class CommandAuditTests {
+
+        private final Logger auditLogger = Logger.getLogger("ActionExecutorTest.CommandAuditTests");
+        private Path tmpDir;
+        private Database database;
+        private AuditLog auditLog;
+
+        @BeforeEach
+        void setUpAuditDb() throws Exception {
+            auditLogger.setUseParentHandlers(false);
+            auditLogger.setLevel(Level.OFF);
+            tmpDir = Files.createTempDirectory("hikari-cmd-audit-test-");
+            database = new Database(auditLogger, tmpDir.resolve("data.db"));
+            new MigrationRunner(database.jdbi(), auditLogger).run();
+            auditLog = new AuditLog(database.jdbi(), auditLogger);
+        }
+
+        @AfterEach
+        void tearDownAuditDb() throws Exception {
+            ScriptRunner.RULE_KEY.remove();
+            if (database != null) database.close();
+            if (tmpDir != null && Files.exists(tmpDir)) {
+                try (var s = Files.walk(tmpDir)) {
+                    s.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+                }
+            }
+        }
+
+        private List<Map<String, Object>> auditRows() {
+            return database.jdbi().withHandle(h ->
+                    h.createQuery("SELECT event, details FROM audit_log ORDER BY ts, rowid")
+                            .mapToMap()
+                            .list());
+        }
+
+        @Test
+        void commandExecuted_auditedWithTemplateIdFullCommandAndRuleKey() {
+            Map<String, CommandTemplate> tpls = Map.of(
+                    "announce", new CommandTemplate("say [招牌] {msg}",
+                            Map.of("msg", ParamSpec.defaults())));
+            ActionExecutor ex = new ActionExecutor(null, null, null, null, null,
+                    () -> tpls, List::of, auditLog, auditLogger);
+
+            ScriptRunner.RULE_KEY.set("w-1:sr-abc");
+            TraceStep step = ex.execute("w-1", "actions/0",
+                    new Action.RunCommand("announce", Map.of("msg", "开张了")));
+            assertEquals("ok", step.result());
+
+            List<Map<String, Object>> rows = auditRows();
+            assertEquals(1, rows.size(), "恰一条 SCRIPT_COMMAND_EXECUTED");
+            assertEquals("SCRIPT_COMMAND_EXECUTED", rows.get(0).get("event"));
+            String details = String.valueOf(rows.get(0).get("details"));
+            assertTrue(details.contains("\"template_id\":\"announce\""), details);
+            assertTrue(details.contains("say [招牌] 开张了"), details);
+            assertTrue(details.contains("\"rule_key\":\"w-1:sr-abc\""), details);
+            assertTrue(details.contains("\"wall_id\":\"w-1\""), details);
+        }
+
+        @Test
+        void blockedAndErrorPaths_noAudit() {
+            Map<String, CommandTemplate> tpls = Map.of(
+                    "announce", new CommandTemplate("say {msg}",
+                            Map.of("msg", ParamSpec.defaults())));
+            ActionExecutor ex = new ActionExecutor(null, null, null, null, null,
+                    () -> tpls, List::of, auditLog, auditLogger);
+
+            assertEquals("blocked", ex.execute("w-1", "b",
+                    new Action.RunCommand("nope", Map.of())).result());
+            assertEquals("error", ex.execute("w-1", "b",
+                    new Action.RunCommand("announce", Map.of())).result());
+            assertTrue(auditRows().isEmpty(), "未执行的命令不留 SCRIPT_COMMAND_EXECUTED");
+        }
+    }
+
+    // ---------- 变量族积木越权守卫（security.md §13.8） ----------
+
+    @Nested
+    class VariableAclTests {
+
+        private final Logger aclLogger = Logger.getLogger("ActionExecutorTest.VariableAclTests");
+        private final UUID wallOwner = UUID.randomUUID();
+        private final UUID someoneElse = UUID.randomUUID();
+
+        private Path tmpDir;
+        private Database database;
+        private WallRepo wallRepo;
+        private VariableStore aclStore;
+        private ActionExecutor aclExecutor;
+        private String wallId;
+        private String otherWallId;
+
+        @BeforeEach
+        void setUpAclDb() throws Exception {
+            tmpDir = Files.createTempDirectory("hikari-script-acl-");
+            database = new Database(aclLogger, tmpDir.resolve("data.db"));
+            new MigrationRunner(database.jdbi(), aclLogger).run();
+            wallRepo = new WallRepo(aclLogger, database.jdbi());
+            wallId = wallRepo.createWithMapIds(new WallKey("world", 0, 64, 0, BlockFace.NORTH),
+                    new ProjectState(1, 1), List.of(0), 1, 1, wallOwner, "Owner");
+            otherWallId = wallRepo.createWithMapIds(new WallKey("world", 10, 64, 0, BlockFace.NORTH),
+                    new ProjectState(1, 1), List.of(1), 1, 1, someoneElse, "Other");
+
+            aclStore = new VariableStore(new NoopUserVariableDao(), w -> { });
+            aclStore.configureUserGlobal(new NoopGlobalDao(aclLogger), 100, 1000);
+            aclExecutor = new ActionExecutor(aclStore, null, null, wallRepo, null, aclLogger);
+        }
+
+        @AfterEach
+        void tearDownAclDb() throws Exception {
+            if (database != null) database.close();
+            if (tmpDir != null && Files.exists(tmpDir)) {
+                try (var s = Files.walk(tmpDir)) {
+                    s.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+                }
+            }
+        }
+
+        private String aclValue(String fullName) {
+            return aclStore.get(fullName).map(v -> v.currentValue()).orElse(null);
+        }
+
+        @Test
+        void setVariable_crossWallUserVariable_denied() {
+            aclStore.create("user:" + otherWallId, "score", VarType.NUMBER, "0", "manual");
+            aclStore.setValue("user:" + otherWallId + "/score", "1", null);
+
+            TraceStep step = aclExecutor.execute(wallId, "b",
+                    new Action.SetVariable("user:" + otherWallId + "/score", "9999"));
+
+            assertEquals("error", step.result(), step::detail);
+            assertEquals("1", aclValue("user:" + otherWallId + "/score"), "别的墙的变量不许被改");
+        }
+
+        @Test
+        void setVariable_ownWallUserVariable_allowed() {
+            aclStore.create("user:" + wallId, "score", VarType.NUMBER, "0", "manual");
+
+            TraceStep step = aclExecutor.execute(wallId, "b",
+                    new Action.SetVariable("user/score", "42"));
+
+            assertEquals("ok", step.result(), step::detail);
+            assertEquals("42", aclValue("user:" + wallId + "/score"));
+        }
+
+        @Test
+        void copyVariable_crossWallSource_denied() {
+            aclStore.create("user:" + otherWallId, "secret", VarType.STRING, null, "manual");
+            aclStore.setValue("user:" + otherWallId + "/secret", "机密", null);
+            aclStore.create("user:" + wallId, "leak", VarType.STRING, null, "manual");
+
+            TraceStep step = aclExecutor.execute(wallId, "b",
+                    new Action.CopyVariable("user:" + otherWallId + "/secret", "user/leak"));
+
+            assertEquals("error", step.result(), step::detail);
+            assertNull(aclValue("user:" + wallId + "/leak"), "跨墙内容不许被抄过来");
+        }
+
+        @Test
+        void setVariable_userGlobalOwnedByOtherPlayer_denied() {
+            aclStore.createGlobal(someoneElse, "Other", "server_notice", VarType.STRING, null);
+            aclStore.setValue("userglobal/server_notice", "原文案", null);
+
+            TraceStep step = aclExecutor.execute(wallId, "b",
+                    new Action.SetVariable("userglobal/server_notice", "被篡改"));
+
+            assertEquals("error", step.result(), step::detail);
+            assertEquals("原文案", aclValue("userglobal/server_notice"));
+        }
+
+        @Test
+        void setVariable_userGlobalOwnedByWallOwner_allowed() {
+            aclStore.createGlobal(wallOwner, "Owner", "my_counter", VarType.NUMBER, "0");
+
+            TraceStep step = aclExecutor.execute(wallId, "b",
+                    new Action.SetVariable("userglobal/my_counter", "7"));
+
+            assertEquals("ok", step.result(), step::detail);
+            assertEquals("7", aclValue("userglobal/my_counter"));
+        }
+
+        @Test
+        void setVariable_userGlobal_unknownWall_denied() {
+            aclStore.createGlobal(wallOwner, "Owner", "my_counter", VarType.NUMBER, "0");
+
+            TraceStep step = aclExecutor.execute("w-deadbeef", "b",
+                    new Action.SetVariable("userglobal/my_counter", "7"));
+
+            assertEquals("error", step.result(), step::detail);
+            assertNull(aclValue("userglobal/my_counter"));
+        }
+
+        @Test
+        void setVariable_providerOwnedNamespaces_denied() {
+            aclStore.create("system:" + wallId, "wall.alias", VarType.STRING, null, "system");
+            aclStore.setValue("system:" + wallId + "/wall.alias", "真别名", null);
+            aclStore.create("scoreboard", "kills.Steve", VarType.NUMBER, null, "scoreboard-provider");
+            aclStore.setValue("scoreboard/kills.Steve", "3", null);
+            aclStore.create("schedule:" + wallId, "next_departure", VarType.STRING, null, "schedule");
+            aclStore.setValue("schedule:" + wallId + "/next_departure", "08:00", null);
+
+            assertEquals("error", aclExecutor.execute(wallId, "b",
+                    new Action.SetVariable("system:" + wallId + "/wall.alias", "假别名")).result());
+            assertEquals("error", aclExecutor.execute(wallId, "b",
+                    new Action.SetVariable("scoreboard/kills.Steve", "9999")).result());
+            assertEquals("error", aclExecutor.execute(wallId, "b",
+                    new Action.SetVariable("schedule/next_departure", "23:59")).result());
+
+            assertEquals("真别名", aclValue("system:" + wallId + "/wall.alias"));
+            assertEquals("3", aclValue("scoreboard/kills.Steve"));
+            assertEquals("08:00", aclValue("schedule:" + wallId + "/next_departure"));
+        }
+
+        @Test
+        void setVariable_pluginNamespace_stillAllowed() {
+            aclStore.create("bedwars", "score", VarType.NUMBER, "0", "bedwars");
+
+            TraceStep step = aclExecutor.execute(wallId, "b",
+                    new Action.SetVariable("bedwars/score", "5"));
+
+            assertEquals("ok", step.result(), step::detail);
+            assertEquals("5", aclValue("bedwars/score"));
+        }
+
+        @Test
+        void everyVariableActionIsGuarded() {
+            String foreign = "user:" + otherWallId + "/score";
+            aclStore.create("user:" + otherWallId, "score", VarType.NUMBER, "0", "manual");
+            aclStore.setValue(foreign, "1", null);
+            aclStore.create("user:" + wallId, "mine", VarType.STRING, null, "manual");
+
+            List<Action> actions = List.of(
+                    new Action.SetVariable(foreign, "9"),
+                    new Action.IncrementVariable(foreign, 1.0),
+                    new Action.CopyVariable("user/mine", foreign),
+                    new Action.AppendVariable(foreign, "x"),
+                    new Action.SetRandomVariable(foreign, 1.0, 6.0),
+                    new Action.ScaleVariable(foreign, "multiply", 2.0),
+                    new Action.RoundVariable(foreign, "round"));
+
+            for (Action a : actions) {
+                TraceStep step = aclExecutor.execute(wallId, "b", a);
+                assertEquals("error", step.result(),
+                        () -> a.wireType() + " 也必须拦跨墙写: " + step.detail());
+                assertTrue(step.detail().contains(otherWallId), step.detail());
+            }
+            assertEquals("1", aclValue(foreign), "7 个积木一个都没写进去");
+        }
+    }
+
+    private static final class NoopGlobalDao extends UserGlobalVariableDao {
+        NoopGlobalDao(Logger logger) {
+            super(logger, null);
         }
 
         @Override
-        public void upsert(String wallId, String name, VarType type,
+        public void upsert(String name, UUID ownerUuid, String ownerName, VarType type,
                            String defaultValue, String currentValue, String boundTo,
                            long createdAt, long updatedAt) {
         }
 
         @Override
-        public void delete(String wallId, String name) {
+        public void delete(String name) {
+        }
+
+        @Override
+        public int countByOwner(UUID ownerUuid) {
+            return 0;
+        }
+
+        @Override
+        public int countTotal() {
+            return 0;
         }
     }
 }

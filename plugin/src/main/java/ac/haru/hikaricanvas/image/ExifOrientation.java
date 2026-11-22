@@ -2,14 +2,17 @@ package ac.haru.hikaricanvas.image;
 
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
+import javax.imageio.metadata.IIOMetadata;
+import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageInputStream;
 import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.util.Iterator;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.imageio.metadata.IIOMetadata;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
@@ -94,7 +97,7 @@ public final class ExifOrientation {
                     if (!(m instanceof Element me)) continue;
                     String tagAttr = me.getAttribute("MarkerTag");
                     if (!"225".equals(tagAttr)) continue;  // 0xE1 = App1（EXIF）
-                    Object userObj = ((javax.imageio.metadata.IIOMetadataNode) m).getUserObject();
+                    Object userObj = ((IIOMetadataNode) m).getUserObject();
                     if (!(userObj instanceof byte[] app1Bytes)) continue;
                     int o = parseExifOrientation(app1Bytes);
                     if (o >= 1 && o <= 8) return o;
@@ -189,7 +192,7 @@ public final class ExifOrientation {
             // 用 AffineTransform 一次性表达任意 orientation。
             // 推导：先平移到目标中心，转，flip，再平移回左上。
             // 用 case 分发 — 8 种值都是离散整数变换。
-            java.awt.geom.AffineTransform tx = new java.awt.geom.AffineTransform();
+            AffineTransform tx = new AffineTransform();
             switch (orientation) {
                 case 2 -> {  // 水平翻转
                     tx.translate(dw, 0);
@@ -223,8 +226,8 @@ public final class ExifOrientation {
                 }
                 default -> { /* 1 已早返 */ }
             }
-            g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
-                    java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                    RenderingHints.VALUE_INTERPOLATION_BILINEAR);
             g.drawImage(src, tx, null);
         } finally {
             g.dispose();

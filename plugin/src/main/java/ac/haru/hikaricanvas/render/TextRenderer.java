@@ -30,7 +30,7 @@ public final class TextRenderer implements ElementRenderer {
         // 外面包 shear；shear sx=-0.2 让字形上半部分向右倾斜（标准 italic 视觉）。
         // 与前端 Canvas 2D ctx.transform(1, 0, -0.2, 1, 0, 0) 数学等价 — 双端像素一致。
         boolean italic = Boolean.TRUE.equals(t.italic());
-        java.awt.geom.AffineTransform savedItalic = null;
+        AffineTransform savedItalic = null;
         if (italic) {
             savedItalic = g.getTransform();
             // shear 锚点在文本 bbox 顶部（y=t.y()）让字形整体倾斜可控；y < anchor 处 x 左移，
@@ -61,7 +61,7 @@ public final class TextRenderer implements ElementRenderer {
         g.setFont(font);
 
         // 多行 + wrap + letterSpacing + 基线 + align + 竖排
-        // 全由 TextLayout；用 canonicalCharWidth，不再依赖 Java FontMetrics
+        // 全由 TextLayout 负责；字符步进走 charAdvance（FontMetricsTable 真实字宽），不依赖运行期 AWT FontMetrics
         List<TextLayout.PositionedGlyph> glyphs = TextLayout.layout(t);
         if (glyphs.isEmpty()) return;
 
@@ -139,7 +139,7 @@ public final class TextRenderer implements ElementRenderer {
      * 像素字体 fill/shadow 路径：扫 mask 实际字形边界 + 手工 per-pixel NN。
      *
      * <p>与前端 {@code PreviewRenderer.drawPixelatedGlyph} 同策略 —— 各端按自己字体引擎
-     * 实际画出的字形宽度 scale，字形永远完整；layout cursor 仍按 canonical 推。</p>
+     * 实际画出的字形宽度 scale，字形永远完整；layout cursor 仍按 {@link TextLayout#charAdvance} 推。</p>
      */
     private static void drawPixelatedGlyph(Graphics2D g, TextLayout.PositionedGlyph pg,
                                            FontRegistry.Registered reg, int targetSize,

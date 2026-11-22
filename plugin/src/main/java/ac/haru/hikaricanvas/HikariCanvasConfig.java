@@ -1,10 +1,20 @@
 package ac.haru.hikaricanvas;
 
+import ac.haru.hikaricanvas.storage.AuditLog;
+import ac.haru.hikaricanvas.variable.VariableStore;
+import ac.haru.hikaricanvas.variable.plugin.PushRateLimiter;
+import ac.haru.hikaricanvas.web.TokenRateLimiter;
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.logging.Logger;
 
 /**
@@ -26,7 +36,7 @@ public final class HikariCanvasConfig {
     /** WS 连上后多少秒内未通过 auth 就主动 close 4001（防 idle DoS）。 */
     public final int wsAuthTimeoutSeconds;
     /** WS upgrade 允许的 Origin 白名单（除同源 / 127.0.0.1 / localhost 外的反代域名）。 */
-    public final java.util.List<String> allowedOrigins;
+    public final List<String> allowedOrigins;
 
     // ---- session ----
     public final Duration tokenTtl;
@@ -43,7 +53,7 @@ public final class HikariCanvasConfig {
      * 未配置的 world 走 on-demand 扩容。配置 key = world name（与 server.properties 一致）。
      * 不可变 Map，可能为 empty。
      */
-    public final java.util.Map<String, Integer> mapPoolPerWorldInitial;
+    public final Map<String, Integer> mapPoolPerWorldInitial;
 
     // ---- throttle ----
     public final int projectionFps;
@@ -96,17 +106,17 @@ public final class HikariCanvasConfig {
     // ---- images ----
     public final ImageConfig images;
 
-    /** 0.8 .canvas 工程导入限额。 */
+    /** .canvas 工程导入限额。 */
     public final ImportConfig importConfig;
 
     // ---- database ----
-    /** 跑 schema migration 前是否先备份 data.db。pre-release 默认 false。 */
+    /** 跑 schema migration 前是否先备份 data.db（默认 true）。 */
     public final boolean databaseAutoBackup;
     /** 备份保留天数：启动期自动清理超过此天数的 data.db.pre-V&lt;NNN&gt;.bak。≤0 = 永久保留。 */
     public final int backupRetentionDays;
     /**
      * {@code audit_log} 表保留天数（{@code docs/security.md §8.2} / {@code data-model.md §2.6.4}）。
-     * ≤0 = 永久保留。清理由 {@link ac.haru.hikaricanvas.storage.AuditLog} 自己顺带跑，不起调度器。
+     * ≤0 = 永久保留。清理由 {@link AuditLog} 自己顺带跑，不起调度器。
      */
     public final int auditRetentionDays;
 
@@ -115,7 +125,7 @@ public final class HikariCanvasConfig {
      * Plugin Push API 限流参数（{@code docs/dynamic-data.md §10.2}）。
      * 配置段 {@code dynamic.push-rate-limit}。
      */
-    public final ac.haru.hikaricanvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig;
+    public final PushRateLimiter.Config pushRateLimitConfig;
 
     /**
      * 兜底列车 ManualScheduleProvider 配置。
@@ -135,7 +145,7 @@ public final class HikariCanvasConfig {
     /**
      * token 暴力枚举防御：每 IP 每分钟可尝试 WS auth 的 token 次数。
      * 配置段 {@code security.token-rate-limit.per-minute}（默 10）。详见
-     * {@link ac.haru.hikaricanvas.web.TokenRateLimiter}。
+     * {@link TokenRateLimiter}。
      */
     public final int tokenRateLimitPerMinute;
 
@@ -227,7 +237,7 @@ public final class HikariCanvasConfig {
      */
     public record ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
                                 int maxRunsPerSecond, int maxChainDepth,
-                                java.util.Map<String, CommandTemplate> commandTemplates,
+                                Map<String, CommandTemplate> commandTemplates,
                                 int playerNearSampleTicks,
                                 int maxElementsPerWall) {
         /** playerNear 采样间隔默认值（tick）；压测后可能回调（docs/scripting.md §10）。 */
@@ -238,37 +248,21 @@ public final class HikariCanvasConfig {
 
         public ScriptsConfig {
             commandTemplates = commandTemplates == null
-                    ? java.util.Map.of() : java.util.Map.copyOf(commandTemplates);
+                    ? Map.of() : Map.copyOf(commandTemplates);
         }
 
-        /** 兼容旧 4 参形态（既有单测 / budget 路径不关心模板与采样间隔）：模板表为空。 */
+        /** 预算参数便捷构造（空命令模板表 + 默认采样间隔与元素上限）。 */
         public ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
                              int maxRunsPerSecond, int maxChainDepth) {
             this(maxRulesPerWall, maxActionsPerRun, maxRunsPerSecond, maxChainDepth,
-                    java.util.Map.of(), DEFAULT_PLAYER_NEAR_SAMPLE_TICKS,
+                    Map.of(), DEFAULT_PLAYER_NEAR_SAMPLE_TICKS,
                     DEFAULT_MAX_ELEMENTS_PER_WALL);
-        }
-
-        /** 兼容 5 参形态（采样间隔走默认）。 */
-        public ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
-                             int maxRunsPerSecond, int maxChainDepth,
-                             java.util.Map<String, CommandTemplate> commandTemplates) {
-            this(maxRulesPerWall, maxActionsPerRun, maxRunsPerSecond, maxChainDepth,
-                    commandTemplates, DEFAULT_PLAYER_NEAR_SAMPLE_TICKS,
-                    DEFAULT_MAX_ELEMENTS_PER_WALL);
-        }
-
-        /** 兼容 6 参形态（元素配额走默认）。 */
-        public ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
-                             int maxRunsPerSecond, int maxChainDepth,
-                             java.util.Map<String, CommandTemplate> commandTemplates,
-                             int playerNearSampleTicks) {
-            this(maxRulesPerWall, maxActionsPerRun, maxRunsPerSecond, maxChainDepth,
-                    commandTemplates, playerNearSampleTicks, DEFAULT_MAX_ELEMENTS_PER_WALL);
         }
 
         public static ScriptsConfig defaults() {
-            return new ScriptsConfig(16, 50, 10, 8);
+            return new ScriptsConfig(16, 50, 10, 8,
+                    Map.of(), DEFAULT_PLAYER_NEAR_SAMPLE_TICKS,
+                    DEFAULT_MAX_ELEMENTS_PER_WALL);
         }
     }
 
@@ -279,9 +273,9 @@ public final class HikariCanvasConfig {
      *                执行侧会防御性剥掉一个）
      * @param params  参数名 → 校验规格；只有声明过的参数会被替换进命令
      */
-    public record CommandTemplate(String command, java.util.Map<String, ParamSpec> params) {
+    public record CommandTemplate(String command, Map<String, ParamSpec> params) {
         public CommandTemplate {
-            params = params == null ? java.util.Map.of() : java.util.Map.copyOf(params);
+            params = params == null ? Map.of() : Map.copyOf(params);
         }
     }
 
@@ -305,7 +299,7 @@ public final class HikariCanvasConfig {
 
     public record ImageConfig(
             int maxSizeKb,
-            java.util.List<String> allowedMime,
+            List<String> allowedMime,
             int downscaleMaxEdge,
             int maxPerWall,
             int maxUploadsPerDay,
@@ -313,7 +307,7 @@ public final class HikariCanvasConfig {
     ) {
         public static ImageConfig defaults() {
             return new ImageConfig(2048,
-                    java.util.List.of("image/png", "image/jpeg", "image/webp"),
+                    List.of("image/png", "image/jpeg", "image/webp"),
                     1024, 16, 50, 1024);
         }
     }
@@ -386,10 +380,8 @@ public final class HikariCanvasConfig {
         b.wsAuthTimeoutSeconds = Math.max(1, Math.min(60, f.getInt("network.ws-auth-timeout-seconds", 5)));
         b.allowedOrigins = readAllowedOrigins(f, plugin.getLogger());
 
-        // token-ttl / ws-grace 下限钳到 1 分钟。这两项此前原样读：服主看隔壁
-        // idle-minutes 注释写着「0 = 永不超时」，很自然就跟着写个 0，结果 token-ttl-minutes
-        // 被当成 SessionReaper 的 issuedTimeout 传下去 → 所有刚签发的会话 30 秒内全被收，
-        // 编辑器彻底打不开而且日志里一点线索都没有。负值同理。
+        // token-ttl / ws-grace 下限钳到 1 分钟（不同于 idle-minutes，0 不代表"永不超时"；
+        // 配 ≤0 会导致签发后会话立即被 SessionReaper 回收，故回退默认值并打 warning）。
         b.tokenTtl = Duration.ofMinutes(clampMinutes(f, "session.token-ttl-minutes", 15, plugin.getLogger()));
         b.wsGrace = Duration.ofMinutes(clampMinutes(f, "session.ws-grace-minutes", 5, plugin.getLogger()));
         long idleMin = f.getLong("session.idle-minutes", 30);
@@ -397,8 +389,7 @@ public final class HikariCanvasConfig {
         b.reaperScanTicks = 20L * Math.max(5, f.getLong("session.reaper-scan-seconds", 30));
         b.tokenPurgeTicks = 20L * 60 * Math.max(1, f.getLong("session.token-purge-minutes", 5));
 
-        // map-pool.initial 下限钳到 1（不是 0）。MapPool 构造前置条件要求
-        // initialSize > 0，配 0 会在 onEnable 抛 IllegalArgumentException 崩插件。
+        // map-pool.initial 下限钳到 1（MapPool 要求 initialSize > 0），
         // 上限 1024 与 docs/data-model.md §11 声明的 range 1-1024 对齐。
         b.mapPoolInitial = Math.max(1, Math.min(1024, f.getInt("map-pool.initial", 64)));
         b.mapPoolMax = Math.max(b.mapPoolInitial, f.getInt("map-pool.max", 256));
@@ -409,38 +400,32 @@ public final class HikariCanvasConfig {
         //       world_nether: 8
         //       world_the_end: 4
         // 未列出的 world 走 on-demand 扩容；负值 / 非整数 clamp 到 0。
-        org.bukkit.configuration.ConfigurationSection pw = f.getConfigurationSection("map-pool.per-world");
+        ConfigurationSection pw = f.getConfigurationSection("map-pool.per-world");
         if (pw != null) {
-            java.util.Map<String, Integer> parsed = new java.util.LinkedHashMap<>();
+            Map<String, Integer> parsed = new LinkedHashMap<>();
             for (String k : pw.getKeys(false)) {
                 int v = Math.max(0, pw.getInt(k, 0));
                 if (v > 0) parsed.put(k, v);
             }
-            b.mapPoolPerWorldInitial = java.util.Map.copyOf(parsed);
+            b.mapPoolPerWorldInitial = Map.copyOf(parsed);
         }
 
         b.projectionFps = Math.max(1, Math.min(30, f.getInt("throttle.projection-fps", 5)));
         b.inputRatePerSecond = Math.max(1, f.getInt("throttle.input-rate-per-second", 20));
         b.inputBurst = Math.max(b.inputRatePerSecond, f.getInt("throttle.input-burst", 40));
 
-        // 自适应渲染段。
-        //
-        // projection-fps 曾经是死配置：解析完只进 summary，投影节流器实际吃的是
-        // rendering.adaptive-fps.default-min-interval-ms，而 deployment.md 还在教服主
-        // 「卡就降 projection-fps」——照做零效果。这里把它接上：projection-fps 推算
-        // default-min-interval-ms 的**默认值**（1000/fps；默认 5fps 正好是原来的硬编码 200ms，
-        // 行为不变），服主若显式写了 default-min-interval-ms 则以那个为准。两个旋钮一个语义，
-        // 显式 > 推算，不做任何隐式自动调优。
+        // 自适应渲染段：throttle.projection-fps 推算 default-min-interval-ms 的缺省值（1000/fps）；
+        // 显式写了 rendering.adaptive-fps.default-min-interval-ms 时以显式值为准。
         b.adaptiveFps = resolveAdaptiveFps(
                 f.getConfigurationSection("rendering.adaptive-fps"), b.projectionFps);
 
         // i18n 段 —— 国际化兜底语言
-        org.bukkit.configuration.ConfigurationSection i18nSec = f.getConfigurationSection("i18n");
+        ConfigurationSection i18nSec = f.getConfigurationSection("i18n");
         if (i18nSec == null) {
             b.i18nConfig = I18nConfig.defaults();
         } else {
             String def = i18nSec.getString("default-locale", "en_us")
-                    .toLowerCase(java.util.Locale.ROOT).replace('-', '_');
+                    .toLowerCase(Locale.ROOT).replace('-', '_');
             b.i18nConfig = new I18nConfig(def);
         }
 
@@ -451,7 +436,7 @@ public final class HikariCanvasConfig {
         // images 段
         ImageConfig defaults = ImageConfig.defaults();
         @SuppressWarnings("unchecked")
-        java.util.List<String> mimes = (java.util.List<String>) f.getList(
+        List<String> mimes = (List<String>) f.getList(
                 "images.allowed-mime", defaults.allowedMime());
         b.images = new ImageConfig(
                 Math.max(1, f.getInt("images.max-size-kb", defaults.maxSizeKb())),
@@ -472,13 +457,13 @@ public final class HikariCanvasConfig {
         b.databaseAutoBackup = f.getBoolean("database.auto-backup-before-migration", true);
         b.backupRetentionDays = f.getInt("database.backup-retention-days", 30);
         b.auditRetentionDays = f.getInt("database.audit-retention-days",
-                ac.haru.hikaricanvas.storage.AuditLog.DEFAULT_RETENTION_DAYS);
+                AuditLog.DEFAULT_RETENTION_DAYS);
 
         // dynamic.push-rate-limit 段
-        org.bukkit.configuration.ConfigurationSection rate =
+        ConfigurationSection rate =
                 f.getConfigurationSection("dynamic.push-rate-limit");
-        ac.haru.hikaricanvas.variable.plugin.PushRateLimiter.Config rateDefaults =
-                ac.haru.hikaricanvas.variable.plugin.PushRateLimiter.Config.defaults();
+        PushRateLimiter.Config rateDefaults =
+                PushRateLimiter.Config.defaults();
         if (rate == null) {
             b.pushRateLimitConfig = rateDefaults;
         } else {
@@ -488,12 +473,12 @@ public final class HikariCanvasConfig {
                     rate.getInt("global-per-second", rateDefaults.globalPerSecond()));
             long breakMs = Math.max(0L,
                     rate.getLong("global-circuit-break-ms", rateDefaults.globalCircuitBreakMs()));
-            b.pushRateLimitConfig = new ac.haru.hikaricanvas.variable.plugin.PushRateLimiter.Config(
+            b.pushRateLimitConfig = new PushRateLimiter.Config(
                     perPlugin, global, breakMs);
         }
 
         // dynamic.schedule 段
-        org.bukkit.configuration.ConfigurationSection schedSec =
+        ConfigurationSection schedSec =
                 f.getConfigurationSection("dynamic.schedule");
         ScheduleConfig schedDefaults = ScheduleConfig.defaults();
         if (schedSec == null) {
@@ -512,28 +497,28 @@ public final class HikariCanvasConfig {
         }
 
         // dynamic.variables 段 — 全局用户变量配额（缺则用 VariableStore 默认值）
-        org.bukkit.configuration.ConfigurationSection varSec =
+        ConfigurationSection varSec =
                 f.getConfigurationSection("dynamic.variables");
         if (varSec != null) {
             b.userGlobalMaxPerOwner = Math.max(1, varSec.getInt(
                     "userglobal-max-per-owner",
-                    ac.haru.hikaricanvas.variable.VariableStore.DEFAULT_USERGLOBAL_PER_OWNER));
+                    VariableStore.DEFAULT_USERGLOBAL_PER_OWNER));
             b.userGlobalMaxTotal = Math.max(1, varSec.getInt(
                     "userglobal-max-total",
-                    ac.haru.hikaricanvas.variable.VariableStore.DEFAULT_USERGLOBAL_TOTAL));
+                    VariableStore.DEFAULT_USERGLOBAL_TOTAL));
         }
 
         // security.token-rate-limit 段 —— token 暴力枚举防御
-        org.bukkit.configuration.ConfigurationSection rlSec =
+        ConfigurationSection rlSec =
                 f.getConfigurationSection("security.token-rate-limit");
         if (rlSec != null) {
             b.tokenRateLimitPerMinute = Math.max(1, rlSec.getInt(
                     "per-minute",
-                    ac.haru.hikaricanvas.web.TokenRateLimiter.DEFAULT_PER_MINUTE));
+                    TokenRateLimiter.DEFAULT_PER_MINUTE));
         }
 
         // timeline 段 —— 时间轴帧率参数（default-fps 钳到 max-fps 之内）
-        org.bukkit.configuration.ConfigurationSection tlSec =
+        ConfigurationSection tlSec =
                 f.getConfigurationSection("timeline");
         TimelineConfig tlDefaults = TimelineConfig.defaults();
         if (tlSec == null) {
@@ -546,7 +531,7 @@ public final class HikariCanvasConfig {
         }
 
         // scripts 段 —— 墙脚本参数
-        org.bukkit.configuration.ConfigurationSection scSec =
+        ConfigurationSection scSec =
                 f.getConfigurationSection("scripts");
         ScriptsConfig scDefaults = ScriptsConfig.defaults();
         if (scSec == null) {
@@ -554,8 +539,8 @@ public final class HikariCanvasConfig {
         } else {
             int maxRules = Math.max(1, scSec.getInt(
                     "max-rules-per-wall", scDefaults.maxRulesPerWall()));
-            // scripts.budget 嵌套段（照 dynamic.schedule 范式；缺段全 default）
-            org.bukkit.configuration.ConfigurationSection budSec =
+            // scripts.budget 嵌套段（缺段全走默认值）
+            ConfigurationSection budSec =
                     scSec.getConfigurationSection("budget");
             int maxActions = scDefaults.maxActionsPerRun();
             int maxRuns = scDefaults.maxRunsPerSecond();
@@ -573,30 +558,30 @@ public final class HikariCanvasConfig {
             //       params:
             //         msg: { max-length: 64 }
             // command 缺失 / 空白的模板条目跳过 + severe（服主写错要看得见）。
-            java.util.Map<String, CommandTemplate> templates = new java.util.LinkedHashMap<>();
-            org.bukkit.configuration.ConfigurationSection ctSec =
+            Map<String, CommandTemplate> templates = new LinkedHashMap<>();
+            ConfigurationSection ctSec =
                     scSec.getConfigurationSection("command-templates");
             if (ctSec != null) {
                 for (String tplId : ctSec.getKeys(false)) {
-                    org.bukkit.configuration.ConfigurationSection tplSec =
+                    ConfigurationSection tplSec =
                             ctSec.getConfigurationSection(tplId);
                     if (tplSec == null) {
                         plugin.getLogger().severe("scripts.command-templates." + tplId
-                                + " 不是配置段，已跳过");
+                                + " is not a configuration section; skipping");
                         continue;
                     }
                     String command = tplSec.getString("command", "");
                     if (command == null || command.isBlank()) {
                         plugin.getLogger().severe("scripts.command-templates." + tplId
-                                + ".command 缺失或为空，已跳过该模板");
+                                + ".command is missing or blank; skipping template");
                         continue;
                     }
-                    java.util.Map<String, ParamSpec> params = new java.util.LinkedHashMap<>();
-                    org.bukkit.configuration.ConfigurationSection psSec =
+                    Map<String, ParamSpec> params = new LinkedHashMap<>();
+                    ConfigurationSection psSec =
                             tplSec.getConfigurationSection("params");
                     if (psSec != null) {
                         for (String pName : psSec.getKeys(false)) {
-                            org.bukkit.configuration.ConfigurationSection pSec =
+                            ConfigurationSection pSec =
                                     psSec.getConfigurationSection(pName);
                             int maxLen = ParamSpec.DEFAULT_MAX_LENGTH;
                             String type = ParamSpec.TYPE_TEXT;
@@ -607,8 +592,8 @@ public final class HikariCanvasConfig {
                                     type = ParamSpec.TYPE_ONLINE_PLAYER;
                                 } else if (!ParamSpec.TYPE_TEXT.equals(rawType)) {
                                     plugin.getLogger().severe("scripts.command-templates."
-                                            + tplId + ".params." + pName + ".type 未知值 '"
-                                            + rawType + "'，按 text 处理");
+                                            + tplId + ".params." + pName + ".type has unknown value '"
+                                            + rawType + "'; treating as text");
                                 }
                             }
                             params.put(pName, new ParamSpec(maxLen, type));
@@ -628,7 +613,7 @@ public final class HikariCanvasConfig {
             b.scriptsConfig = new ScriptsConfig(maxRules, maxActions, maxRuns, maxChain,
                     templates, nearTicks, maxElements);
             // scripts.tween 嵌套段——补间引擎 maxFps / maxConcurrent
-            org.bukkit.configuration.ConfigurationSection tweenSec =
+            ConfigurationSection tweenSec =
                     scSec.getConfigurationSection("tween");
             if (tweenSec != null) {
                 TweenConfig td = TweenConfig.defaults();
@@ -681,7 +666,7 @@ public final class HikariCanvasConfig {
             logger.severe("editor-url has no scheme; must start with http:// or https://. falling back to default.");
             return fallback;
         }
-        String lower = scheme.toLowerCase(java.util.Locale.ROOT);
+        String lower = scheme.toLowerCase(Locale.ROOT);
         if (!lower.equals("http") && !lower.equals("https")) {
             logger.severe("editor-url has invalid scheme '" + scheme
                     + "'; must be http(s); falling back to default. "
@@ -714,35 +699,17 @@ public final class HikariCanvasConfig {
     }
 
     /**
-     * 读 {@code network.allowed-origins}，逐元素校验后返回不可变列表。
-     *
-     * <p>此前这里只是把 {@code getList} 的结果 unchecked cast 再 {@code List.copyOf}。
-     * 而 config.yml 恰恰是明确教服主手写这个列表的地方，YAML 列表笔误是常态：</p>
-     * <ul>
-     *   <li>写了空项或 {@code - ~} → 列表里含 {@code null} → {@code List.copyOf} 直接 NPE，
-     *       既炸 onEnable 也炸运行时 {@code /canvas reload config}</li>
-     *   <li>写成 {@code - 443} 之类非字符串 → 后面 {@code for (String allowed : allowedOrigins)}
-     *       隐式转型抛 ClassCastException，每次 WS 升级 500</li>
-     * </ul>
-     *
-     * <p>现在非法项跳过 + warning，与本段「缺失字段走默认值」的容错基调一致——
-     * 一行笔误不该让整个插件起不来。</p>
-     */
-    /**
      * 解析 {@code rendering.adaptive-fps} 段，缺省值由 {@code throttle.projection-fps} 推算。
      *
-     * <p>{@code projection-fps} 曾经是死配置：解析完只进 summary，投影节流器实际吃的是
-     * {@code default-min-interval-ms}，而 deployment.md 还在教服主「卡就降 projection-fps」——
-     * 照做零效果。现在两个旋钮接上了：{@code projection-fps} 推算
-     * {@code default-min-interval-ms} 的<b>默认值</b>（{@code 1000/fps}；默认 5fps 正好是
-     * 原来的硬编码 200ms，行为不变），服主若显式写了 {@code default-min-interval-ms}
-     * 则以那个为准。显式 &gt; 推算，不做任何隐式自动调优。</p>
+     * <p>{@code projection-fps} 推算 {@code default-min-interval-ms} 的<b>默认值</b>
+     * （{@code 1000/fps}；默认 5fps 即 200ms），服主若显式写了 {@code default-min-interval-ms}
+     * 则以显式值为准。显式 &gt; 推算，不做隐式自动调优。</p>
      *
-     * @param adaptSec     配置段；{@code null} = 整段缺失，全走推算 / 缺省
+     * @param adaptSec      配置段；{@code null} = 整段缺失，全走推算 / 缺省
      * @param projectionFps 已钳位到 [1,30] 的 {@code throttle.projection-fps}
      */
     static AdaptiveFpsConfig resolveAdaptiveFps(
-            org.bukkit.configuration.ConfigurationSection adaptSec, int projectionFps) {
+            ConfigurationSection adaptSec, int projectionFps) {
         AdaptiveFpsConfig adaptDefaults = AdaptiveFpsConfig.defaults();
         long derived = Math.max(33L, 1000L / Math.max(1, projectionFps));
         if (adaptSec == null) {
@@ -761,10 +728,16 @@ public final class HikariCanvasConfig {
         return new AdaptiveFpsConfig(defMs, highMs, pushOn);
     }
 
-    static java.util.List<String> readAllowedOrigins(FileConfiguration f, Logger logger) {
-        java.util.List<?> raw = f.getList("network.allowed-origins", java.util.List.of());
-        if (raw == null || raw.isEmpty()) return java.util.List.of();
-        java.util.List<String> out = new java.util.ArrayList<>(raw.size());
+    /**
+     * 读 {@code network.allowed-origins}，逐元素校验后返回不可变列表。
+     *
+     * <p>非字符串或空白元素（如 YAML 空项 {@code - ~} 或数字 {@code - 443}）跳过并打 warning，
+     * 避免 {@code List.copyOf} 抛 NPE 或运行期遍历时抛 {@code ClassCastException}。</p>
+     */
+    static List<String> readAllowedOrigins(FileConfiguration f, Logger logger) {
+        List<?> raw = f.getList("network.allowed-origins", List.of());
+        if (raw == null || raw.isEmpty()) return List.of();
+        List<String> out = new ArrayList<>(raw.size());
         for (Object o : raw) {
             if (o instanceof String s && !s.isBlank()) {
                 out.add(s.trim());
@@ -775,7 +748,7 @@ public final class HikariCanvasConfig {
                         + "e.g. \"https://canvas.example.com\".");
             }
         }
-        return java.util.List.copyOf(out);
+        return List.copyOf(out);
     }
 
     /**
@@ -811,7 +784,7 @@ public final class HikariCanvasConfig {
         int port = 8877;
         String editorUrlTemplate = "http://127.0.0.1:8877/?token={token}";
         int wsAuthTimeoutSeconds = 5;
-        java.util.List<String> allowedOrigins = java.util.List.of();
+        List<String> allowedOrigins = List.of();
         Duration tokenTtl = Duration.ofMinutes(15);
         Duration wsGrace = Duration.ofMinutes(5);
         Duration idleTimeout = Duration.ofMinutes(30);
@@ -819,7 +792,7 @@ public final class HikariCanvasConfig {
         long tokenPurgeTicks = 20L * 60 * 5;
         int mapPoolInitial = 64;
         int mapPoolMax = 256;
-        java.util.Map<String, Integer> mapPoolPerWorldInitial = java.util.Map.of();
+        Map<String, Integer> mapPoolPerWorldInitial = Map.of();
         int projectionFps = 5;
         int inputRatePerSecond = 20;
         int inputBurst = 40;
@@ -830,18 +803,14 @@ public final class HikariCanvasConfig {
         ImportConfig importConfig = ImportConfig.defaults();
         boolean databaseAutoBackup = true;
         int backupRetentionDays = 30;
-        int auditRetentionDays = ac.haru.hikaricanvas.storage.AuditLog.DEFAULT_RETENTION_DAYS;
-        ac.haru.hikaricanvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig =
-                ac.haru.hikaricanvas.variable.plugin.PushRateLimiter.Config.defaults();
+        int auditRetentionDays = AuditLog.DEFAULT_RETENTION_DAYS;
+        PushRateLimiter.Config pushRateLimitConfig = PushRateLimiter.Config.defaults();
         ScheduleConfig scheduleConfig = ScheduleConfig.defaults();
         AdaptiveFpsConfig adaptiveFps = AdaptiveFpsConfig.defaults();
         I18nConfig i18nConfig = I18nConfig.defaults();
-        int userGlobalMaxPerOwner =
-                ac.haru.hikaricanvas.variable.VariableStore.DEFAULT_USERGLOBAL_PER_OWNER;
-        int userGlobalMaxTotal =
-                ac.haru.hikaricanvas.variable.VariableStore.DEFAULT_USERGLOBAL_TOTAL;
-        int tokenRateLimitPerMinute =
-                ac.haru.hikaricanvas.web.TokenRateLimiter.DEFAULT_PER_MINUTE;
+        int userGlobalMaxPerOwner = VariableStore.DEFAULT_USERGLOBAL_PER_OWNER;
+        int userGlobalMaxTotal = VariableStore.DEFAULT_USERGLOBAL_TOTAL;
+        int tokenRateLimitPerMinute = TokenRateLimiter.DEFAULT_PER_MINUTE;
         TimelineConfig timelineConfig = TimelineConfig.defaults();
         ScriptsConfig scriptsConfig = ScriptsConfig.defaults();
         TweenConfig tweenConfig = TweenConfig.defaults();

@@ -9,7 +9,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -17,7 +20,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * 构建期 Font Awesome Free SVG → JSON 矢量包生成器（M26 引入）。
+ * 构建期 Font Awesome Free SVG → JSON 矢量包生成器。
  *
  * <p>用法：</p>
  * <pre>
@@ -91,7 +94,7 @@ public final class IconLibraryGenerator {
         Files.createDirectories(outDir);
 
         // 收集每个 pack 的 icons：name → path d。TreeMap 保字母序，便于 git diff 审查。
-        java.util.Map<String, TreeMap<String, String>> packs = new java.util.LinkedHashMap<>();
+        Map<String, TreeMap<String, String>> packs = new LinkedHashMap<>();
         for (String[] m : PACK_MAPPING) packs.put(m[1], new TreeMap<>());
 
         try (ZipFile zip = new ZipFile(zipPath.toFile())) {
@@ -120,7 +123,7 @@ public final class IconLibraryGenerator {
                 String iconName = name.substring(matchedPrefixEnd,
                         name.length() - ".svg".length());
                 // FA 命名已是 [a-z0-9-]+；防御性 trim
-                iconName = iconName.toLowerCase(java.util.Locale.ROOT);
+                iconName = iconName.toLowerCase(Locale.ROOT);
                 if (iconName.isEmpty()) continue;
 
                 String svg;
@@ -155,7 +158,7 @@ public final class IconLibraryGenerator {
 
     /**
      * 写出 pack JSON。每个 icon 一行（git diff 友好），手工 JSON 序列化（避免 generator 引
-     * Jackson 依赖；palette.json 也是同款手工写）。path d 字符串走 {@link #jsonEscape}。
+     * Jackson 依赖；palette.json 也是同款手工写）。path d 字符串走 {@link #jsonString}。
      */
     private static void writePackJson(Path out, String pack, String version, String license,
                                        String viewBox, TreeMap<String, String> icons) throws IOException {
@@ -166,7 +169,7 @@ public final class IconLibraryGenerator {
             w.write("  \"license\": " + jsonString(license) + ",\n");
             w.write("  \"viewBox\": " + jsonString(viewBox) + ",\n");
             w.write("  \"icons\": {\n");
-            List<java.util.Map.Entry<String, String>> entries = new ArrayList<>(icons.entrySet());
+            List<Map.Entry<String, String>> entries = new ArrayList<>(icons.entrySet());
             for (int i = 0; i < entries.size(); i++) {
                 var e = entries.get(i);
                 w.write("    " + jsonString(e.getKey()) + ": {\"d\": " + jsonString(e.getValue()) + "}");

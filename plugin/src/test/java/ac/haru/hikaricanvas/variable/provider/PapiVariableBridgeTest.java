@@ -1,6 +1,6 @@
 package ac.haru.hikaricanvas.variable.provider;
 
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import org.junit.jupiter.api.BeforeEach;
@@ -8,12 +8,11 @@ import org.junit.jupiter.api.Test;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.logging.Logger;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -22,30 +21,15 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P3-K：{@link PapiVariableBridge} 单测。
- *
- * <p>覆盖：</p>
- * <ul>
- *   <li>PAPI 未装时 initialize 不抛 + refreshInterval=ZERO + declaredKeys=empty +
- *       handleDynamic noop + refresh noop</li>
- *   <li>PAPI 装了时 hook 注册 + handleDynamic 编码 + create</li>
- *   <li>encode / decode 编码层（{@code %xxx%} ↔ {@code pct_xxx_pct}）</li>
- *   <li>refresh 调 accessor.resolve + setValue store</li>
- *   <li>refresh accessor 返 null（PAPI 解析失败）→ 不覆盖旧值</li>
- *   <li>interpolator end-to-end miss（disabled，因为 interpolator 不带 papi 编码层；
- *       仅验证 handleDynamic 路径）</li>
- *   <li>shutdown 清 tracked + accessor.shutdown 被调</li>
- * </ul>
+ * {@link PapiVariableBridge} 动态占位符编码、刷新与未安装降级单测。
  */
 class PapiVariableBridgeTest {
 
-    private FakeUserVariableDao fakeDao;
     private VariableStore store;
 
     @BeforeEach
     void setUp() {
-        fakeDao = new FakeUserVariableDao();
-        store = new VariableStore(fakeDao, w -> { });
+        store = new VariableStore(new NoopUserVariableDao(), w -> { });
     }
 
     // ──────────────────────────────────────────────────────────
@@ -389,7 +373,7 @@ class PapiVariableBridgeTest {
     /** 测试用 PapiAccessor：通过构造参数控制 isAvailable，map 模拟 placeholder 解析。 */
     private static final class FakePapiAccessor implements PapiVariableBridge.PapiAccessor {
         final Map<String, String> placeholders = new HashMap<>();
-        final java.util.Set<String> throwingPlaceholders = new java.util.HashSet<>();
+        final Set<String> throwingPlaceholders = new HashSet<>();
         int resolveCallCount = 0;
         boolean shutdownCalled = false;
         private final boolean available;
@@ -409,17 +393,5 @@ class PapiVariableBridgeTest {
             return placeholders.get(placeholder);
         }
         @Override public void shutdown() { shutdownCalled = true; }
-    }
-
-    private static final class FakeUserVariableDao extends UserVariableDao {
-        FakeUserVariableDao() {
-            super(Logger.getLogger("test"), null);
-        }
-        @Override
-        public void upsert(String wallId, String name, VarType type,
-                           String defaultValue, String currentValue, String boundTo,
-                           long createdAt, long updatedAt) {}
-        @Override public void delete(String wallId, String name) {}
-        @Override public List<Row> loadAll() { return new ArrayList<>(); }
     }
 }

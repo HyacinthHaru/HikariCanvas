@@ -1,6 +1,7 @@
 package ac.haru.hikaricanvas.state;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 
 import java.util.regex.Pattern;
 
@@ -28,7 +29,7 @@ import java.util.regex.Pattern;
  * deserializer + 显式 fill-优先 策略控制。</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-@com.fasterxml.jackson.databind.annotation.JsonDeserialize(using = IconElementDeserializer.class)
+@JsonDeserialize(using = IconElementDeserializer.class)
 public record IconElement(
         String id,
         int x, int y, int w, int h,

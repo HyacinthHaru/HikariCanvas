@@ -1,5 +1,5 @@
 /**
- * 0.7.3-D2：useSnapManager.snapEdge 单边吸附测试。
+ * useSnapManager.snapEdge 单边吸附测试。
  *
  * <p>验证 resize 场景下，snapEdge 只对正在移动的那条边做吸附，不受其他锚点的 bestDelta 干扰。
  * 核心回归 case：拖右手柄时，若 left 边恰好距某 candidate 轴更近，snapEdge 不应把该 delta
@@ -96,14 +96,6 @@ describe('snapEdge — canvas snap（X 轴）', () => {
 });
 
 describe('snapEdge — element snap（X 轴）', () => {
-    // 核心 D2 回归 case：
-    //   元素 A：x=10, w=20  → left=10, cx=20, right=30
-    //   被 resize 的元素：x=5, w=100（right = 105）
-    //
-    //   拖右手柄时，right 边 = 105；距 A.left=10 差 95（远），距 A.right=30 差 75（远）。
-    //   v2 snapAxis 若扫三锚点时，left 锚点=5 距 A.right=30 差 25（仍远），不会误触发。
-    //   → 测一个确实会误触发的场景：right=35，A.left=10（差25 > 8），A.cx=20（差15 > 8），A.right=30（差5 ≤ 8）
-
     it('right 边距元素 right 边在阈值内 → 吸附到该元素 right', () => {
         const elA = fakeEl('a', 10, 0, 20, 20); // left=10, right=30
         const mgr = makeManager({ snapToCanvas: false, elements: [elA] });
@@ -112,8 +104,8 @@ describe('snapEdge — element snap（X 轴）', () => {
         expect(delta).toBe(-5); // 30 - 35 = -5
     });
 
-    // 关键 D2 测试：只对 right 边 snapEdge，即使 left(5) 距 elA.cx(20) 很近也不干扰
-    it('D2 核心回归：right 边吸附不受 left 锚点影响', () => {
+    // 只对 right 边 snapEdge，即使 left 距候选轴很近也不干扰
+    it('right 边吸附不受 left 锚点影响', () => {
         // elA：left=20, cx=25, right=30
         const elA = fakeEl('a', 20, 0, 10, 20);
         const mgr = makeManager({ snapToCanvas: false, elements: [elA] });

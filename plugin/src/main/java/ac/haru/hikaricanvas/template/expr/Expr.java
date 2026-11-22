@@ -1,8 +1,7 @@
 package ac.haru.hikaricanvas.template.expr;
 
 /**
- * 模板/脚本表达式 AST。契约见 {@code docs/template-spec.md §6.2}（模板原文法）+
- * {@code docs/scripting.md}（条件文法超集）。
+ * 模板/脚本表达式 AST。契约见 {@code docs/template-pack.md} 与 {@code docs/scripting.md}。
  *
  * <p>支持的运算 = {@code ==} / {@code !=} / {@code &&} / {@code ||} / {@code !}
  * / 比较 {@code < <= > >=} / 算术 {@code + - * /} / 一元负号 / {@code var("fullName")}

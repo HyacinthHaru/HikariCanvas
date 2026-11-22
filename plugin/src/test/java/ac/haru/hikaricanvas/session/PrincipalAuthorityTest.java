@@ -11,19 +11,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.9.19：会话主体类型是授权的唯一依据。
+ * 会话主体类型是授权的唯一依据。
  *
- * <p>本类守的是一条纪律，而不是某个函数的输入输出：<b>授权判断只许读
- * {@link Principal}，不许从 {@link Session#playerUuid()} 反推主体。</b></p>
- *
- * <p>为什么值得单开一个测试类：控制台会话带的是 nil UUID（{@link Session#CONSOLE_UUID}），
- * 那是三索引结构里的键。一旦有人图省事把判断写成
- * {@code if (uuid.equals(CONSOLE_UUID))}，代码在<b>今天看起来完全正确</b>——
- * 因为目前只有控制台会用这个 UUID。等哪天出现第二种非玩家主体（计划任务 / 远程 API），
- * 那种写法要么漏掉新主体、要么得再加一个 UUID 常量，于是"UUID 即身份"的错误模型
- * 又被固化一层。{@code uuidIsNotAuthority} 那条用例就是钉死这一点的。</p>
+ * <p>授权判断只读 {@link Principal}，不得从 {@link Session#playerUuid()} 反推主体。
+ * 控制台会话携带的 {@link Session#CONSOLE_UUID} 仅作三索引键，不承载任何特权。</p>
  */
-@DisplayName("0.9.19 会话主体类型 = 授权依据")
+@DisplayName("会话主体类型 = 授权依据")
 class PrincipalAuthorityTest {
 
     private static final UUID PLAYER_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555");

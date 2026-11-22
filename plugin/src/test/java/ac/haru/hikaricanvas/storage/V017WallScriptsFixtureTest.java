@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** 0.9.1：示范 fixture 测试——证明迁移 fixture 基建可用（V017 建 wall_scripts 表，旧 wall 无损）。 */
+/** V017 迁移 fixture 单测：新建 {@code wall_scripts} 表且保留已有 {@code walls} 种子数据。 */
 class V017WallScriptsFixtureTest extends MigrationFixtureTestBase {
 
     @Override protected int targetVersion() { return 17; }

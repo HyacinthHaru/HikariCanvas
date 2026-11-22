@@ -1,37 +1,22 @@
 package ac.haru.hikaricanvas.storage;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
-import java.util.Comparator;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** 0.9.1 BackupReaper：启动期清理过期 migration 备份文件。 */
+/** {@link BackupReaper} 启动期清理过期 migration 备份文件单测。 */
 class BackupReaperTest {
 
-    private Path tmpDir;
+    @TempDir
+    Path tmpDir;
+
     private final Logger log = Logger.getLogger("BackupReaperTest");
-
-    @BeforeEach
-    void setUp() throws Exception {
-        tmpDir = Files.createTempDirectory("hk-reaper-test-");
-    }
-
-    @AfterEach
-    void tearDown() throws Exception {
-        if (tmpDir != null && Files.exists(tmpDir)) {
-            try (var s = Files.walk(tmpDir)) {
-                s.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
-            }
-        }
-    }
 
     @Test
     void reap_deletesOldBackupsAndKeepsNewAndUnrelated() throws Exception {

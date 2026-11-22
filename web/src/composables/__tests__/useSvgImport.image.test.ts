@@ -55,7 +55,7 @@ function makeSeedState(): ProjectState {
     } as unknown as ProjectState;
 }
 
-describe('useSvgImport image (Task 16)', () => {
+describe('useSvgImport image', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         sendSpy.mockClear();

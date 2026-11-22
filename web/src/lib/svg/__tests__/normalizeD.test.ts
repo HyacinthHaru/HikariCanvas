@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parsePathCommands, commandsToD } from '../normalizeD';
 
-// ── 第一档（Task 8）：M/L/H/V/Q/C/Z + 相对转绝对 + 隐式 lineto ──────────────
+// ── M/L/H/V/Q/C/Z + 相对转绝对 + 隐式 lineto ──────────────────────────────
 
 describe('parsePathCommands (M/L/H/V/Q/C/Z)', () => {
     it('absolute M/L', () => {
@@ -25,7 +25,7 @@ describe('parsePathCommands (M/L/H/V/Q/C/Z)', () => {
     });
 });
 
-// ── 第二档（Task 9）：S→C / T→Q（反射前控制点）─────────────────────────────
+// ── S→C / T→Q（反射前控制点）─────────────────────────────────────────────
 
 describe('parsePathCommands (S/T reflection)', () => {
     it('S reflects previous C control point → C', () => {
@@ -42,7 +42,7 @@ describe('parsePathCommands (S/T reflection)', () => {
     });
 });
 
-// ── 第三档（Task 10）：A → cubic（移植后端 arcToBezier）────────────────────
+// ── A → cubic（移植后端 arcToBezier）────────────────────────────────────
 
 describe('parsePathCommands (A → cubic)', () => {
     it('A quarter circle → cubic(s) ending at endpoint', () => {

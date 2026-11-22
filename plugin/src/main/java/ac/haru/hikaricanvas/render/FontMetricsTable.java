@@ -3,8 +3,13 @@ package ac.haru.hikaricanvas.render;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -74,7 +79,7 @@ public final class FontMetricsTable {
                 int ascent = root.path("ascent").asInt(0);
                 int descent = root.path("descent").asInt(0);
                 int[] advances = new int[0x10000];
-                java.util.Arrays.fill(advances, -1);
+                Arrays.fill(advances, -1);
                 JsonNode advNode = root.path("advances");
                 advNode.fields().forEachRemaining(e -> {
                     try {
@@ -101,23 +106,21 @@ public final class FontMetricsTable {
      * 扫 BMP 0x20..0xFFFF（与构建期 GlyphMetricsGenerator 算法完全一致），结果直接
      * put 到 tables 内存表，覆盖 MISSING sentinel。</p>
      *
-     * <p>启动期由 FontRegistry.loadExternal 对每个加载成功的用户字体调用一次。
-     * 性能：单字体 ~1-2s（65k canDisplay+charWidth），与构建期 generator 同量级。
-     * 服务启动期阻塞主线程可接受（Paper plugin onEnable 在 ServerStart 早期）。</p>
+     * <p>由 {@link FontRegistry#loadExternal} 在后台 daemon worker 线程中逐字体调用（单字体
+     * 65k {@code canDisplay+charWidth} 约 1–2s），不阻塞启动期主线程。</p>
      */
-    public static void registerRuntime(String fontId, java.awt.Font font) {
+    public static void registerRuntime(String fontId, Font font) {
         if (fontId == null || font == null) return;
-        java.awt.image.BufferedImage dummy = new java.awt.image.BufferedImage(
-                1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB);
-        java.awt.Graphics2D g = dummy.createGraphics();
+        BufferedImage dummy = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = dummy.createGraphics();
         try {
             int baseSize = 12;
-            java.awt.Font sized = font.deriveFont((float) baseSize);
+            Font sized = font.deriveFont((float) baseSize);
             g.setFont(sized);
-            java.awt.FontMetrics fm = g.getFontMetrics();
+            FontMetrics fm = g.getFontMetrics();
 
             int[] advances = new int[0x10000];
-            java.util.Arrays.fill(advances, -1);
+            Arrays.fill(advances, -1);
             for (int cp = 0x20; cp < 0x10000; cp++) {
                 if (!sized.canDisplay(cp)) continue;
                 int w = fm.charWidth(cp);
@@ -136,10 +139,8 @@ public final class FontMetricsTable {
      * 把指定字体的 advance 表序列化为 JSON 字符串，供 WebServer 的
      * {@code GET /api/font/metrics} 与 {@code GET /fonts/{id}.metrics.json} 端点输出。
      *
-     * <p>走 {@link #load} 惰性加载：内置字体的表此前只在后端首次渲染该字体时才进内存，
-     * 于是服务器刚起来的窗口期前端两条通道全 404、只能退回 canonical 排版——双端字距不一致。
-     * 这里主动加载，端点任何时候问都有答案。用户字体（{@link #registerRuntime} 注册的内存表）
-     * 命中 tables 缓存，不会触发 classpath IO。</p>
+     * <p>内置字体走 {@link #load} 按需加载（即便后端尚未渲染该字体，HTTP 端点首次查询也能立即返回）；
+     * 用户字体直接命中 {@link #registerRuntime} 写入的 {@code tables} 内存缓存。</p>
      *
      * <p>字体确实没有表（既无 classpath JSON 也没注册过）时返 null，调用方回 404。</p>
      */

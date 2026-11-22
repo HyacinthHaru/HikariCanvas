@@ -10,14 +10,14 @@ import java.awt.geom.Path2D;
  *
  * <p><b>几何约定：</b></p>
  * <ul>
- *   <li>{@code arrow}：apex 在 path 端点上；base 在 apex 朝外退 {@code size} 距离。
- *       base 两顶点 = base center ± perpendicular × (size/2)。整体填实色 = stroke color。</li>
- *   <li>{@code dot}：圆心在 path 端点上；半径 = {@code max(2, strokeWidth+1)}。</li>
+ *   <li>{@code arrow}：底边中心（base center）落在 path 端点上，尖端（tip）沿切线向外延伸
+ *       {@code +size}；底边两顶点 = base center ± perpendicular × (size/2)，实心填充 stroke color。</li>
+ *   <li>{@code dot}：圆心落在 path 端点上；半径计算见 {@link #dotRadius}。</li>
  * </ul>
  *
- * <p><b>方向：</b> {@code dirX/dirY} 是 path 端点向外的单位向量。markerEnd 时
+ * <p><b>方向：</b> {@code dirX/dirY} 是 path 端点向外的切向向量。markerEnd 时
  * = path 末段切线（沿 path 走向）；markerStart 时 = 起段切线的反向。
- * {@link #drawArrow} / {@link #drawDot} 接受归一化向量，长度不为 1 时仍工作但形状会失真。</p>
+ * {@link #drawArrow} / {@link #arrowShape} 内部将方向向量归一化。</p>
  */
 public final class MarkerRenderer {
 
@@ -66,38 +66,30 @@ public final class MarkerRenderer {
     /**
      * 构造 arrow 三角形几何（不绘制）。
      *
-     * <p><b>几何（SVG marker-end 标准做法）</b>：path end 当 <b>base center</b>，apex
-     * 在 path end <b>朝 dir 方向延伸 size</b>。这样 stroke 干净截止于 base center
-     * （配合 BUTT lineCap），arrow 三角形完全在 path end 之外，V 头清晰突出。若把 path end
-     * 当 apex、base 朝 path 内部退 size，则粗 strokeWidth 的 stroke 矩形带会超出三角形边缘
-     * （等腰三角形从 apex 朝外 d 距离处宽度仅 d），视觉上直线横穿 V 头。</p>
+     * <p><b>几何（SVG marker-end 标准做法）</b>：{@code (baseCenterX, baseCenterY)} 为 path 端点（即底边中心），
+     * 尖端沿 {@code dir} 方向向外延伸 {@code size}。这样描边配合 {@code BUTT} lineCap 干净截止于底边中心，
+     * 箭头三角形完整落在 path 端点外侧，V 头清晰突出。</p>
      *
-     * <p><b>参数 {@code apexX, apexY} 仍命名为 apex</b>（向下兼容 caller）—— 实际传入的
-     * 是 path end，函数内部把它当 base center 用，并算出真 apex = path end + dir × size。</p>
-     *
-     * <p><b>side effect</b>：arrow 画在 element bbox 之外（编辑器视觉上略溢出 bbox
-     * border，但 marker 本就是 path end 之外的装饰，是 SVG 标准行为）。</p>
+     * <p><b>side effect</b>：arrow 位于端点外侧，可能略微伸出 element bbox 边界（{@link DirtyRegion}
+     * 已按 marker 尺寸外扩）。</p>
      */
-    public static Path2D.Double arrowShape(double apexX, double apexY,
+    public static Path2D.Double arrowShape(double baseCenterX, double baseCenterY,
                                            double dirX, double dirY, int size) {
         Path2D.Double tri = new Path2D.Double();
         double len = Math.hypot(dirX, dirY);
         if (len < 1e-9) return tri;
         double dx = dirX / len;
         double dy = dirY / len;
-        // apexX/Y 现在是"path end" = base center；真 apex 在 path end + dir × size
-        double bcx = apexX;
-        double bcy = apexY;
-        double realApexX = apexX + dx * size;
-        double realApexY = apexY + dy * size;
+        double tipX = baseCenterX + dx * size;
+        double tipY = baseCenterY + dy * size;
         double px = -dy;
         double py = dx;
         double halfBase = size * 0.5;
-        double leftX = bcx + px * halfBase;
-        double leftY = bcy + py * halfBase;
-        double rightX = bcx - px * halfBase;
-        double rightY = bcy - py * halfBase;
-        tri.moveTo(realApexX, realApexY);
+        double leftX = baseCenterX + px * halfBase;
+        double leftY = baseCenterY + py * halfBase;
+        double rightX = baseCenterX - px * halfBase;
+        double rightY = baseCenterY - py * halfBase;
+        tri.moveTo(tipX, tipY);
         tri.lineTo(leftX, leftY);
         tri.lineTo(rightX, rightY);
         tri.closePath();
@@ -105,13 +97,13 @@ public final class MarkerRenderer {
     }
 
     /**
-     * 在 (apexX, apexY) 画一个朝 (dirX, dirY) 方向的实心三角形 arrow。
-     * 调用方应预先 setColor；本方法只用 {@link Graphics2D#fill}。
+     * 以 {@code (baseCenterX, baseCenterY)} 为底边中心，画一个朝 {@code (dirX, dirY)} 延伸
+     * {@code size} 的实心三角形 arrow。
      */
-    public static void drawArrow(Graphics2D g, double apexX, double apexY,
+    public static void drawArrow(Graphics2D g, double baseCenterX, double baseCenterY,
                                  double dirX, double dirY, int size, Color color) {
         if (Math.hypot(dirX, dirY) < 1e-9) return;
-        Path2D.Double tri = arrowShape(apexX, apexY, dirX, dirY, size);
+        Path2D.Double tri = arrowShape(baseCenterX, baseCenterY, dirX, dirY, size);
         Color prev = g.getColor();
         g.setColor(color);
         g.fill(tri);

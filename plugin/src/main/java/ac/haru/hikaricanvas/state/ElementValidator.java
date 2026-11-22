@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.Map;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -246,7 +247,7 @@ public final class ElementValidator {
             throw new ValidationException("INVALID_PAYLOAD",
                     "mask.d has " + vertexCount + " vertices > " + MAX_MASK_VERTICES);
         }
-        java.util.regex.Matcher m = MASK_NUMBER_RE.matcher(d);
+        Matcher m = MASK_NUMBER_RE.matcher(d);
         while (m.find()) {
             try {
                 double v = Double.parseDouble(m.group());
@@ -566,11 +567,8 @@ public final class ElementValidator {
      * 已反序列化的 {@link Effects} 记录级校验。
      *
      * <p>{@link #buildEffects} 走的是 WS payload 的 {@code Map} 形态；导入 / 模板套用路径拿到的
-     * 是 Jackson 直接反序列化出的 record，绕开了那条链。本方法施加<b>同一组</b>约束。</p>
-     *
-     * <p>缺它的后果是实打实的：{@code glow.radius} 若为 2000 万，{@code GlowRenderer} 会按 bbox
-     * 申请数 GB buffer → {@code OutOfMemoryError}，而 {@code ProjectionThrottler.flushLocked}
-     * 只 catch Exception，Error 冒泡后每帧重试反复大分配。</p>
+     * 是 Jackson 直接反序列化出的 record，本方法施加同一组范围与颜色约束，防止超大 {@code glow.radius}
+     * 等畸形字段进入渲染阶段触发大内存分配。</p>
      */
     public static void validateEffects(Effects e) {
         if (e == null) return;
@@ -624,8 +622,7 @@ public final class ElementValidator {
             validatePathD(p.d());
             if (p.fill() != null) FillValidator.validate(p.fill());
         } else if (el instanceof TextElement t) {
-            // 与 WS 的 buildText / applyTextPatch 同款校验。此前整个 TextElement 分支缺席：
-            // 导入路径的 text 长度 / fontSize / color / align / 字距行高 / effects 全部无约束。
+            // 与 WS 的 buildText / applyTextPatch 对齐。
             validateText(t.text());
             validateFontSize(t.fontSize());
             validateColor(t.color());
@@ -637,8 +634,6 @@ public final class ElementValidator {
             if (b.points() == null) {
                 throw new ValidationException("INVALID_PAYLOAD", "brush.points required");
             }
-            // 内容校验此前完全缺席（只查 points 非 null）。size 为负会让 BasicStroke 构造抛异常
-            // → 该 wall 渲染永久失败循环；点数无上限则可让单元素撑爆渲染耗时。
             validateBrushSize(b.size());
             if (b.points().size() > BrushSession.MAX_BRUSH_POINTS_PER_STROKE) {
                 throw new ValidationException("INVALID_PAYLOAD",

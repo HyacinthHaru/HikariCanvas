@@ -1,13 +1,16 @@
 package ac.haru.hikaricanvas.web;
 
-import io.javalin.websocket.WsMessageContext;
 import ac.haru.hikaricanvas.schedule.ScheduleEntry;
 import ac.haru.hikaricanvas.schedule.WallSchedule;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
 import ac.haru.hikaricanvas.session.SessionRateLimiter;
+import ac.haru.hikaricanvas.storage.AuditLog;
 import ac.haru.hikaricanvas.storage.ScheduleDao;
+import ac.haru.hikaricanvas.storage.WallRepo;
 import ac.haru.hikaricanvas.variable.provider.ManualScheduleProvider;
+import io.javalin.websocket.WsMessageContext;
+import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -61,18 +64,18 @@ final class ScheduleOpDispatcher {
     private final SessionRateLimiter rateLimiter;
     private final ScheduleDao dao;
     private final @Nullable ManualScheduleProvider provider;
-    private final ac.haru.hikaricanvas.storage.WallRepo wallRepo;
-    private final ac.haru.hikaricanvas.storage.AuditLog auditLog;
+    private final WallRepo wallRepo;
+    private final AuditLog auditLog;
     /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
-    private final org.bukkit.plugin.Plugin plugin;
+    private final Plugin plugin;
 
     ScheduleOpDispatcher(SessionManager sessionManager,
                          SessionRateLimiter rateLimiter,
                          ScheduleDao dao,
                          @Nullable ManualScheduleProvider provider,
-                         ac.haru.hikaricanvas.storage.WallRepo wallRepo,
-                         ac.haru.hikaricanvas.storage.AuditLog auditLog,
-                         org.bukkit.plugin.Plugin plugin) {
+                         WallRepo wallRepo,
+                         AuditLog auditLog,
+                         Plugin plugin) {
         this.sessionManager = sessionManager;
         this.rateLimiter = rateLimiter;
         this.dao = dao;
@@ -321,7 +324,7 @@ final class ScheduleOpDispatcher {
     private boolean checkPermission(WsMessageContext ctx, Envelope in, String sessionId,
                                     Session s, String op) {
         UUID callerUuid = s.playerUuid();
-        ac.haru.hikaricanvas.storage.WallRepo.Wall wall = wallRepo.loadById(s.wallId()).orElse(null);
+        WallRepo.Wall wall = wallRepo.loadById(s.wallId()).orElse(null);
         if (wall == null) {
             ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
             return false;

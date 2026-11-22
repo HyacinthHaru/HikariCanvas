@@ -1,10 +1,23 @@
 package ac.haru.hikaricanvas.web;
 
-import io.javalin.websocket.WsMessageContext;
+import ac.haru.hikaricanvas.deploy.FrameDeployer;
+import ac.haru.hikaricanvas.deploy.WallResolver;
+import ac.haru.hikaricanvas.render.DirtyRegion;
+import ac.haru.hikaricanvas.render.ProjectionThrottler;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
+import ac.haru.hikaricanvas.session.SessionRateLimiter;
+import ac.haru.hikaricanvas.storage.AuditLog;
+import ac.haru.hikaricanvas.storage.WallRepo;
+import io.javalin.websocket.WsMessageContext;
+import org.bukkit.Bukkit;
+import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
 import java.util.regex.Pattern;
 
 import static ac.haru.hikaricanvas.web.WebHelpers.asPayloadMap;
@@ -22,15 +35,13 @@ final class WallOpDispatcher {
             Pattern.compile("^[A-Za-z0-9_-]{2,32}$");
 
     private final SessionManager sessionManager;
-    private final ac.haru.hikaricanvas.storage.WallRepo wallRepo;
-    private final ac.haru.hikaricanvas.deploy.FrameDeployer frameDeployer;
-    private final ac.haru.hikaricanvas.render.ProjectionThrottler throttler;
-    private final org.bukkit.plugin.java.JavaPlugin plugin;
-    private final ac.haru.hikaricanvas.storage.AuditLog auditLog;
-    /**
-     * 输入限流；可空（测试装配传 null = 不限流）。0.9.17 纳入，见 security.md §3.3。
-     */
-    private final ac.haru.hikaricanvas.session.SessionRateLimiter rateLimiter;
+    private final WallRepo wallRepo;
+    private final FrameDeployer frameDeployer;
+    private final ProjectionThrottler throttler;
+    private final JavaPlugin plugin;
+    private final AuditLog auditLog;
+    /** 输入限流；可空（测试装配传 null = 不限流），见 {@code docs/security.md §3.3}。 */
+    private final SessionRateLimiter rateLimiter;
 
     /**
      * {@code wall.refresh} 的 per-wall 冷却。
@@ -42,33 +53,32 @@ final class WallOpDispatcher {
     static final long REFRESH_COOLDOWN_MS = 1000L;
 
     /** wallId → 上次 refresh 的 nanoTime。session 级不够（换 session 可绕过），故按 wall 记。 */
-    private final java.util.concurrent.ConcurrentHashMap<String, Long> lastRefreshAt =
-            new java.util.concurrent.ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> lastRefreshAt = new ConcurrentHashMap<>();
 
     WallOpDispatcher(SessionManager sessionManager,
-                     ac.haru.hikaricanvas.storage.WallRepo wallRepo,
-                     ac.haru.hikaricanvas.deploy.FrameDeployer frameDeployer,
-                     ac.haru.hikaricanvas.render.ProjectionThrottler throttler,
-                     org.bukkit.plugin.java.JavaPlugin plugin) {
+                     WallRepo wallRepo,
+                     FrameDeployer frameDeployer,
+                     ProjectionThrottler throttler,
+                     JavaPlugin plugin) {
         this(sessionManager, wallRepo, frameDeployer, throttler, plugin, null, null);
     }
 
     WallOpDispatcher(SessionManager sessionManager,
-                     ac.haru.hikaricanvas.storage.WallRepo wallRepo,
-                     ac.haru.hikaricanvas.deploy.FrameDeployer frameDeployer,
-                     ac.haru.hikaricanvas.render.ProjectionThrottler throttler,
-                     org.bukkit.plugin.java.JavaPlugin plugin,
-                     ac.haru.hikaricanvas.storage.AuditLog auditLog) {
+                     WallRepo wallRepo,
+                     FrameDeployer frameDeployer,
+                     ProjectionThrottler throttler,
+                     JavaPlugin plugin,
+                     AuditLog auditLog) {
         this(sessionManager, wallRepo, frameDeployer, throttler, plugin, auditLog, null);
     }
 
     WallOpDispatcher(SessionManager sessionManager,
-                     ac.haru.hikaricanvas.storage.WallRepo wallRepo,
-                     ac.haru.hikaricanvas.deploy.FrameDeployer frameDeployer,
-                     ac.haru.hikaricanvas.render.ProjectionThrottler throttler,
-                     org.bukkit.plugin.java.JavaPlugin plugin,
-                     ac.haru.hikaricanvas.storage.AuditLog auditLog,
-                     ac.haru.hikaricanvas.session.SessionRateLimiter rateLimiter) {
+                     WallRepo wallRepo,
+                     FrameDeployer frameDeployer,
+                     ProjectionThrottler throttler,
+                     JavaPlugin plugin,
+                     AuditLog auditLog,
+                     SessionRateLimiter rateLimiter) {
         this.sessionManager = sessionManager;
         this.wallRepo = wallRepo;
         this.frameDeployer = frameDeployer;
@@ -93,7 +103,7 @@ final class WallOpDispatcher {
 
     /** 入口：payload 解析后转 {@link #handleWallOp}。 */
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
-        // 输入限流（0.9.17 纳入）。wall.refresh 另有 per-wall 冷却，见 handleWallOp。
+        // 输入限流；wall.refresh 另有 per-wall 冷却，见 handleWallOp。
         if (rateLimiter != null && !rateLimiter.allow(sessionId)) {
             ctx.send(Envelope.error(in.id(), "RATE_LIMITED", "input rate exceeded; slow down"));
             return;
@@ -137,7 +147,7 @@ final class WallOpDispatcher {
                 }
                 // owner 锁定画板留痕（防误锁纠纷 / 后续 audit 查谁锁的）
                 if (auditLog != null) {
-                    java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                    LinkedHashMap<String, Object> details = new LinkedHashMap<>();
                     details.put("wall_id", wallId);
                     details.put("locked_at", ts);
                     auditLog.record("WALL_LOCK", s.playerUuid().toString(), s.playerName(),
@@ -159,7 +169,7 @@ final class WallOpDispatcher {
                 wallRepo.markUnpublished(wallId);
                 // owner 解锁画板留痕（对应 WALL_LOCK 的对偶事件）
                 if (auditLog != null) {
-                    java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                    LinkedHashMap<String, Object> details = new LinkedHashMap<>();
                     details.put("wall_id", wallId);
                     auditLog.record("WALL_UNLOCK", s.playerUuid().toString(), s.playerName(),
                             sessionId, null, details);
@@ -191,7 +201,7 @@ final class WallOpDispatcher {
                     if (!canAny) {
                         // 非 owner 尝试改 alias 留痕——可观测异常尝试
                         if (auditLog != null) {
-                            java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                            LinkedHashMap<String, Object> details = new LinkedHashMap<>();
                             details.put("operation", "alias");
                             details.put("wall_id", wallId);
                             details.put("caller", s.playerUuid().toString());
@@ -212,7 +222,7 @@ final class WallOpDispatcher {
                     return;
                 }
                 if (auditLog != null) {
-                    java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                    LinkedHashMap<String, Object> details = new LinkedHashMap<>();
                     details.put("wall_id", wallId);
                     details.put("old_alias", oldAlias);
                     details.put("new_alias", alias);
@@ -235,14 +245,12 @@ final class WallOpDispatcher {
                             "wall.refresh cooldown; retry in a moment"));
                     return;
                 }
-                final ac.haru.hikaricanvas.deploy.WallResolver.Result.Ok geom = s.wall();
-                final java.util.List<Integer> mapIds = s.mapIds();
+                final WallResolver.Result.Ok geom = s.wall();
+                final List<Integer> mapIds = s.mapIds();
                 final String ackId = in.id();
                 // 主线程跑（动方块 + spawn entity），完成后回 ack 到当前 WS ctx（Jetty 线程安全）
-                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                    // 整个 task 体包 try/catch。repairFor 动方块/spawn entity 任一步抛
-                    // RuntimeException 时，原代码异常逃出 task 体 → 仅 Bukkit 默认日志，前端永不收 ack
-                    // → 8s ack_timeout 误报"无响应"。改为捕获后记 SEVERE + 回 INTERNAL_ERROR 让前端拿真错码。
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    // 整个 task 体包 try/catch，异常捕获后记 SEVERE 并回 INTERNAL_ERROR，避免前端 ack 超时。
                     try {
                         // 排进主线程队列到真正执行之间隔着至少一个 tick，这期间
                         // `/canvas delete <id> confirm` 完全可能已经跑完（它也在主线程）：
@@ -256,24 +264,24 @@ final class WallOpDispatcher {
                                     "wall was deleted"));
                             return;
                         }
-                        ac.haru.hikaricanvas.deploy.FrameDeployer.RepairResult result =
+                        FrameDeployer.RepairResult result =
                                 frameDeployer.repairFor(wallId, geom, mapIds);
                         if (s.projectState() != null) {
                             throttler.submit(sessionId,
-                                    ac.haru.hikaricanvas.render.DirtyRegion.fullCanvas(s.projectState()));
+                                    DirtyRegion.fullCanvas(s.projectState()));
                         }
                         plugin.getLogger().info("wall.refresh: wall=" + wallId
                                 + " framesRespawned=" + result.framesRespawned()
                                 + " framesReAttached=" + result.framesReAttached()
                                 + " wallBlocksReplaced=" + result.wallBlocksReplaced());
-                        java.util.LinkedHashMap<String, Object> ackPayload = new java.util.LinkedHashMap<>();
+                        LinkedHashMap<String, Object> ackPayload = new LinkedHashMap<>();
                         // 给前端的"重挂"是 spawn 新 frame + 给空 frame 塞回 map 的总和
                         ackPayload.put("framesRespawned", result.framesFixed());
                         ackPayload.put("framesReAttached", result.framesReAttached());
                         ackPayload.put("wallBlocksReplaced", result.wallBlocksReplaced());
                         ctx.send(Envelope.of("ack", ackId, ackPayload));
                     } catch (Exception ex) {
-                        plugin.getLogger().log(java.util.logging.Level.SEVERE,
+                        plugin.getLogger().log(Level.SEVERE,
                                 "wall.refresh repair failed for wall=" + wallId, ex);
                         try {
                             ctx.send(Envelope.error(ackId, "INTERNAL_ERROR",

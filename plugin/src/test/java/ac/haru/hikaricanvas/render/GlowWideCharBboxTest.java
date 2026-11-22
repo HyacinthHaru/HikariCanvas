@@ -13,11 +13,8 @@ import java.util.logging.Logger;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 发光外接盒的宽度必须和排版用的是同一个度量（{@link TextLayout#charAdvance}）。
- *
- * <p>此前这里用 {@code canonicalCharWidth}（西文一律 0.5×fontSize），而排版早已改用字体真实
- * advance —— W / M 这类宽字符的右半边直接被裁在盒子外，游戏内看到的光晕缺一块，编辑器（按浏览器
- * 实测字宽算）却是完整的。本用例用真实内置字体渲一个 W，断言光晕确实画到了 canonical 宽度之外。</p>
+ * 发光外接盒的宽度必须与文本排版使用同一个度量（{@link TextLayout#charAdvance}），
+ * 确保 W / M 等真实字宽大于 {@code canonicalCharWidth} 的宽字符右侧光晕不会被外接盒裁切。
  */
 class GlowWideCharBboxTest {
 
@@ -43,9 +40,9 @@ class GlowWideCharBboxTest {
 
         BufferedImage img = renderGlowOnly(fontId, "W", 4);
 
-        // 旧实现的盒子右缘 = GLYPH_X + canonical + (radius + 1)；取一个明显在它之外的位置
-        int oldRightEdge = GLYPH_X + canonical + 5;
-        assertTrue(hasInkRightOf(img, oldRightEdge + 2),
+        // 假定 canonical 宽度的盒子右缘 = GLYPH_X + canonical + (radius + 1)；取一个明显在它之外的位置
+        int canonicalRightEdge = GLYPH_X + canonical + 5;
+        assertTrue(hasInkRightOf(img, canonicalRightEdge + 2),
                 "W 右半边的光晕不该被裁掉（盒宽应按真实 advance 算）");
     }
 

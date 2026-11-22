@@ -7,7 +7,6 @@ import ac.haru.hikaricanvas.storage.ScheduleDao;
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.VariableException;
 import ac.haru.hikaricanvas.variable.VariableStore;
-import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.Duration;
@@ -20,9 +19,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -75,9 +76,7 @@ import java.util.logging.Logger;
  * </ul>
  *
  * <p>{@link #refresh()} 自身轻量（O(W) 内存表 + LocalTime 计算），不切主线程。store.setValue
- * 自身线程安全。</p>
- *
- * @see /Users/haru/.../docs/dynamic-data.md §7.3
+ * 自身线程安全。契约见 {@code docs/dynamic-data.md §7.3}。</p>
  */
 public final class ManualScheduleProvider implements VariableProvider {
 
@@ -119,7 +118,7 @@ public final class ManualScheduleProvider implements VariableProvider {
      * railDao.findBinding(...).map(b -> b.lineId() != null).orElse(false)}）让 rail-bound
      * wall 在 refresh 时跳过本 provider。未注入或返 false 时按原行为不变。</p>
      */
-    private volatile java.util.function.Predicate<String> skipWallPredicate;
+    private volatile Predicate<String> skipWallPredicate;
 
     /** 已注册的 wall 集合（值 = 该 wall 当前 entries 快照）。 */
     private final ConcurrentHashMap<String, List<ScheduleEntry>> registeredWalls =
@@ -128,19 +127,17 @@ public final class ManualScheduleProvider implements VariableProvider {
     private final ConcurrentHashMap<String, Long> lastPushAt = new ConcurrentHashMap<>();
     /**
      * 每 wall 的 precision 内存缓存（register / refreshWall / ensureWallRegistered
-     * 写路径主动刷新）。原 refresh() 每 tick 对每个 wall 查一次 DB（{@code loadByWallPrecision}）
-     * 来算节流间隔，而 DB 查询本身就发生在节流 continue 之前——minute 精度 wall 每 1s 白查一次。
-     * 缓存后 refresh() 零 DB 查询，DB 仅在 schedule 写操作时刷新。
+     * 写路径主动刷新），保证 {@link #refresh()} 零 DB 查询。
      */
     private final ConcurrentHashMap<String, String> precisionCache = new ConcurrentHashMap<>();
 
     /** 生产构造：DAO 注入；默认 config。 */
-    public ManualScheduleProvider(VariableStore store, JavaPlugin plugin, ScheduleDao dao) {
+    public ManualScheduleProvider(VariableStore store, ScheduleDao dao) {
         this(store, new DaoDataSource(dao), HikariCanvasConfig.ScheduleConfig.defaults());
     }
 
     /** 生产构造：DAO + 显式 config。 */
-    public ManualScheduleProvider(VariableStore store, JavaPlugin plugin, ScheduleDao dao,
+    public ManualScheduleProvider(VariableStore store, ScheduleDao dao,
                                   HikariCanvasConfig.ScheduleConfig config) {
         this(store, new DaoDataSource(dao), config);
     }
@@ -165,13 +162,13 @@ public final class ManualScheduleProvider implements VariableProvider {
     }
 
     /** 注入 rail-bound wall 跳过 predicate；null 关闭跳过逻辑。 */
-    public void setSkipWallPredicate(@Nullable java.util.function.Predicate<String> p) {
+    public void setSkipWallPredicate(@Nullable Predicate<String> p) {
         this.skipWallPredicate = p;
     }
 
     /** predicate 安全调用，未注入时返 false（不跳过）。 */
     private boolean shouldSkipWall(String wallId) {
-        java.util.function.Predicate<String> p = skipWallPredicate;
+        Predicate<String> p = skipWallPredicate;
         if (p == null) return false;
         try {
             return p.test(wallId);
@@ -237,7 +234,7 @@ public final class ManualScheduleProvider implements VariableProvider {
         long now = System.currentTimeMillis();
         LocalTime localNow = dataSource.currentLocalTime();
         boolean any = false;
-        for (java.util.Map.Entry<String, List<ScheduleEntry>> entry : registeredWalls.entrySet()) {
+        for (Map.Entry<String, List<ScheduleEntry>> entry : registeredWalls.entrySet()) {
             String wallId = entry.getKey();
             try {
                 // rail-bound wall 跳过（RailScheduleProvider 接管该 wall 的 push）
@@ -265,7 +262,7 @@ public final class ManualScheduleProvider implements VariableProvider {
         if (registeredWalls.isEmpty()) return;
         LocalTime localNow = dataSource.currentLocalTime();
         long now = System.currentTimeMillis();
-        for (java.util.Map.Entry<String, List<ScheduleEntry>> entry : registeredWalls.entrySet()) {
+        for (Map.Entry<String, List<ScheduleEntry>> entry : registeredWalls.entrySet()) {
             String wallId = entry.getKey();
             try {
                 pushValues(wallId, entry.getValue(), localNow, currentPrecision(wallId));

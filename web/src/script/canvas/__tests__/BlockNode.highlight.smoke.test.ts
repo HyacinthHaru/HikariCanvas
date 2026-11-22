@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P5-H：BlockNode / BlockStack 试跑高亮 smoke。
+ * BlockNode / BlockStack 试跑高亮 smoke。
  *
  * <p>注入 {@code BLOCK_HIGHLIGHT_KEY}（result + detail map ref），验证：
  * ① 命中本块 path 的 result → {@code data-hl-result} 属性 + 高亮 class；

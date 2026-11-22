@@ -12,16 +12,20 @@ import ac.haru.hikaricanvas.state.ElementValidator;
 import ac.haru.hikaricanvas.state.Fill;
 import ac.haru.hikaricanvas.state.IconElement;
 import ac.haru.hikaricanvas.state.Layer;
+import ac.haru.hikaricanvas.state.LinearGradient;
 import ac.haru.hikaricanvas.state.PathElement;
 import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.state.RadialGradient;
 import ac.haru.hikaricanvas.state.RectElement;
 import ac.haru.hikaricanvas.state.ShapeElement;
 import ac.haru.hikaricanvas.state.SolidFill;
 import ac.haru.hikaricanvas.state.StrictNumber;
 import ac.haru.hikaricanvas.state.TextElement;
-import ac.haru.hikaricanvas.storage.WallRepo; // 生产构造用
+import ac.haru.hikaricanvas.state.Timeline;
+import ac.haru.hikaricanvas.storage.WallRepo;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,10 +38,10 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 补间动画引擎（docs/scripting-tween.md）。
+ * 补间动画引擎（{@code docs/scripting.md}）。
  *
- * <p><b>架构路径 Z</b>：补间引擎维护内存中的临时插值帧，经 {@link TickerControl#renderStatic}
- * 渲到地图（不落 DB）；末帧经 {@link #ApplyManyFn} 落 DB（永久目标值）。</p>
+ * <p><b>内存帧渲染与末帧落盘</b>：补间引擎维护内存中的临时插值帧，经 {@link TickerControl#renderStatic}
+ * 渲到地图（不落 DB）；末帧经 {@link ApplyManyFn} 落 DB（永久目标值）。</p>
  *
  * <p><b>三线程契约</b>：</p>
  * <ul>
@@ -56,7 +60,7 @@ import java.util.logging.Logger;
  * <p><b>属性支持</b>：数值（x/y/w/h/rotation/opacity）/ 颜色（TextElement.color,
  * {@link ColorLerp#lerpHex}）/ fill（几何元素 {@link ColorLerp#lerpFill}）；含 {@code ${var:}}
  * 的颜色/fill 退化末帧瞬切（不每帧 resolve）。<b>接管只按 (elementId, property)</b>：
- * 同元素不同属性并存，同属性后来者接管（scripting-tween.md §6）。</p>
+ * 同元素不同属性并存，同属性后来者接管（{@code docs/scripting.md}）。</p>
  *
  * <p><b>共存分流</b>（§5）：每 tick 现查 {@link TickerControl#isWallAnimating(String)}；
  * 有时间轴 → 每渲帧 {@link ApplyManyFn} 落 DB（让 Ticker reload 叠加关键帧）；
@@ -77,7 +81,7 @@ public final class TweenScheduler {
     }
 
     /**
-     * Wall state 读取 seam（照 {@link AnimationTicker.WallSource} 范式）。
+     * Wall state 读取 seam（与 {@code AnimationTicker.WallSource} 同构）。
      * 生产装配：{@code wallRepo::loadById} 包一层；测试注内存 fake。
      */
     @FunctionalInterface
@@ -138,7 +142,7 @@ public final class TweenScheduler {
      * per-wall 帧率——已被 config maxFps clamp，决定 renderStatic 节流间隔（1000/fps ms）。</p>
      *
      * <p><b>补间→落盘→续接的时序承诺</b>：{@code onComplete} 是脚本续接回调——把
-     * 「补间末帧落盘完成后才续接脚本后续动作」（scripting-tween.md §2.2 步骤 6）这一顺序承诺
+     * 「补间末帧落盘完成后才续接脚本后续动作」（{@code docs/scripting.md}）这一顺序承诺
      * 落地。构造时已被 {@link #oneShot(Runnable)} <b>一次性包装</b>（内部 AtomicBoolean CAS），
      * 故 {@link #fireComplete} 在任何终结点（正常末帧落盘后 / tick 异常清理 / 接管）重复调都<b>恰
      * 一次</b>生效。可为 {@code null}（无续接需求，如纯演示拼接或测试）。record equals/hashCode
@@ -159,9 +163,8 @@ public final class TweenScheduler {
     /**
      * key = wallId，value = 该墙当前活跃的补间任务表（<b>不可变快照</b>，每次改动整体换新）。
      *
-     * <p>一墙可以并存多个 task：scripting-tween.md §6 写死了「同元素<b>不同</b>属性 → 并存」，
-     * 只有<b>同 (elementId, property)</b> 才接管。原来这里是 {@code Map<String, TweenTask>}，
-     * 同墙第二个补间无条件顶掉第一个，「移动 + 变色」两条补间必然互相掐断。</p>
+     * <p>一墙可并存多个补间任务（{@code docs/scripting.md}）：同元素<b>不同</b>属性并存，
+     * 仅同 {@code (elementId, property)} 的新任务接管旧任务。</p>
      *
      * <p><b>并发</b>：value 一律 {@code List.copyOf} 不可变，所有改动走
      * {@code active.compute}（ConcurrentHashMap 的 compute 持桶锁 → enqueue（Runner 线程）
@@ -246,11 +249,10 @@ public final class TweenScheduler {
      * 注册一个补间任务（从 TweenBlock 的 body 解析 targets）。
      *
      * <p>调用方（ScriptRunner）在 Runner 线程调；结果 {@link TraceStep} 决定是否挂起：
-     * {@code "ok"} → 挂起（等 {@code onComplete} 回调续接，<b>不再</b>由 Runner 自按 durationMs
-     * 定时）；否则不挂起，脚本链继续。</p>
+     * {@code "ok"} → 挂起（等待 {@code onComplete} 回调续接）；否则不挂起，脚本链继续。</p>
      *
      * <p><b>时序承诺</b>：{@code onComplete} 由本引擎在<b>补间末帧落盘完成后</b>（正常完成）/
-     * tick 异常清理后 / 被同墙新补间接管后<b>恰一次</b>触发——把 scripting-tween.md §2.2
+     * tick 异常清理后 / 被同墙新补间接管后<b>恰一次</b>触发——把 {@code docs/scripting.md}
      * 「补间完→落盘→续接」的顺序落地。回调内部应把脚本续接<b>投递到 Runner SES</b>（绝不在
      * tween 线程跑脚本续接）；本引擎只负责<b>在正确时点</b>调用它一次。{@code onComplete} 仅在
      * 返回 {@code "ok"} 且 {@code durationMs > 0}（即真正挂起）时才会被触发——失败 / 0 时长场景
@@ -300,7 +302,7 @@ public final class TweenScheduler {
                 }
                 PropTarget target = buildTarget(baseState,
                         ownerOf(existingOnWall, elementId, property), nowForTakeover,
-                        elementId, property, toStr, blockId);
+                        elementId, property, toStr);
                 if (target == null) {
                     return TraceStep.error(blockId, "tween target build failed: property=" + property
                             + " elementId=" + elementId);
@@ -347,7 +349,7 @@ public final class TweenScheduler {
                 + " duration=" + tb.durationMs() + "ms");
     }
 
-    /** 两个 task 是否争同一个 (elementId, property) —— 只有争了才接管（scripting-tween.md §6）。 */
+    /** 两个 task 是否争同一个 (elementId, property) —— 只有争了才接管（docs/scripting.md）。 */
     private static boolean conflicts(TweenTask a, TweenTask b) {
         for (PropTarget x : a.targets()) {
             for (PropTarget y : b.targets()) {
@@ -437,7 +439,7 @@ public final class TweenScheduler {
                     applyToDb(wallId, task, easedOf.get(i), atEnd, "mid-frame");
                 }
             } else {
-                // 静态墙：渲临时态不落 DB（路径 Z）。同墙所有 task 合成一帧。
+                // 静态墙：渲临时态不落 DB，同墙所有 task 合成一帧。
                 ProjectState frame = buildInterpolatedFrame(tasks, easedOf);
                 if (frame != null) {
                     ticker.renderStatic(wallId, frame);
@@ -465,9 +467,9 @@ public final class TweenScheduler {
 
     /** 把一个 task 的当前值（{@code atEnd} 时为目标值）按 elementId 分组落 DB。 */
     private void applyToDb(String wallId, TweenTask task, double eased, boolean atEnd, String stage) {
-        Map<String, Map<String, String>> byElement = new java.util.LinkedHashMap<>();
+        Map<String, Map<String, String>> byElement = new LinkedHashMap<>();
         for (PropTarget pt : task.targets()) {
-            byElement.computeIfAbsent(pt.elementId(), k -> new java.util.LinkedHashMap<>())
+            byElement.computeIfAbsent(pt.elementId(), k -> new LinkedHashMap<>())
                      .put(pt.property(), atEnd ? formatFinalValue(pt) : interpolatedValueStr(pt, eased));
         }
         for (Map.Entry<String, Map<String, String>> el : byElement.entrySet()) {
@@ -585,7 +587,7 @@ public final class TweenScheduler {
     private static PropTarget buildTarget(ProjectState baseState, TweenTask existing,
                                           long nowForTakeover,
                                           String elementId, String property,
-                                          String toStr, String blockId) {
+                                          String toStr) {
         if (isNumericProperty(property)) {
             double from = readNumericValue(baseState, elementId, property);
             double to = StrictNumber.parse(toStr);
@@ -720,33 +722,31 @@ public final class TweenScheduler {
     /**
      * 构造插值帧（纯内存，<b>每帧独立深拷贝副本</b>；不落 DB）。三态分流。
      *
-     * <p><b>跨线程撕裂读修复</b>：{@link EditSession} 构造器按<b>引用</b>持有 state，
-     * {@code updateElement} 通过 {@code elements().set(idx, ...)} <b>原地 mutate</b> 这个
-     * （非线程安全的）{@code ArrayList}，且 {@code es.state()} 返回的就是传入的同一对象。
-     * 若直接 {@code new EditSession(task.baseState())}，本方法产出的 frame 与 baseState 共享
-     * 内层 Layer 的 element 列表；该 frame 经 {@code renderStatic} <b>异步在 Ticker 线程</b>读，
-     * 而 tween 线程下一 tick 又在同一列表上 set/iterate → 对非线程安全 ArrayList 的并发改读 =
-     * 撕裂读。故构造 EditSession 前先 {@link #deepCopyState} 拍出独立副本：layers + 每个
-     * Layer 的 elements 列表都是新对象（Element / Timeline / Canvas record 不可变可按引用共享），
-     * 让返回的 frame 真正 immutable（不被后续 tick 的 mutate 污染），跨线程安全。</p>
+     * <p><b>跨线程隔离</b>：{@link EditSession} 构造器按<b>引用</b>持有 state，
+     * {@code updateElement} 通过 {@code elements().set(idx, ...)} <b>原地 mutate</b> 内层
+     * {@code ArrayList}，且 {@code es.state()} 返回的就是传入的同一对象。
+     * 故构造 {@link EditSession} 前先经 {@link #deepCopyState} 拍出独立副本：layers 与每个
+     * Layer 的 elements 列表均为新对象（Element / Timeline / Canvas record 不可变可按引用共享），
+     * 使返回的 frame 与 {@code baseState} 彻底隔离，供 {@code renderStatic} 在 Ticker 线程异步安全读取。</p>
      *
      * <p>临时 {@link EditSession} + {@code updateElement}——EditSession 纯 record 重建，
      * <b>不</b>发包、<b>不</b>落 DB、<b>不</b>碰 Ticker；产物即弃，仅取 {@code es.state()}。</p>
      *
-     * @param eased 已经过缓动函数映射的插值进度 [0,1]
+     * @param tasks   同墙当前活跃补间任务快照
+     * @param easedOf 与 {@code tasks} 下标一一对应的缓动后插值进度 {@code [0,1]}
      */
     private static ProjectState buildInterpolatedFrame(List<TweenTask> tasks, List<Double> easedOf) {
         if (tasks.isEmpty()) return null;
         // 按 elementId 分组，把同一元素的多属性合并到一次 updateElement 调用。
         // 同墙多个 task 合进同一份 patches —— 各 task 管各自的 (elementId, property)，
         // enqueue 侧已保证不会有两个活跃 task 争同一个属性，所以这里不会互相覆盖。
-        Map<String, Map<String, Object>> patches = new java.util.LinkedHashMap<>();
+        Map<String, Map<String, Object>> patches = new LinkedHashMap<>();
         for (int i = 0; i < tasks.size(); i++) {
             double eased = easedOf.get(i);
             for (PropTarget pt : tasks.get(i).targets()) {
                 Object v = buildPatchValue(pt, eased);
                 if (v == null) continue; // snap 目标（末帧瞬切）或插值失败，中间帧跳过
-                patches.computeIfAbsent(pt.elementId(), k -> new java.util.LinkedHashMap<>())
+                patches.computeIfAbsent(pt.elementId(), k -> new LinkedHashMap<>())
                        .put(pt.property(), v);
             }
         }
@@ -774,7 +774,7 @@ public final class TweenScheduler {
      * 返回 state 的 layers 列表 <b>与</b> 每个 Layer 的 elements 列表都是独立可变副本（后续
      * {@code EditSession.updateElement} 的原地 set 只动副本，不触碰 baseState）。
      *
-     * <p>{@link Element} / {@link ProjectState.Canvas} / {@link ac.haru.hikaricanvas.state.Timeline}
+     * <p>{@link Element} / {@link ProjectState.Canvas} / {@link Timeline}
      * 均为不可变 record，按引用共享即线程安全（与 {@code ProjectState.restore} 对 timelines 的处理一致）。</p>
      */
     private static ProjectState deepCopyState(ProjectState src) {
@@ -903,13 +903,13 @@ public final class TweenScheduler {
 
     /** 从渐变 fill 提取首个 stop 颜色（fallback SolidFill 字符串）。 */
     private static String extractFirstStopColor(Fill fill) {
-        if (fill instanceof ac.haru.hikaricanvas.state.LinearGradient lg
+        if (fill instanceof LinearGradient lg
                 && lg.stops() != null && !lg.stops().isEmpty()
                 && lg.stops().get(0) != null) {
             String c = lg.stops().get(0).color();
             return c != null ? c : "#FFFFFF";
         }
-        if (fill instanceof ac.haru.hikaricanvas.state.RadialGradient rg
+        if (fill instanceof RadialGradient rg
                 && rg.stops() != null && !rg.stops().isEmpty()
                 && rg.stops().get(0) != null) {
             String c = rg.stops().get(0).color();
@@ -918,11 +918,11 @@ public final class TweenScheduler {
         return "#FFFFFF";
     }
 
-    // ---------- 测试辅助（包级可见） ----------
+    // ---------- 状态观测与测试辅助 ----------
 
     /**
      * 有活跃补间的<b>墙</b>数。公开供 {@code /canvas stats} / {@code diagnose} 观测
-     * （{@code active} 是 {@link java.util.concurrent.ConcurrentHashMap}，{@code size()} 无锁线程安全）。
+     * （{@code active} 是 {@link ConcurrentHashMap}，{@code size()} 无锁线程安全）。
      * 一面墙可以同时挂多条补间（不同属性各一条），要看任务条数用 {@link #activeTaskCount()}。
      */
     public int activeCount() {

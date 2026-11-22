@@ -1,6 +1,5 @@
 package ac.haru.hikaricanvas.web;
 
-import io.javalin.websocket.WsMessageContext;
 import ac.haru.hikaricanvas.rail.AutoTimetableGenerator;
 import ac.haru.hikaricanvas.rail.RailLine;
 import ac.haru.hikaricanvas.rail.RailRun;
@@ -10,19 +9,25 @@ import ac.haru.hikaricanvas.rail.WallRailBinding;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
 import ac.haru.hikaricanvas.session.SessionRateLimiter;
+import ac.haru.hikaricanvas.storage.AuditLog;
 import ac.haru.hikaricanvas.storage.RailDao;
+import ac.haru.hikaricanvas.storage.WallRepo;
 import ac.haru.hikaricanvas.variable.provider.RailScheduleProvider;
+import io.javalin.websocket.WsMessageContext;
+import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.LocalTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 import static ac.haru.hikaricanvas.web.WebHelpers.asPayloadMap;
@@ -31,10 +36,11 @@ import static ac.haru.hikaricanvas.web.WebHelpers.mapOrEmpty;
 import static ac.haru.hikaricanvas.web.WebHelpers.stringOrNull;
 
 /**
- * {@code rail.*} WS op 分发器（11 个 op）。详见 {@code docs/dynamic-data.md §18.7}。
+ * {@code rail.*} WS op 分发器（13 个 op）。详见 {@code docs/dynamic-data.md §18.7}。
  *
- * <h2>11 op</h2>
+ * <h2>13 op</h2>
  * <ul>
+ *   <li>{@code rail.line.list / .detail}（2）只读列表与详情</li>
  *   <li>{@code rail.line.create / .update / .delete}（3）</li>
  *   <li>{@code rail.station.add / .update / .delete}（3）</li>
  *   <li>{@code rail.run.create / .update / .delete}（3）</li>
@@ -69,18 +75,18 @@ final class RailOpDispatcher {
     private final SessionRateLimiter rateLimiter;
     private final RailDao dao;
     private final @Nullable RailScheduleProvider provider;
-    private final ac.haru.hikaricanvas.storage.WallRepo wallRepo;
-    private final ac.haru.hikaricanvas.storage.AuditLog auditLog;
+    private final WallRepo wallRepo;
+    private final AuditLog auditLog;
     /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
-    private final org.bukkit.plugin.Plugin plugin;
+    private final Plugin plugin;
 
     RailOpDispatcher(SessionManager sessionManager,
                      SessionRateLimiter rateLimiter,
                      RailDao dao,
                      @Nullable RailScheduleProvider provider,
-                     ac.haru.hikaricanvas.storage.WallRepo wallRepo,
-                     ac.haru.hikaricanvas.storage.AuditLog auditLog,
-                     org.bukkit.plugin.Plugin plugin) {
+                     WallRepo wallRepo,
+                     AuditLog auditLog,
+                     Plugin plugin) {
         this.sessionManager = sessionManager;
         this.rateLimiter = rateLimiter;
         this.dao = dao;
@@ -173,7 +179,7 @@ final class RailOpDispatcher {
         // timetableByRun: { runId: [{ stationId, arrival, departure, stopsHere }] }
         Map<String, Object> ttMap = new LinkedHashMap<>();
         for (var entry : detail.timetableByRun().entrySet()) {
-            List<Map<String, Object>> rows = new java.util.ArrayList<>(entry.getValue().size());
+            List<Map<String, Object>> rows = new ArrayList<>(entry.getValue().size());
             for (RailTimetableEntry te : entry.getValue()) {
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("stationId", te.stationId());
@@ -473,7 +479,7 @@ final class RailOpDispatcher {
         if (RailRun.DIRECTION_DOWN.equals(direction)) {
             // down 方向反转
             List<RailStation> reversed = new ArrayList<>(stations);
-            java.util.Collections.reverse(reversed);
+            Collections.reverse(reversed);
             stations = reversed;
         }
         return AutoTimetableGenerator.generate(runId, stations,
@@ -496,7 +502,7 @@ final class RailOpDispatcher {
         Object startObj = payload.get("startStationId");  // 允许 null = 清空区间起点
         Object endObj = payload.get("endStationId");
         String notes = trimOrNull(stringOrNull(payload.get("notes")));
-        // 与 create 同一套校验（不传的字段 = 不改，跳过）。update 曾经少查 direction 白名单
+        // 与 create 同一套校验（不传的字段 = 不改，跳过）。
         // 与 runNumber / serviceType 长度：写进一个 "up "/"UP"/"左" 之类的方向后，
         // listStationStops 的 `AND r.direction = :dir` 永远命中不了，这趟车会从所有站牌上
         // 静默消失，界面还什么都不提示。
@@ -653,7 +659,7 @@ final class RailOpDispatcher {
 
     private void handleWallBind(WsMessageContext ctx, Envelope in, String sessionId,
                                 Session s, Map<String, Object> payload) {
-        // R7：只绑当前 session 的 wall（与 ScheduleOpDispatcher / VariableOpDispatcher 一致），
+        // 只绑当前 session 的 wall（与 ScheduleOpDispatcher / VariableOpDispatcher 一致），
         // 不接受客户端传入 wallId，杜绝跨 wall 越权绑定（前端从不传 wallId，无破坏）。
         String wallId = s.wallId();
         if (wallId == null) {
@@ -709,9 +715,9 @@ final class RailOpDispatcher {
         }
         // 3. rail.wall.bind → 复用 schedule.own/any（wall owner 判定）
         if ("rail.wall.bind".equals(op)) {
-            // R7：owner 判定基于当前 session 的 wall（不接受客户端 wallId），与 handleWallBind 一致。
+            // owner 判定基于当前 session 的 wall（不接受客户端 wallId），与 handleWallBind 一致。
             String wallId = s.wallId();
-            ac.haru.hikaricanvas.storage.WallRepo.Wall wall = wallId == null
+            WallRepo.Wall wall = wallId == null
                     ? null : wallRepo.loadById(wallId).orElse(null);
             boolean isOwner = wall != null && wall.ownerUuid().equals(callerUuid);
             String node = isOwner ? "canvas.rail.wall.bind" : "canvas.schedule.any";
@@ -747,7 +753,7 @@ final class RailOpDispatcher {
             details.put("operation", in.op());
             details.put("required", node);
             details.put("scope", "rail");
-            // R7-b：补 wall_id，与 Schedule/Variable dispatcher 的权限拒绝审计对齐。
+            // 补 wall_id，与 Schedule/Variable dispatcher 的权限拒绝审计对齐。
             details.put("wall_id", s.wallId() == null ? "" : s.wallId());
             auditLog.record("PERMISSION_DENIED",
                     s.playerUuid() == null ? null : s.playerUuid().toString(),
@@ -804,16 +810,9 @@ final class RailOpDispatcher {
 
     /**
      * 生成唯一 id（line/station/run 共用）。基础形态 = {@code prefix + 时间戳低 8 位 hex}；
-     * 若 {@code exists} 命中冲突则追加 random 后缀并 <b>再次校验</b>，循环到无冲突。
-     *
-     * <p>修复点：原代码冲突时只做单次 random 后缀且不二次 findX 校验——同毫秒并发 create 或
-     * 第二次仍撞 random 值时 id 可能与既有行相同，触发 upsert {@code ON CONFLICT(id) DO UPDATE}
-     * 静默覆盖既有行（数据丢失）。do-while 每次重生成后都 re-check，从根消除残留碰撞窗口。</p>
-     *
-     * <p>非安全敏感（仅做唯一性，非凭证），用 {@link Math#random()} 足够；64 次硬上限兜底防
-     * exists 实现异常导致死循环（实际首次或一次 random 即命中）。</p>
+     * 若 {@code exists} 命中冲突则追加 random 后缀并循环二次校验直到无冲突（64 次硬上限兜底）。
      */
-    private static String generateUniqueId(String prefix, java.util.function.Predicate<String> exists) {
+    private static String generateUniqueId(String prefix, Predicate<String> exists) {
         String hex = Long.toHexString(System.currentTimeMillis());
         String base = prefix + hex.substring(Math.max(0, hex.length() - 8));
         String id = base;

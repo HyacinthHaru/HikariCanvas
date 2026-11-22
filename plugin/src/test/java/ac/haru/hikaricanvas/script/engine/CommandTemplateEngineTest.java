@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.7.0-P3 A1：{@link CommandTemplateEngine} 全场景（K13 转义规则逐条；纯函数零 Bukkit）。
+ * {@link CommandTemplateEngine} 全场景单测（参数转义与校验规则；纯函数零 Bukkit）。
  */
 class CommandTemplateEngineTest {
 
@@ -122,7 +122,7 @@ class CommandTemplateEngineTest {
                 assertInstanceOf(CommandTemplateEngine.Result.Ok.class, ok).command());
     }
 
-    // ---------- K13 转义：剥换行 / § ----------
+    // ---------- 转义：剥换行 / § ----------
 
     @Test
     void sanitize_stripsNewlinesAndSectionSign() {
@@ -133,7 +133,7 @@ class CommandTemplateEngineTest {
         assertEquals("say [招牌] line1line2c红字", ok.command());
     }
 
-    // ---------- K13：含 @ 整体拒（text 参数） ----------
+    // ---------- 含 @ 整体拒（text 参数） ----------
 
     @Test
     void textParamWithAtSelector_rejected() {

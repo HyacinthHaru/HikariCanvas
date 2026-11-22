@@ -55,9 +55,8 @@ import java.util.concurrent.CompletableFuture;
  *
  * <h2>架构</h2>
  *
- * <p>类拆 Brigadier 注册（{@link #register} 嵌进 {@link CanvasCommand}.build）+ 纯逻辑
- * （{@link #execute}）。后者只依赖 {@link CommandSender} + {@code String[] args}，便于
- * 单测无 Bukkit 时直接调（{@link ac.haru.hikaricanvas.command.VariableSubCommandTest}）。</p>
+ * <p>类拆 Brigadier 注册（{@link #build} 嵌进 {@link CanvasCommand#build}）+ 纯逻辑
+ * （{@link #execute}）。后者只依赖 {@link CommandSender} + {@code String[] args}，便于无 Bukkit 单测。</p>
  *
  * <p>{@code set} / {@code delete} 写入 {@link AuditLog} 两个新事件：
  * {@code VARIABLE_COMMAND_SET} / {@code VARIABLE_COMMAND_DELETE}（区别于 WS op 的
@@ -169,19 +168,17 @@ public final class VariableSubCommand {
     // ──────────────────────────────────────────────────────────────────
 
     /**
-     * 注入到 {@link CanvasCommand}.build 的 {@code canvas} 根节点。
+     * 注入到 {@link CanvasCommand#build} 的 {@code canvas} 根节点。
      *
      * <p>形态：{@code /canvas var <sub> [args...]}。每个子命令一个 literal 分支；
-     * 多参子命令额外加 {@link com.mojang.brigadier.arguments.StringArgumentType#greedyString()}
-     * 或 {@code word()} 节点。tab completion 通过 {@link #buildSubcommandSuggestions}
-     * 等返 {@link CompletableFuture<Suggestions>}。</p>
+     * 多参子命令额外加 {@link StringArgumentType#greedyString()} 或 {@code word()} 节点。
+     * tab completion 通过 {@link #suggestNamespaces} / {@link #suggestFullNames} /
+     * {@link #suggestWallIds} 返回 {@link CompletableFuture}。</p>
      */
     public LiteralArgumentBuilder<CommandSourceStack> build() {
         return Commands.literal("var")
                 .requires(src -> src.getSender().hasPermission(PERMISSION))
-                // list / list <namespace>
-                // string() 不带引号时只认 [0-9A-Za-z_.+-]，真实 namespace
-                // 含冒号/斜杠（user:w-xxxx）会报"参数后应有空格分隔"——尾参改 greedyString
+                // list / list <namespace>（namespace 可含冒号/斜杠，尾参用 greedyString）
                 .then(Commands.literal("list")
                         .executes(ctx -> runExec(ctx, new String[]{"list"}))
                         .then(Commands.argument("namespace", StringArgumentType.greedyString())
@@ -194,11 +191,7 @@ public final class VariableSubCommand {
                                 .suggests(this::suggestFullNames)
                                 .executes(ctx -> runExec(ctx, new String[]{"get",
                                         StringArgumentType.getString(ctx, "fullName")}))))
-                // set <fullName> <value...>
-                // fullName 原用 string()——不带引号时冒号/斜杠直接 parse error
-                // （游戏内 /canvas var set user:w-xxxx/score 5 报"参数后应有空格分隔"）。
-                // Brigadier 中段参数无法既不带引号又收任意字符，改成整尾 greedyString +
-                // 手工按第一个空格切 fullName / value（value 仍可含空格）。
+                // set <fullName> <value...>：整尾 greedyString 按第一个空格切分 fullName 与 value
                 .then(Commands.literal("set")
                         .then(Commands.argument("args", StringArgumentType.greedyString())
                                 .suggests(this::suggestFullNames)

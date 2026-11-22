@@ -2,10 +2,9 @@
  * 双端一致性：glow 外接盒度量 + dither fallback 路径的 opacity 守卫。
  *
  * glow bbox：高度两端都用 ascent=round(fontSize*0.8) / descent=fontSize-ascent；
- *   宽度两端都用 charAdvance（排版同源）。后端曾用 canonicalCharWidth、前端用 measureText，
- *   宽西文字符的右缘光晕于是在游戏内被裁掉。
+ *   宽度两端都用 charAdvance（排版同源）。
  *
- * B2 (P2-19): drawDitheredElement fallback-path 的 opacity 守卫补齐 isFinite + clamp(0,1)，
+ * drawDitheredElement fallback-path：opacity 守卫补齐 isFinite + clamp(0,1)，
  *   对齐 drawElement。测试验证负/NaN/Infinity opacity 的 safe 值计算与 drawElement 路径等价。
  */
 
@@ -14,7 +13,7 @@ import { canonicalCharWidth, charAdvance } from '../TextLayout';
 import { preloadMetrics } from '../GlyphMetricsLut';
 
 // ---------------------------------------------------------------------------
-// B1：glow bbox 度量公式等价性（前端 renderGlow vs 后端 GlowRenderer 修复后）
+// glow bbox 度量公式等价性（前端 renderGlow vs 后端 GlowRenderer）
 // ---------------------------------------------------------------------------
 
 /**
@@ -29,7 +28,7 @@ function frontendGlowDescent(fontSize: number): number {
 }
 
 /**
- * 后端 GlowRenderer 修复后的公式（TextLayout.ASCENT_RATIO = 0.8）。
+ * 后端 GlowRenderer 公式（TextLayout.ASCENT_RATIO = 0.8）。
  * ascent = (int) Math.round(fontSize * 0.8)，descent = fontSize - ascent。
  * Java round(double) 与 TS Math.round(number) 在 .5 的处理上有差异（Java 正无穷舍入、
  * TS 同 Java 正数半入，两端结果一致）。
@@ -41,7 +40,7 @@ function backendGlowDescent(fontSize: number): number {
     return fontSize - backendGlowAscent(fontSize);
 }
 
-describe('B1 glow bbox 高度公式：前后端一致', () => {
+describe('glow bbox 高度公式：前后端一致', () => {
     const sizes = [8, 10, 12, 14, 16, 20, 24, 32, 48, 64];
 
     for (const fs of sizes) {
@@ -117,11 +116,11 @@ describe('glow bbox 宽度：两端都走 charAdvance（与排版同源）', () 
 });
 
 // ---------------------------------------------------------------------------
-// B2：drawDitheredElement fallback-path opacity 守卫等价性
+// drawDitheredElement fallback-path opacity 守卫等价性
 // ---------------------------------------------------------------------------
 
 /**
- * 从 drawElement（修复前已正确）内联提取的安全 opacity 计算，与修复后
+ * 从 drawElement 内联提取的安全 opacity 计算，与
  * drawDitheredElement fallback-path 完全一致。
  * 规则：undefined/null → 不改 globalAlpha；否则 !isFinite → 1；其余 clamp(0,1)。
  * 返回新的 globalAlpha 值（以 prevAlpha=1.0 基线）。
@@ -135,7 +134,7 @@ function safeGlobalAlpha(prevAlpha: number, op: number | undefined | null): numb
     return prevAlpha; // op >= 1 时不改（等同后端 clamp 结果 = 1）
 }
 
-describe('B2 drawDitheredElement fallback-path opacity clamp（对齐 drawElement）', () => {
+describe('drawDitheredElement fallback-path opacity clamp（对齐 drawElement）', () => {
     const BASE = 1.0;
 
     it('正常 opacity=0.5 → globalAlpha=0.5', () => {

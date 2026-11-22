@@ -1,7 +1,7 @@
 package ac.haru.hikaricanvas.command;
 
 import ac.haru.hikaricanvas.i18n.Messages;
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import ac.haru.hikaricanvas.variable.plugin.PushRateLimiter;
@@ -22,26 +22,10 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P5-B：{@link VariableSubCommand} 单测。
- *
- * <p>不引 MockBukkit / Mockito —— 用 {@link Proxy} 造 CommandSender + 捕获消息。覆盖：</p>
- *
- * <ul>
- *   <li>权限拒绝（hasPermission=false）</li>
- *   <li>list 无 ns / 有 ns / 空 store</li>
- *   <li>get 存在 / 不存在</li>
- *   <li>set 成功 / 不存在</li>
- *   <li>delete 成功 / 不存在</li>
- *   <li>providers 输出 + 空</li>
- *   <li>reload 触发 hook</li>
- *   <li>inspect wall reference + wall 不存在</li>
- *   <li>tab completion 4 分支</li>
- *   <li>未知 subcommand</li>
- * </ul>
+ * {@link VariableSubCommand} 单测（使用 {@link Proxy} 构造 {@link CommandSender} 捕获消息）。
  */
 class VariableSubCommandTest {
 
@@ -57,7 +41,7 @@ class VariableSubCommandTest {
 
     @BeforeEach
     void setUp() {
-        store = new VariableStore(new FakeUserVariableDao(), w -> {});
+        store = new VariableStore(new NoopUserVariableDao(), w -> {});
         daemon = new VariableProviderDaemon();
         wallSource = new FakeWallSource();
         reloadCalled = new AtomicBoolean(false);
@@ -370,15 +354,6 @@ class VariableSubCommandTest {
     // ──────────────────────────────────────────────────────────
     //  Fakes
     // ──────────────────────────────────────────────────────────
-
-    private static final class FakeUserVariableDao extends UserVariableDao {
-        FakeUserVariableDao() { super(Logger.getLogger("test"), null); }
-        @Override public void upsert(String wallId, String name, VarType type,
-                                     String defaultValue, String currentValue, String boundTo,
-                                     long createdAt, long updatedAt) {}
-        @Override public void delete(String wallId, String name) {}
-        @Override public List<Row> loadAll() { return new ArrayList<>(); }
-    }
 
     /** {@link VariableSubCommand.WallSource} 测试实现：内存里塞 wallId。 */
     private static final class FakeWallSource implements VariableSubCommand.WallSource {

@@ -1,48 +1,33 @@
 package ac.haru.hikaricanvas.variable.provider;
 
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VariableInterpolator;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P3-J：{@link ScoreboardVariableProvider} 单测。
- *
- * <p>覆盖：</p>
- * <ul>
- *   <li>initialize 注册 dynamic lookup hook（store.registerDynamicLookupHook）</li>
- *   <li>handleDynamic 解析 {@code scoreboard.<obj>.<player>} → 创建变量 + 跟踪</li>
- *   <li>refresh 读 scoreboard + setValue</li>
- *   <li>obj 不存在 → 不 setValue（cached value 保持）</li>
- *   <li>interpolator miss 触发 handleDynamic（端到端）</li>
- *   <li>非 scoreboard namespace 的 lookup 不被处理</li>
- *   <li>isDynamic = true / declaredKeys = empty</li>
- * </ul>
+ * {@link ScoreboardVariableProvider} 动态追踪、刷新与空闲键回收单测。
  */
 class ScoreboardVariableProviderTest {
 
-    private FakeUserVariableDao fakeDao;
     private VariableStore store;
     private FakeScoreboardDataSource dataSource;
     private ScoreboardVariableProvider provider;
 
     @BeforeEach
     void setUp() {
-        fakeDao = new FakeUserVariableDao();
-        store = new VariableStore(fakeDao, w -> { });
+        store = new VariableStore(new NoopUserVariableDao(), w -> { });
         dataSource = new FakeScoreboardDataSource();
         provider = new ScoreboardVariableProvider(store, dataSource);
     }
@@ -161,10 +146,8 @@ class ScoreboardVariableProviderTest {
     void refresh_objectiveNotFound_doesNotSetValue() {
         provider.initialize();
         provider.handleDynamic("scoreboard.missing.Player");
-        // dataSource 未配置该 score → readScore 返 null
         provider.refresh();
-        assertEquals(null,
-                store.get("scoreboard/missing.Player").get().currentValue(),
+        assertNull(store.get("scoreboard/missing.Player").get().currentValue(),
                 "obj 不存在 → 不 setValue（保持 currentValue = null，让 fallback 兜底）");
     }
 
@@ -256,7 +239,7 @@ class ScoreboardVariableProviderTest {
         long[] now = {1_000_000L};
         provider.setClockForTest(() -> now[0]);
         provider.handleDynamic("scoreboard.kills.Steve");
-        store.markWallReferences("w-abc12345", java.util.Set.of("scoreboard/kills.Steve"));
+        store.markWallReferences("w-abc12345", Set.of("scoreboard/kills.Steve"));
 
         now[0] += ScoreboardVariableProvider.IDLE_EVICT_MS * 3;
         provider.refresh();
@@ -297,17 +280,5 @@ class ScoreboardVariableProviderTest {
             String key = objective + "." + player;
             return scores.get(key);
         }
-    }
-
-    private static final class FakeUserVariableDao extends UserVariableDao {
-        FakeUserVariableDao() {
-            super(Logger.getLogger("test"), null);
-        }
-        @Override
-        public void upsert(String wallId, String name, ac.haru.hikaricanvas.variable.VarType type,
-                           String defaultValue, String currentValue, String boundTo,
-                           long createdAt, long updatedAt) {}
-        @Override public void delete(String wallId, String name) {}
-        @Override public List<Row> loadAll() { return new ArrayList<>(); }
     }
 }

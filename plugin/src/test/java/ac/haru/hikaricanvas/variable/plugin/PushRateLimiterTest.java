@@ -3,6 +3,9 @@ package ac.haru.hikaricanvas.variable.plugin;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static ac.haru.hikaricanvas.variable.plugin.PluginNamespaceRegistryTest.fakePlugin;
@@ -12,27 +15,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P4-P：{@link PushRateLimiter} 单测。
+ * {@link PushRateLimiter} 限流、熔断与 1s 原子固定窗口计数器单测。
  *
- * <p>用注入的虚拟时钟（{@link AtomicLong}）控制"当前时间"，
- * 避免 {@code Thread.sleep} 与窗口边界 race。</p>
- *
- * <p>覆盖：</p>
- * <ul>
- *   <li>单次 tryAcquire allow</li>
- *   <li>per-plugin 100/s 边界（第 101 次 drop）</li>
- *   <li>跨秒自动重置</li>
- *   <li>全局 1000/s → 触发 circuit break</li>
- *   <li>circuit break 期内 reject 全部插件</li>
- *   <li>circuit break 过期后恢复 allow</li>
- *   <li>批量 tryAcquireBatch 计费</li>
- *   <li>批量超 per-plugin → 全 reject</li>
- *   <li>多 plugin 隔离（A 满，B 仍 allow，受限于全局上限）</li>
- *   <li>currentPluginCount / currentGlobalCount / isGlobalCircuitBroken</li>
- *   <li>Config 校验非法参数</li>
- *   <li>非法 count（0 / 负数）抛 IAE</li>
- *   <li>resetForTest 清零</li>
- * </ul>
+ * <p>用注入的虚拟时钟（{@link AtomicLong}）控制当前时间，避免 {@code Thread.sleep} 与窗口边界竞态。</p>
  */
 class PushRateLimiterTest {
 
@@ -275,5 +260,84 @@ class PushRateLimiterTest {
         PushRateLimiter limiter = newLimiter(PushRateLimiter.Config.defaults(), c);
         assertThrows(NullPointerException.class, () -> limiter.tryAcquire(null));
         assertThrows(NullPointerException.class, () -> limiter.tryAcquireBatch(null, 1));
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  1s atomic window counter semantics
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void window_countsAccumulateWithinSameWindow() {
+        AtomicLong c = clock(1_000_000L);
+        PushRateLimiter rl = newLimiter(new PushRateLimiter.Config(100, 1000, 10_000L), c);
+        Plugin p = fakePlugin("Alpha");
+
+        for (int i = 0; i < 10; i++) assertTrue(rl.tryAcquire(p));
+        assertEquals(10, rl.currentPluginCount("Alpha"));
+        assertEquals(10, rl.currentGlobalCount());
+    }
+
+    @Test
+    void window_countsResetOnNewWindow() {
+        AtomicLong c = clock(1_000_000L);
+        PushRateLimiter rl = newLimiter(new PushRateLimiter.Config(100, 1000, 10_000L), c);
+        Plugin p = fakePlugin("Alpha");
+
+        for (int i = 0; i < 10; i++) rl.tryAcquire(p);
+        c.addAndGet(1000L);
+        assertEquals(0, rl.currentPluginCount("Alpha"), "跨窗口应归零");
+        assertEquals(0, rl.currentGlobalCount());
+
+        rl.tryAcquire(p);
+        assertEquals(1, rl.currentPluginCount("Alpha"), "新窗口从 delta 起算，不叠加旧值");
+    }
+
+    @Test
+    void window_concurrentAcquiresWithinOneWindow_loseNothing() throws Exception {
+        AtomicLong c = clock(1_000_000L);
+        PushRateLimiter rl = newLimiter(new PushRateLimiter.Config(100_000, 100_000, 10_000L), c);
+        Plugin p = fakePlugin("Alpha");
+
+        int threads = 40;
+        int perThread = 25;
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(threads);
+        AtomicInteger granted = new AtomicInteger();
+        for (int t = 0; t < threads; t++) {
+            Thread th = new Thread(() -> {
+                try {
+                    start.await();
+                    for (int i = 0; i < perThread; i++) {
+                        if (rl.tryAcquire(p)) granted.incrementAndGet();
+                    }
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    done.countDown();
+                }
+            });
+            th.setDaemon(true);
+            th.start();
+        }
+        start.countDown();
+        assertTrue(done.await(30, TimeUnit.SECONDS), "并发用例超时");
+
+        assertEquals(threads * perThread, granted.get(), "配额充足时不该有拒绝");
+        assertEquals(threads * perThread, rl.currentPluginCount("Alpha"),
+                "同窗口内的计数必须一条不丢");
+        assertEquals(threads * perThread, rl.currentGlobalCount());
+    }
+
+    @Test
+    void window_countSaturatesInsteadOfWrapping() {
+        AtomicLong c = clock(1_000_000L);
+        PushRateLimiter rl = newLimiter(
+                new PushRateLimiter.Config(Integer.MAX_VALUE, Integer.MAX_VALUE, 10_000L), c);
+        Plugin p = fakePlugin("Alpha");
+
+        for (int i = 0; i < 3; i++) rl.tryAcquireBatch(p, Integer.MAX_VALUE - 1);
+        assertTrue(rl.currentPluginCount("Alpha") > 0,
+                "计数不能回绕成负数，实际 " + rl.currentPluginCount("Alpha"));
+        assertTrue(rl.currentGlobalCount() > 0);
     }
 }

@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link BufferPool} 单测（0.6 P2）。动机与线程限定约束见 {@code docs/timeline.md §3.3} 与
+ * {@link BufferPool} 单测。动机与线程限定约束见 {@code docs/timeline.md §3.3} 与
  * {@code docs/architecture.md §5.5}。
  *
  * <p>覆盖：</p>

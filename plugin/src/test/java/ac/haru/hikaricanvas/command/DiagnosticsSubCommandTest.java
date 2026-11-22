@@ -21,14 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.9.2 Task 2：{@link DiagnosticsSubCommand#diagnose} 诊断链纯逻辑单测。
- *
- * <p>不引 MockBukkit / SQLite —— 用 {@link java.lang.reflect.Proxy} 造 CommandSender 捕获消息
- * （照 {@link VariableSubCommandTest#makeSender}），用窄构造器 {@code new DiagnosticsSubCommand(messages)}
- * 绕开 10 个 Bukkit 耦合子系统，诊断输入用 {@link DiagnosticsSubCommand.DiagnoseInputs} 直接造。</p>
- *
- * <p>覆盖：not-found（行不存在）+ 正常墙全 OK + 世界未加载（worldLoaded 返 false）+
- * 工程数据损坏（loadById 空但裸行存在）+ 地图数量对不上 + 活跃 session / 动画态 INFO。</p>
+ * {@link DiagnosticsSubCommand#diagnose} 诊断链纯逻辑单测。
  */
 class DiagnosticsSubCommandTest {
 

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.1 积木画布右下角「本脚本变量实时预览」面板 smoke。
+ * 积木画布右下角「本脚本变量实时预览」面板 smoke。
  *
  * <p>验证：① 未选规则 → 空状态文案；② 选中规则后列出它涉及的变量（trigger + 动作字段 + ${var:X}）；
  * ③ 实时值来自 VariableStore mirror（store 变 → 行值变）；④ 别名优先显示（VariableAliasStore）；

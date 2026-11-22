@@ -7,10 +7,13 @@ import ac.haru.hikaricanvas.rail.RailTimetableEntry;
 import ac.haru.hikaricanvas.rail.WallRailBinding;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
-import org.jetbrains.annotations.Nullable;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.logging.Level;
@@ -26,8 +29,7 @@ import java.util.logging.Logger;
  * <p>所有方法异常被 catch + log，<b>不上抛</b>——保持与 ScheduleDao 风格一致。但吞掉的异常
  * 必须让业务层看得见结果：读方法返 Optional / List，删方法返受影响行数，<b>写方法
  * （upsert* / replaceTimetable）返 boolean</b>，{@code false} = 这次没写进去（外键约束、
- * UNIQUE 冲突、DB 故障……）。业务层（{@code RailOpDispatcher}）据此回 error 而不是照样 ack
- * 成功——写方法曾经一律 void，绑定失败也回 ack，站牌空白到重启且查不出原因。</p>
+ * UNIQUE 冲突、DB 故障……）。业务层（{@code RailOpDispatcher}）据此返回结构化错误而非误报成功。</p>
  */
 public class RailDao {
 
@@ -309,7 +311,7 @@ public class RailDao {
         List<RailStation> sts = listStationsByLine(lineId);
         List<RailRun> rs = listRunsByLine(lineId);
         // 批量拉 timetable：一次查 WHERE run_id IN (...)。runs 通常 ≤ 50，单查无压力。
-        java.util.Map<String, List<RailTimetableEntry>> ttByRun = new java.util.LinkedHashMap<>();
+        Map<String, List<RailTimetableEntry>> ttByRun = new LinkedHashMap<>();
         if (rs.isEmpty()) {
             return new LineDetail(lineId, sts, rs, ttByRun);
         }
@@ -339,10 +341,10 @@ public class RailDao {
             String lineId,
             List<RailStation> stations,
             List<RailRun> runs,
-            java.util.Map<String, List<RailTimetableEntry>> timetableByRun
+            Map<String, List<RailTimetableEntry>> timetableByRun
     ) {
         public static LineDetail empty(String lineId) {
-            return new LineDetail(lineId, List.of(), List.of(), java.util.Map.of());
+            return new LineDetail(lineId, List.of(), List.of(), Map.of());
         }
     }
 
@@ -523,7 +525,7 @@ public class RailDao {
     // ────────────────────────────────────────────────────────────
 
     // 非 static（用实例 log 记录损坏数据告警）。仅在实例方法的 RowMapper lambda 内调用。
-    private RailLine mapLine(java.sql.ResultSet rs) throws java.sql.SQLException {
+    private RailLine mapLine(ResultSet rs) throws SQLException {
         UUID owner;
         try {
             owner = UUID.fromString(rs.getString("owner_uuid"));
@@ -545,7 +547,7 @@ public class RailDao {
                 rs.getLong("updated_at"));
     }
 
-    private static RailStation mapStation(java.sql.ResultSet rs) throws java.sql.SQLException {
+    private static RailStation mapStation(ResultSet rs) throws SQLException {
         return new RailStation(
                 rs.getString("id"),
                 rs.getString("line_id"),
@@ -556,7 +558,7 @@ public class RailDao {
                 rs.getLong("created_at"));
     }
 
-    private static RailRun mapRun(java.sql.ResultSet rs) throws java.sql.SQLException {
+    private static RailRun mapRun(ResultSet rs) throws SQLException {
         Object carsObj = rs.getObject("cars");
         Integer cars = carsObj == null ? null : ((Number) carsObj).intValue();
         return new RailRun(
@@ -573,20 +575,12 @@ public class RailDao {
                 rs.getLong("updated_at"));
     }
 
-    private static RailTimetableEntry mapTimetable(java.sql.ResultSet rs) throws java.sql.SQLException {
+    private static RailTimetableEntry mapTimetable(ResultSet rs) throws SQLException {
         return new RailTimetableEntry(
                 rs.getString("run_id"),
                 rs.getString("station_id"),
                 rs.getString("arrival_time"),
                 rs.getString("departure_time"),
                 rs.getInt("stops_here") != 0);
-    }
-
-    @Nullable
-    @SuppressWarnings("unused")  // 供未来按 owner 列表用
-    private static String nullableString(java.sql.ResultSet rs, String col)
-            throws java.sql.SQLException {
-        String v = rs.getString(col);
-        return rs.wasNull() ? null : v;
     }
 }

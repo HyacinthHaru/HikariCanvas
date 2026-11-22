@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P4-D2：BlockCanvas + 拖拽接入 smoke（pointer 序列不崩）。
+ * BlockCanvas + 拖拽接入 smoke（pointer 序列不崩）。
  *
  * <p>真实 mount BlockCanvas（含 BlockStack / BlockNode 子组件 + provide 拖拽句柄 + mock wsClient）：
  * 验证 ① 块根 pointerdown（拖块）不崩 + 出现跟手浮层；② 帽子 pointerdown（移堆）不崩 + 出现
@@ -56,7 +56,7 @@ describe('BlockCanvas 拖拽接入 smoke', () => {
         const block = w.find('[data-block-path="actions/0"]');
         expect(block.exists()).toBe(true);
         await block.trigger('pointerdown', { button: 0, clientX: 50, clientY: 50, pointerId: 1 });
-        // 0.7.1 拖动阈值：pointerdown 仅 arm pending，需一次超阈值位移才真正启动拖动。
+        // 拖动阈值：pointerdown 仅 arm pending，需一次超阈值位移才真正启动拖动。
         window.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, clientY: 200 }));
         await nextTick();
         // 跟手浮层 Teleport 到 body
@@ -79,7 +79,7 @@ describe('BlockCanvas 拖拽接入 smoke', () => {
         const hat = w.find('[data-block-path="trigger"]');
         expect(hat.exists()).toBe(true);
         await hat.trigger('pointerdown', { button: 0, clientX: 30, clientY: 30, pointerId: 1 });
-        // 0.7.1 拖动阈值：移堆同样需超阈值位移才启动（pointerdown 仅 arm pending）。
+        // 拖动阈值：移堆同样需超阈值位移才启动（pointerdown 仅 arm pending）。
         window.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, clientY: 200 }));
         await nextTick();
         expect(useScriptEditStore().selectedRuleId).toBe('sr-1');
@@ -157,7 +157,7 @@ describe('BlockCanvas 拖拽接入 smoke', () => {
 });
 
 /**
- * 接线验证：ctrl+滚轮缩放发生在拖动中时，画布要等一帧再让拖拽层重测插槽（#97）。
+ * 接线验证：ctrl+滚轮缩放发生在拖动中时，画布要等一帧再让拖拽层重测插槽。
  * 这里用可改的假矩形模拟"缩放后积木换了屏幕位置"，看吸附指示线有没有跟着到新位置。
  */
 describe('BlockCanvas 拖动中缩放 → 重测吸附几何', () => {
@@ -206,7 +206,7 @@ describe('BlockCanvas 拖动中缩放 → 重测吸附几何', () => {
 
 /**
  * 右下角「本脚本变量实时预览」面板挂在画布 viewport 里，而画布把空白处按住左键一律当作平移。
- * 面板不拦 pointerdown 的话，在面板上按住一拖整个画布就跟着跑，变量值也没法选中复制（#137）。
+ * 面板不拦 pointerdown 的话，在面板上按住一拖整个画布就跟着跑，变量值也没法选中复制。
  */
 describe('BlockCanvas 变量预览面板不触发画布平移', () => {
     it('在面板上按住拖动 → 画布不平移', async () => {

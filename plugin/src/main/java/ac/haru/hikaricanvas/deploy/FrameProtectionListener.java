@@ -1,6 +1,7 @@
 package ac.haru.hikaricanvas.deploy;
 
 import ac.haru.hikaricanvas.i18n.Messages;
+import ac.haru.hikaricanvas.session.WandListener;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.entity.ItemFrame;
@@ -73,9 +74,9 @@ public final class FrameProtectionListener implements Listener {
     /**
      * 左键攻击受保护 frame → 拒绝（否则第一下就把 FILLED_MAP 打落，招牌变空框）。
      *
-     * <p>{@code ignoreCancelled = true}：{@link ac.haru.hikaricanvas.session.WandListener}
-     * 在 {@link EventPriority#NORMAL} 已对"持 wand 点画框"取消并路由到 open/选角，本 handler
-     * 跑在 HIGH 会看到已取消的事件——跳过即可，避免重复发 ActionBar。</p>
+     * <p>{@code ignoreCancelled = true}：{@link WandListener} 同样跑在 {@link EventPriority#HIGH}
+     * 但先于本监听器注册，已对"持 wand 点画框"取消事件并路由到 open/选角——跳过已取消事件即可，
+     * 避免重复发 ActionBar。</p>
      */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onEntityDamageByEntity(EntityDamageByEntityEvent event) {

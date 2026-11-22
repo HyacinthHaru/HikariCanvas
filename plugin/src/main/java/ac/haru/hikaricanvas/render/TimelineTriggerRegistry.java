@@ -15,7 +15,7 @@ import java.util.logging.Logger;
 /**
  * 时间轴触发器路由（docs/timeline.md §5.2 / §5.3）。
  *
- * <p>把"变量变化 → 播放绑定该变量的 wall 时间轴"这件事做成一个**薄索引 + 监听**：维护
+ * <p>把"变量变化 → 播放绑定该变量的 wall 时间轴"这件事做成一个<b>薄索引 + 监听</b>：维护
  * {@code 解析后fullName → Set<(wallId, timelineId)>} 倒排表，变量变化事件到达时 O(1) 查表 →
  * 调 {@link TimelinePlayer#play} 重播。{@code MANUAL} 触发不进本表（由 AnimationTicker 的
  * "wall ready 自动播 LOOP"管）；{@code VARIABLE_CHANGE} / {@code SCHEDULE} 才登记。</p>

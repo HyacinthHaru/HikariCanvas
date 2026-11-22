@@ -1,5 +1,5 @@
 /**
- * 0.7.4：usePanScroll — Shift+wheel 水平滚动分支单元测试。
+ * usePanScroll — Shift+wheel 水平滚动分支单元测试。
  *
  * 覆盖：
  * - Shift+wheel（deltaY > 0）→ scrollLeft 增加 deltaY、调用 preventDefault

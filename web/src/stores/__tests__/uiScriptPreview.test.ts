@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.1-P3-T1：ui store 预览框折叠 / 宽度持久化。
+ * ui store 预览框折叠 / 宽度持久化测试。
  *
- * <p>照 SNAP_KEY 持久化范式：默认值兜底 + clamp [20,70] + localStorage 写入 + 重载恢复。
+ * <p>默认值兜底 + clamp [20,70] + localStorage 写入 + 重载恢复。
  * happy-dom 提供 localStorage。每个用例前清 localStorage + 重建 pinia，避免跨用例污染。</p>
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -26,7 +26,7 @@ function makeMemoryStorage(): Storage {
     } as Storage;
 }
 
-describe('ui store 预览框折叠 / 宽度持久化（0.7.1-P3-T1）', () => {
+describe('ui store 预览框折叠 / 宽度持久化', () => {
     beforeEach(() => {
         vi.stubGlobal('localStorage', makeMemoryStorage());
         setActivePinia(createPinia());

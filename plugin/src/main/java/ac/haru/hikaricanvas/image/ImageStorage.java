@@ -1,12 +1,15 @@
 package ac.haru.hikaricanvas.image;
 
+import ac.haru.hikaricanvas.state.ImageElement;
 import ac.haru.hikaricanvas.storage.ImageUploadDao;
 import ac.haru.hikaricanvas.storage.WallRepo;
 import org.jdbi.v3.core.Handle;
 
+import javax.imageio.IIOException;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -16,14 +19,22 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -50,25 +61,21 @@ public final class ImageStorage {
     private static final Pattern HASH_RE = Pattern.compile("^[0-9a-f]{16}$");
     private static final int MEMORY_CACHE_MAX = 16;
     private static final long MEMORY_CACHE_TTL_MS = 60_000L;
-    /** 渲染路径解码前尺寸预检上界（与 UploadHandler.BBOX_MAX_EDGE 同值）。 */
-    private static final int BBOX_MAX_EDGE = 8192;
-
     private final Logger log;
     private final Path uploadsDir;
     private final ImageUploadDao dao;
 
-    // 渲染解码也要 timeout 隔离，否则损坏 PNG 让 rasterize 主线程死锁。
-    // 同 UploadHandler 的有界 ThreadPoolExecutor pattern，但 TTL 短（render 上下文）。
-    private final ExecutorService renderDecoderPool = new java.util.concurrent.ThreadPoolExecutor(
+    // 渲染解码同样做超时隔离，避免损坏 PNG 阻塞合成线程。
+    private final ExecutorService renderDecoderPool = new ThreadPoolExecutor(
             1, 1,
-            0L, java.util.concurrent.TimeUnit.MILLISECONDS,
-            new java.util.concurrent.ArrayBlockingQueue<>(4),
+            0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(4),
             r -> {
                 Thread t = new Thread(r, "hikari-render-decoder");
                 t.setDaemon(true);
                 return t;
             },
-            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+            new ThreadPoolExecutor.AbortPolicy());
 
     private static final long RENDER_DECODE_TIMEOUT_MS = 500L;
 
@@ -256,19 +263,15 @@ public final class ImageStorage {
         Path file = uploadsDir.resolve(hash + ".png");
         if (!Files.isRegularFile(file)) return null;
         BufferedImage img;
-        // 协作式 abort（同 UploadHandler.decodeWithTimeout）。Future.cancel(true) 的
-        // interrupt 对 ImageIO 解码循环大多无效，超时只 interrupt 会让卡死线程永久占满 1/1
-        // 的 renderDecoderPool，使后续所有 load 返 null（引用图全渲染为占位符）。改为超时跨线程
-        // 调 ImageReader.abort()，让卡死线程尽快退出归还。
-        final java.util.concurrent.atomic.AtomicReference<javax.imageio.ImageReader> readerRef =
-                new java.util.concurrent.atomic.AtomicReference<>();
+        // 协作式 abort（同 ImageDecodeGuard）：超时跨线程调 ImageReader.abort() 归还池线程。
+        final AtomicReference<ImageReader> readerRef = new AtomicReference<>();
         try {
-            java.util.concurrent.Future<BufferedImage> fut = renderDecoderPool.submit(
+            Future<BufferedImage> fut = renderDecoderPool.submit(
                     () -> decodeFileCooperative(file, readerRef));
             try {
-                img = fut.get(RENDER_DECODE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
-            } catch (java.util.concurrent.TimeoutException te) {
-                javax.imageio.ImageReader r = readerRef.get();
+                img = fut.get(RENDER_DECODE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException te) {
+                ImageReader r = readerRef.get();
                 if (r != null) {
                     try {
                         r.abort();
@@ -280,7 +283,7 @@ public final class ImageStorage {
                 log.warning("ImageStorage.load timeout: " + hash);
                 return null;
             }
-        } catch (java.util.concurrent.RejectedExecutionException ree) {
+        } catch (RejectedExecutionException ree) {
             log.warning("ImageStorage.load decoder busy: " + hash);
             return null;
         } catch (Exception e) {
@@ -296,33 +299,30 @@ public final class ImageStorage {
     }
 
     /**
-     * 用 {@link javax.imageio.ImageReader} 从文件解码并把 reader 发布到 {@code readerRef}，
-     * 使超时线程能跨线程调 {@link javax.imageio.ImageReader#abort()} 协作式中止。
+     * 用 {@link ImageReader} 从文件解码并把 reader 发布到 {@code readerRef}，
+     * 使超时线程能跨线程调 {@link ImageReader#abort()} 协作式中止。
      * 无 reader（不支持的格式）返 null（同 {@code ImageIO.read} 语义）。
      */
     private static BufferedImage decodeFileCooperative(
             Path file,
-            java.util.concurrent.atomic.AtomicReference<javax.imageio.ImageReader> readerRef)
+            AtomicReference<ImageReader> readerRef)
             throws IOException {
-        try (javax.imageio.stream.ImageInputStream iis =
-                     ImageIO.createImageInputStream(file.toFile())) {
+        try (ImageInputStream iis = ImageIO.createImageInputStream(file.toFile())) {
             if (iis == null) return ImageIO.read(file.toFile());
-            java.util.Iterator<javax.imageio.ImageReader> it = ImageIO.getImageReaders(iis);
+            Iterator<ImageReader> it = ImageIO.getImageReaders(iis);
             if (!it.hasNext()) return null;
-            javax.imageio.ImageReader reader = it.next();
+            ImageReader reader = it.next();
             readerRef.set(reader);
             try {
                 reader.setInput(iis, true, true);
-                // 解码前读头部尺寸（getWidth/getHeight 只解析头，不解码全图），
-                // 拦截"小体积但巨尺寸"的分配型炸弹（如 30000×30000 声明 → read(0) 分配 GB raster）
                 int pw = reader.getWidth(0);
                 int ph = reader.getHeight(0);
-                if (pw > BBOX_MAX_EDGE || ph > BBOX_MAX_EDGE) {
+                if (pw > ImageDecodeGuard.BBOX_MAX_EDGE || ph > ImageDecodeGuard.BBOX_MAX_EDGE) {
                     throw new IOException("image dimensions too large: " + pw + "x" + ph
-                            + " > " + BBOX_MAX_EDGE);
+                            + " > " + ImageDecodeGuard.BBOX_MAX_EDGE);
                 }
                 return reader.read(0);
-            } catch (javax.imageio.IIOException abortOrFail) {
+            } catch (IIOException abortOrFail) {
                 throw new IOException("render decode aborted or failed", abortOrFail);
             } finally {
                 readerRef.set(null);
@@ -409,10 +409,8 @@ public final class ImageStorage {
      * 未来 wall 数量上千再考虑增量 refcount 维护。
      *
      * <p>此集合是 LRU evict 的 fail-closed 闸门（excludeHashes），任何漏算都会让
-     * 在用图被误删。因此：① {@code im.source()} 判空（旧图 / 损坏元素可能为 null，直接
-     * {@code HASH_RE.matcher(null)} 抛 NPE）；② 单个坏 wall 用 per-wall try/catch 跳过而非
-     * 旧版的 catch-all 降级为『零引用』——后者会让整张引用表清空 → LRU 把全服在用图删光。坏 wall
-     * 隔离后继续扫其余 wall，最大化保全引用集（{@link WallRepo#loadAll()} 本身已吞 DB 异常返空
+     * 在用图被误删。因此：① {@code im.source()} 判空；② 单个坏 wall 用 per-wall try/catch
+     * 跳过并继续扫其余 wall，最大化保全引用集（{@link WallRepo#loadAll()} 本身已吞 DB 异常返空
      * 列表，故此方法不再抛出）。</p>
      */
     public Set<String> collectReferencedHashes(WallRepo wallRepo) {
@@ -422,10 +420,8 @@ public final class ImageStorage {
     /**
      * 事务感知 {@link #collectReferencedHashes(WallRepo)}。在调用方已持有的
      * {@link Handle} 上扫 walls，让"读引用 → 删 LRU 孤儿"在单一 IMMEDIATE 写事务的一致视图
-     * 内原子完成——消除"事务外快照引用、事务内 evict"的跨 hash 误删竞态（另一线程在快照后、
-     * evict 前把某 hash 写进某 wall 的 project_json，该 hash 若是较老 LRU victim 又不在快照里，
-     * 会被当孤儿删掉）。{@link WallRepo#loadAllOn(Handle)} 不吞异常，故 sweep 失败会让外层事务
-     * 回滚（fail-closed：宁可拒上传也不在不可信引用集下误删）。
+     * 内原子完成，消除跨 hash 误删竞态。{@link WallRepo#loadAllOn(Handle)} 不吞异常，故 sweep
+     * 失败会让外层事务回滚（fail-closed：宁可拒上传也不在不可信引用集下误删）。
      */
     public Set<String> collectReferencedHashesOn(Handle h, WallRepo wallRepo) {
         return scanReferencedHashes(wallRepo.loadAllOn(h));
@@ -438,7 +434,7 @@ public final class ImageStorage {
                 if (w.state() == null || w.state().layers() == null) continue;
                 for (var layer : w.state().layers()) {
                     for (var el : layer.elements()) {
-                        if (el instanceof ac.haru.hikaricanvas.state.ImageElement im) {
+                        if (el instanceof ImageElement im) {
                             String src = im.source();
                             if (src != null && HASH_RE.matcher(src).matches()) {
                                 out.add(src);

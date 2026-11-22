@@ -10,8 +10,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *
  * <p>序列化采用 camelCase 字符串 —— 同 {@link BlendMode} 的 {@code @JsonProperty}
  * 显式映射范式。</p>
- *
- * @since 0.6
  */
 public enum TriggerType {
     @JsonProperty("manual") MANUAL("manual"),

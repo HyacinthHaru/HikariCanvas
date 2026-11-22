@@ -8,7 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 
 /**
- * {@link Trigger} 反序列化：按 {@code type} 判别字段分流到六个子类 record。
+ * {@link Trigger} 反序列化：按 {@code type} 判别字段分流到 9 个子类 record。
  * 范式同 {@link ac.haru.hikaricanvas.state.KfValueDeserializer}；畸形输入一律
  * {@code reportInputMismatch}（不抛 NPE、不给默认值）。
  */

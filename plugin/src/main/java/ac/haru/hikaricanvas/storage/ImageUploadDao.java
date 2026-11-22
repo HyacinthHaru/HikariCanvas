@@ -3,8 +3,12 @@ package ac.haru.hikaricanvas.storage;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -175,7 +179,7 @@ public final class ImageUploadDao {
      * LRU 候选：last_used_at 升序，前 limit 行。{@code excludeHashes} 内的 hash 被剔除
      * （v1：实时被 walls.project_json 引用的 image source，由 ImageStorage 计算后传入）。
      */
-    public List<Row> pickLruCandidates(int limit, java.util.Set<String> excludeHashes) {
+    public List<Row> pickLruCandidates(int limit, Set<String> excludeHashes) {
         try {
             return jdbi.withHandle(h -> pickLruCandidatesOn(h, limit, excludeHashes));
         } catch (Exception e) {
@@ -185,7 +189,7 @@ public final class ImageUploadDao {
     }
 
     /** Transaction-aware overload; throws on error. */
-    public List<Row> pickLruCandidatesOn(Handle h, int limit, java.util.Set<String> excludeHashes) {
+    public List<Row> pickLruCandidatesOn(Handle h, int limit, Set<String> excludeHashes) {
         if (excludeHashes == null || excludeHashes.isEmpty()) {
             return h.createQuery(
                     "SELECT * FROM image_uploads ORDER BY last_used_at ASC LIMIT :n")
@@ -199,7 +203,7 @@ public final class ImageUploadDao {
                 "SELECT * FROM image_uploads "
                         + "WHERE hash NOT IN (<exc>) "
                         + "ORDER BY last_used_at ASC LIMIT :n")
-                .bindList("exc", new java.util.ArrayList<>(excludeHashes))
+                .bindList("exc", new ArrayList<>(excludeHashes))
                 .bind("n", Math.max(limit, 1))
                 .map((rs, ctx) -> mapRow(rs))
                 .list();
@@ -218,7 +222,7 @@ public final class ImageUploadDao {
     }
 
     // 非 static（用实例 log 记录损坏数据告警）。仅在实例方法的 RowMapper lambda 内调用。
-    private Row mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+    private Row mapRow(ResultSet rs) throws SQLException {
         String uploaderRaw = rs.getString("uploader_uuid");
         UUID uploader;
         try {

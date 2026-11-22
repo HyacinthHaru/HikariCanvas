@@ -16,11 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.8-A4 Task 18：{@link ScriptImporter} —— scripts.json 解析 + wallId 重绑 + 全量重校验 + 落库。
- *
- * <p>装配纯内存 {@link ScriptStore}（{@code dao = null}，配额可控，无须 temp DB / FK），
- * 目标墙固定 {@code w-new}。命令模板表由各测试按需传入（缺模板 → {@code script-command-blocked}）。
- * 每条规则带至少一个动作（{@link ac.haru.hikaricanvas.script.ScriptRuleValidator} 拒空动作列表）。</p>
+ * {@link ScriptImporter} —— {@code scripts.json} 解析、{@code wallId} 重绑、全量重校验与落库单测。
  */
 class ScriptImporterTest {
 

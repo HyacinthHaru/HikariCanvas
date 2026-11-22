@@ -2,14 +2,17 @@ package ac.haru.hikaricanvas.variable.provider;
 
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.VariableException;
+import ac.haru.hikaricanvas.variable.VariableInterpolator;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.Nullable;
 
 import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,7 +33,7 @@ import java.util.logging.Logger;
  * <h2>动态注册</h2>
  *
  * <p>玩家在 textarea 输入 <code>${var:papi:%player_name%}</code> → {@link
- * ac.haru.hikaricanvas.variable.VariableInterpolator} resolve miss → {@link
+ * VariableInterpolator} resolve miss → {@link
  * VariableStore#notifyDynamicLookup(String)} → 本桥接 hook 触发：自动 register key +
  * 启动定时 refresh（5s TTL）。首次渲染走 fallback "???"，约 5s 内补齐。</p>
  *
@@ -43,7 +46,7 @@ import java.util.logging.Logger;
  * {@code pct_xxx_pct}，内部 {@code placeholderByKey} map 记录 {@code pct_xxx_pct → %xxx%}；
  * refresh 按原文调 PAPI，按 encoded key 写 store。docs §7.2 记录该语法约定。</p>
  *
- * @see ac.haru.hikaricanvas.variable.VariableInterpolator
+ * @see VariableInterpolator
  */
 public final class PapiVariableBridge implements VariableProvider {
 
@@ -69,13 +72,13 @@ public final class PapiVariableBridge implements VariableProvider {
      * encoded key (store-safe) → 原文 PAPI placeholder（含 %）。例：
      * {@code "pct_player_name_pct" → "%player_name%"}。
      */
-    private final java.util.Map<String, String> placeholderByKey = new ConcurrentHashMap<>();
+    private final Map<String, String> placeholderByKey = new ConcurrentHashMap<>();
 
     /**
-     * 生产构造：注入 plugin 用以惰性加载 {@link ReflectionPapiAccessor}。
+     * 生产构造：构建惰性反射 {@link ReflectionPapiAccessor}。
      */
     public PapiVariableBridge(VariableStore store, JavaPlugin plugin) {
-        this(store, new ReflectionPapiAccessor(plugin));
+        this(store, new ReflectionPapiAccessor());
     }
 
     /**
@@ -215,8 +218,8 @@ public final class PapiVariableBridge implements VariableProvider {
     }
 
     /** 测试 / 调试：encoded key → 原文 placeholder 的不可变快照。 */
-    public java.util.Map<String, String> placeholderMappingSnapshot() {
-        return java.util.Map.copyOf(placeholderByKey);
+    public Map<String, String> placeholderMappingSnapshot() {
+        return Map.copyOf(placeholderByKey);
     }
 
     // ──────────────────────────────────────────────────────────
@@ -301,18 +304,14 @@ public final class PapiVariableBridge implements VariableProvider {
     static final class ReflectionPapiAccessor implements PapiAccessor {
         private static final String PAPI_CLASS_NAME = "me.clip.placeholderapi.PlaceholderAPI";
 
-        private final JavaPlugin plugin;
         /**
-         * 把原 {@code available}（boolean）+ {@code setPlaceholdersMethod}
-         * （Method）两个独立 volatile 合成<b>单一</b> volatile 引用：{@code Method} 引用本身
-         * 不可变，{@code null} 即表示禁用（未装 PAPI / 反射失败 / shutdown 后）。{@link #resolve}
-         * 一次读到局部变量再判空 + invoke，消除"先读 available=true，再读 method 已被 shutdown
-         * 置 null"的撕裂读 + 半态可见。
+         * 单一 volatile 引用：{@code Method} 引用本身不可变，{@code null} 即表示禁用
+         * （未装 PAPI / 反射失败 / shutdown 后）。{@link #resolve} 一次读到局部变量再判空 +
+         * invoke，保证可用性与方法引用的原子可见性。
          */
         private volatile @Nullable Method setPlaceholdersMethod = null;
 
-        ReflectionPapiAccessor(JavaPlugin plugin) {
-            this.plugin = plugin;
+        ReflectionPapiAccessor() {
         }
 
         @Override
@@ -332,7 +331,7 @@ public final class PapiVariableBridge implements VariableProvider {
                 Class<?> papiClass = Class.forName(PAPI_CLASS_NAME);
                 Method m = papiClass.getMethod(
                         "setPlaceholders",
-                        org.bukkit.OfflinePlayer.class,
+                        OfflinePlayer.class,
                         String.class);
                 this.setPlaceholdersMethod = m; // 单次 volatile write 发布"可用 + method"原子状态
             } catch (ClassNotFoundException | NoSuchMethodException e) {

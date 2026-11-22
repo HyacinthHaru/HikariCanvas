@@ -1,4 +1,4 @@
--- 0.4.0 P1：用户变量持久化（Tier 1 数据源）。详见 docs/dynamic-data.md §8.1 + docs/data-model.md §2.8。
+-- 用户变量持久化（详见 docs/dynamic-data.md §8.1 与 docs/data-model.md §2.8）。
 --
 -- 仅持久化 user/* namespace 的玩家手动变量；插件 / 系统 / PAPI 变量内存态重启不留。
 -- 主键 = (wall_id, name)：user 变量是 per-wall scope（玩家在每个 wall 里独立管理自己的变量）。

@@ -1,6 +1,7 @@
 package ac.haru.hikaricanvas.script.engine;
 
 import ac.haru.hikaricanvas.render.AnimationTicker;
+import ac.haru.hikaricanvas.script.ScriptRuleValidator;
 import ac.haru.hikaricanvas.session.WallKey;
 import ac.haru.hikaricanvas.state.BlendMode;
 import ac.haru.hikaricanvas.state.Easing;
@@ -23,6 +24,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -41,11 +43,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.7.0-P2-4：{@link ElementPropertyApplier} 双路径。
+ * {@link ElementPropertyApplier} 双路径单测。
  *
  * <p>headless（路径 B）走<b>真</b> WallRepo + tmpdir SQLite 全链（落库后重读断言）；
- * 路径 A 用 fake {@link ElementPropertyApplier.SessionPatchApplier}（真 SessionManager
- * 装配链过重——confirm 需 MapPool/WallResolver/主线程，A 路径真链留批次 3 集成测试）。</p>
+ * 路径 A 用 fake {@link ElementPropertyApplier.SessionPatchApplier}（避免依赖 MapPool /
+ * WallResolver / Bukkit 主线程装配）。</p>
  */
 class ElementPropertyApplierTest {
 
@@ -72,7 +74,7 @@ class ElementPropertyApplierTest {
         if (tmpDir != null && Files.exists(tmpDir)) {
             try (var s = Files.walk(tmpDir)) {
                 s.sorted(Comparator.reverseOrder()).map(Path::toFile)
-                        .forEach(java.io.File::delete);
+                        .forEach(File::delete);
             }
         }
     }
@@ -152,17 +154,14 @@ class ElementPropertyApplierTest {
     }
 
     /**
-     * 结构守卫：buildPatch 的 switch 必须覆盖
-     * {@link ac.haru.hikaricanvas.script.ScriptRuleValidator#ELEMENT_PROPERTIES} 全集。
+     * 结构守卫：buildPatch 的 switch 必须覆盖 {@link ScriptRuleValidator#ELEMENT_PROPERTIES} 全集。
      *
-     * <p>校验层放行、这里却抛 unsupported 的属性，会让积木保存成功但运行时恒返 error step，
-     * 且 TweenBlock 末帧无法落库（clearStaticDiff 后视觉弹回原值）。{@code color} 就是这样
-     * 漏掉的——白名单有它、buildPatch 没有，而补间测试注的是 fake applyFn 从未打通真实
-     * applyMany，于是一直没被发现。</p>
+     * <p>若校验层放行而 buildPatch 缺失对应分支，积木保存成功但运行时恒返 error step，
+     * 且 TweenBlock 末帧无法落库。</p>
      */
     @Test
     void buildPatch_coversEveryWhitelistedProperty() {
-        for (String prop : ac.haru.hikaricanvas.script.ScriptRuleValidator.ELEMENT_PROPERTIES) {
+        for (String prop : ScriptRuleValidator.ELEMENT_PROPERTIES) {
             String sample = switch (prop) {
                 case "fill", "color" -> "#123456";
                 case "text" -> "hi";
@@ -200,10 +199,7 @@ class ElementPropertyApplierTest {
         assertEquals("world", findText(reloaded, "e-1").text(), "落库后重读生效");
     }
 
-    /**
-     * 端到端补上 buildPatch → applyMany → EditSession.applyTextPatch → DB 这条真链。
-     * 此前只有 fake applyFn 的补间测试，真链从未被打通（这是 color 漏 case 的根因）。
-     */
+    /** 端到端验证 buildPatch → applyMany → EditSession.applyTextPatch → DB 真链。 */
     @Test
     void headless_colorChange_persistsToDb() {
         String wallId = createWall(stateWithText("e-1", false));
@@ -327,7 +323,7 @@ class ElementPropertyApplierTest {
         assertEquals("error", step.result());
     }
 
-    // ---------- 0.7.1：applyMany（批量设属性） ----------
+    // ---------- applyMany（批量设属性） ----------
 
     @Test
     void applyMany_headless_setsMultipleProps() {
@@ -378,7 +374,7 @@ class ElementPropertyApplierTest {
         assertEquals(7, seen.get(0).get("y"), "y 合进单一 patch");
     }
 
-    // ---------- 0.7.1：applyNudge（相对移动） ----------
+    // ---------- applyNudge（相对移动） ----------
 
     @Test
     void applyNudge_headless_readsCurrentPlusDelta() {
@@ -454,7 +450,7 @@ class ElementPropertyApplierTest {
         assertEquals(11, findText(wallRepo.loadById(wallId).orElseThrow().state(), "e-1").x());
     }
 
-    // ---------- 0.7.2-P2：applyClone / applyDelete（headless 双路径） ----------
+    // ---------- applyClone / applyDelete（headless 双路径） ----------
 
     private static int elementCount(ProjectState st) {
         int n = 0;
@@ -563,7 +559,7 @@ class ElementPropertyApplierTest {
         assertEquals("error", step.result());
     }
 
-    // ---------- 0.7.2-P2：applyClone / applyDelete（session seam 路径 A） ----------
+    // ---------- applyClone / applyDelete（session seam 路径 A） ----------
 
     @Test
     void applyClone_sessionPath_usesCloneSeam() {
@@ -676,9 +672,9 @@ class ElementPropertyApplierTest {
         assertTrue(step.detail().contains("boom"));
     }
 
-    // ---------- 0.7.3：applySetElementLayer（置顶/置底 headless 双路径 + session seam） ----------
+    // ---------- applySetElementLayer（置顶/置底 headless 双路径 + session seam） ----------
 
-    /** 双 text 元素工程（l-1 内 [a, b]，b 在上）；locked 可配（D-24 LAYER_LOCKED 覆盖）。 */
+    /** 双 text 元素工程（l-1 内 [a, b]，b 在上）；locked 可配。 */
     private static ProjectState stateWithTwoElements(boolean locked) {
         TextElement a = new TextElement("e-a", 10, 20, 100, 50, 0, false, true,
                 "A", "inter", 24, "#000000", "left", 0f, 1.2f, false, null,
@@ -724,8 +720,22 @@ class ElementPropertyApplierTest {
     }
 
     @Test
+    void setElementLayer_headless_alreadyAtEdge_idempotent() {
+        String wallId = createWall(stateWithTwoElements(false));
+        TraceStep sFront = headlessApplier().applySetElementLayer(wallId, "b", "e-b", "front");
+        assertEquals("ok", sFront.result(), () -> "已在末尾应幂等成功: " + sFront.detail());
+        assertEquals(List.of("e-a", "e-b"),
+                elementOrder(wallRepo.loadById(wallId).orElseThrow().state()));
+
+        TraceStep sBack = headlessApplier().applySetElementLayer(wallId, "b", "e-a", "back");
+        assertEquals("ok", sBack.result(), () -> "已在开头应幂等成功: " + sBack.detail());
+        assertEquals(List.of("e-a", "e-b"),
+                elementOrder(wallRepo.loadById(wallId).orElseThrow().state()));
+    }
+
+    @Test
     void setElementLayer_headless_layerLocked_errorStep() {
-        // D-24：所在层锁住 → moveElementToFront 返 LAYER_LOCKED → error step（不落库）
+        // 所在层锁住 → moveElementToFront 返 LAYER_LOCKED → error step（不落库）
         String wallId = createWall(stateWithTwoElements(true));
         TraceStep step = headlessApplier().applySetElementLayer(wallId, "b", "e-a", "front");
         assertEquals("error", step.result());
@@ -741,6 +751,9 @@ class ElementPropertyApplierTest {
         TraceStep step = headlessApplier().applySetElementLayer(wallId, "b", "e-MISSING", "front");
         assertEquals("error", step.result());
         assertTrue(step.detail().contains("INVALID_ELEMENT"), step.detail());
+        TraceStep stepBack = headlessApplier().applySetElementLayer(wallId, "b", "e-MISSING", "back");
+        assertEquals("error", stepBack.result());
+        assertTrue(stepBack.detail().contains("INVALID_ELEMENT"), stepBack.detail());
         assertEquals(List.of("e-a", "e-b"),
                 elementOrder(wallRepo.loadById(wallId).orElseThrow().state()),
                 "拒绝后顺序不变");
@@ -961,7 +974,7 @@ class ElementPropertyApplierTest {
         }
 
         @Override
-        public void renderStatic(String wallId, ac.haru.hikaricanvas.state.ProjectState frame) {
+        public void renderStatic(String wallId, ProjectState frame) {
             renderStatics.add(wallId);
             lastStaticFrame = frame;
         }

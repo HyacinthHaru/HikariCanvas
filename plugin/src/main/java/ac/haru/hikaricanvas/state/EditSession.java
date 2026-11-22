@@ -6,12 +6,18 @@ import ac.haru.hikaricanvas.variable.Variable;
 import ac.haru.hikaricanvas.variable.VariableException;
 import ac.haru.hikaricanvas.variable.VariablePatch;
 import ac.haru.hikaricanvas.variable.VariableStore;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import static ac.haru.hikaricanvas.state.ElementValidator.boolFieldOrDefault;
 import static ac.haru.hikaricanvas.state.ElementValidator.boolFieldOrNull;
@@ -81,8 +87,7 @@ public final class EditSession {
      * 纯序列化方向，无反序列化配置需求，故用默认配置即可 —— 字段名 / 枚举 wire 形态
      * 都由各 record 自己的注解决定，与 {@code state.snapshot} 走同一套。
      */
-    private static final com.fasterxml.jackson.databind.ObjectMapper WIRE_MAPPER =
-            new com.fasterxml.jackson.databind.ObjectMapper();
+    private static final ObjectMapper WIRE_MAPPER = new ObjectMapper();
 
     private final ProjectState state;
 
@@ -334,7 +339,7 @@ public final class EditSession {
     private OpResult checkImagePerWallQuota(String incomingSource, String excludeElementId) {
         Integer max = this.maxImagesPerWall;
         if (max == null || max <= 0) return null;
-        java.util.Set<String> distinctSources = new java.util.HashSet<>();
+        Set<String> distinctSources = new HashSet<>();
         for (Layer l : state.layers()) {
             for (Element e : l.elements()) {
                 if (excludeElementId != null && excludeElementId.equals(e.id())) continue;
@@ -357,7 +362,7 @@ public final class EditSession {
 
     /**
      * 字段级部分更新。{@code patch} 的每个 key 代表要修改的字段名，value 为新值。
-     * 逐字段校验；失败时**不变更** state（all-or-nothing 语义）。
+     * 逐字段校验；失败时<b>不变更</b> state（all-or-nothing 语义）。
      *
      * <p>支持的字段：</p>
      * <ul>
@@ -393,12 +398,10 @@ public final class EditSession {
             return err(ve.code, ve.getMessage());
         }
 
-        // 换图也要过单墙图片配额。addElement 的 javadoc 早就写着「强制点在这里而不在上传路径」，
-        // 但 update 分支漏了：逐个 element.update{source} 换 hash（引用别的墙已上传的文件即可，
-        // 内容寻址是全服共享的）就能把本墙去重 source 数顶过 images.max-per-wall。
+        // 更换图片 source 时同样检查单墙去重图片配额（排除当前元素旧 source，避免纯替换误拒）。
         if (updated instanceof ImageElement newIm && patch.containsKey("source")
                 && loc.element instanceof ImageElement oldIm
-                && !java.util.Objects.equals(oldIm.source(), newIm.source())) {
+                && !Objects.equals(oldIm.source(), newIm.source())) {
             OpResult quota = checkImagePerWallQuota(newIm.source(), elementId);
             if (quota != null) return quota;
         }
@@ -408,9 +411,8 @@ public final class EditSession {
         commitHistory(pre);
         long v = state.bumpVersion();
 
-        // 广播的是**服务端规范化后**的值，不是客户端原样发来的输入。权威态存的是
-        // intValue 截断过小数、blendMode / renderMode 小写归一、effects/fill/stroke 重建过的结果；
-        // 回传客户端原值等于让发送方镜像与权威态从这一刻起就对不上（要等下次全量 snapshot 才自愈）。
+        // 广播服务端规范化后的值，而非客户端原样输入：权威态存的是 intValue 截断小数、
+        // blendMode / renderMode 小写归一、effects/fill/stroke 重建后的结果，保证双端镜像一致。
         Map<String, Object> normalized = serializeFields(updated, patch.keySet());
         StatePatchBuilder b = new StatePatchBuilder();
         for (var e : patch.entrySet()) {
@@ -429,8 +431,7 @@ public final class EditSession {
     }
 
     /** 字体 id 字符集：与 {@code WebServer} 的 {@code /fonts/{id}.metrics.json} 白名单同款。 */
-    private static final java.util.regex.Pattern FONT_ID_RE =
-            java.util.regex.Pattern.compile("[a-zA-Z0-9_-]{1,64}");
+    private static final Pattern FONT_ID_RE = Pattern.compile("[a-zA-Z0-9_-]{1,64}");
 
     /**
      * 校验 {@code fontId} 字符集 + 长度。
@@ -456,8 +457,7 @@ public final class EditSession {
      * {@code state.snapshot} 里的形态，两条下行通道天然一致。序列化失败（理论不该发生）
      * 返回空 map，调用方回退用客户端原值——降级成老行为，不至于因此发不出 patch。</p>
      */
-    private static Map<String, Object> serializeFields(Element element,
-                                                       java.util.Set<String> fields) {
+    private static Map<String, Object> serializeFields(Element element, Set<String> fields) {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> all = WIRE_MAPPER.convertValue(stripHeavyFields(element), Map.class);
@@ -620,23 +620,7 @@ public final class EditSession {
 
         int size = loc.layer.elements().size();
         int to = Math.max(0, Math.min(newIndex, size - 1));
-        if (to == loc.elementIdx) {
-            // 无实际变化；仍 bump version 保持简单
-            long v = state.bumpVersion();
-            return new OpResult.Ok(new StatePatch(v, List.of()), null);
-        }
-
-        ProjectSnapshot pre = snapshotNow();
-        Element moved = loc.layer.elements().remove(loc.elementIdx);
-        loc.layer.elements().add(to, moved);
-        commitHistory(pre);
-        long v = state.bumpVersion();
-
-        StatePatch patch = new StatePatchBuilder()
-                .remove(elementPath(loc.layerIdx, loc.elementIdx))
-                .add(elementPath(loc.layerIdx, to), moved)
-                .build(v);
-        return new OpResult.Ok(patch, DirtyRegion.of(moved));
+        return reorderElementUnsafe(loc, to);
     }
 
     /**
@@ -649,7 +633,7 @@ public final class EditSession {
         Locator loc = findElement(elementId);
         if (loc == null) return err("INVALID_ELEMENT", "element not found: " + elementId);
         if (loc.layer.locked()) return err("LAYER_LOCKED", "owning layer is locked");
-        return reorderElement(elementId, loc.layer.elements().size() - 1);
+        return reorderElementUnsafe(loc, loc.layer.elements().size() - 1);
     }
 
     /**
@@ -662,7 +646,7 @@ public final class EditSession {
         Locator loc = findElement(elementId);
         if (loc == null) return err("INVALID_ELEMENT", "element not found: " + elementId);
         if (loc.layer.locked()) return err("LAYER_LOCKED", "owning layer is locked");
-        return reorderElement(elementId, 0);
+        return reorderElementUnsafe(loc, 0);
     }
 
     // ---------- element.transform ----------
@@ -784,9 +768,6 @@ public final class EditSession {
     }
 
     // ---------- timeline.* / keyframe.* op（实现见 {@link TimelineOperations}） ----------
-    //
-    // timeline.play / pause / seek 留 P2（AnimationTicker 未建）：dispatcher 不加这些 case，
-    // 落到现有 INVALID_OP 路径即可。
 
     /** 见 {@link TimelineOperations#createTimeline(String, Integer, Integer, String, Map)}。 */
     public synchronized OpResult createTimeline(String name, Integer durationMs, Integer fps,
@@ -1730,7 +1711,7 @@ public final class EditSession {
     }
 
     private static Map<String, Object> variableToMap(Variable v,
-            @org.jetbrains.annotations.Nullable VariableStore store) {
+            @Nullable VariableStore store) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("namespace", v.namespace());
         m.put("key", v.key());
@@ -1934,7 +1915,7 @@ public final class EditSession {
      * dispatcher 在调用前应做 {@code canvas.var.global.create} 权限检查。
      */
     public synchronized OpResult createGlobalVariable(VariableStore store,
-                                                      java.util.UUID ownerUuid,
+                                                      UUID ownerUuid,
                                                       String ownerName,
                                                       String key, VarType type,
                                                       String defaultValue) {

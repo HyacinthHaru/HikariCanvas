@@ -7,7 +7,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
- * HikariCanvas 0.4.0 Push API 示例：定时器 push 范型。
+ * HikariCanvas Push API 示例：定时器 push 范型。
  *
  * <p>每 5 秒模拟两条线路的下一班车 ETA，通过 {@link HikariCanvasAPI#setVariable} 推送给
  * HikariCanvas；wall 上引用 {@code ${var:demo_train/line1.next_departure}} 等占位符即可
@@ -45,7 +45,7 @@ public final class DemoTrainPlugin extends JavaPlugin {
         canvas.registerNamespace(this, NAMESPACE, new NamespaceInfo(
                 "Demo 列车时刻表",
                 "DemoTrainPlugin",
-                getDescription().getVersion()
+                getPluginMeta().getVersion()
         ));
 
         // 3. 声明可用 key（让编辑器 Picker 自动补全显示）

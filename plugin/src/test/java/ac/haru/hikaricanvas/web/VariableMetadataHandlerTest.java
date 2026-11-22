@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.javalin.Javalin;
 import io.javalin.testtools.JavalinTest;
 import io.javalin.testtools.Response;
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import ac.haru.hikaricanvas.variable.provider.DeclaredKey;
@@ -15,11 +15,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
+import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -28,19 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P3-M：{@link VariableMetadataHandler} 单测。
- *
- * <p>覆盖：</p>
- * <ol>
- *   <li>未鉴权（sessionId 缺 / 空 / 不存在）→ 401</li>
- *   <li>已鉴权 + 无 wallId → 仅返 provider declaredKeys 聚合；不含 user namespace</li>
- *   <li>已鉴权 + wallId → user namespace 排首位 + 含该 wall user 变量</li>
- *   <li>cache：无 wallId 连续两次只调一次 declaredKeys（5s TTL 内）</li>
- *   <li>cache：带 wallId 走实时算（不命中 cache）</li>
- *   <li>Provider declaredKeys() 抛异常 → 不影响其他 provider；本 provider 仍下发 namespace + 空 keys</li>
- *   <li>动态 namespace declaredKeys 空 → dynamic=true + keys=[]</li>
- *   <li>cross-wall user 变量隔离：wallId=A 不返 wallId=B 的 user 变量</li>
- * </ol>
+ * {@link VariableMetadataHandler} 鉴权、缓存、跨墙隔离与命名空间聚合单测。
  */
 class VariableMetadataHandlerTest {
 
@@ -50,7 +41,7 @@ class VariableMetadataHandlerTest {
 
     @BeforeEach
     void setup() {
-        store = new VariableStore(new FakeDao(), wid -> {});
+        store = new VariableStore(new NoopUserVariableDao(), wid -> {});
         daemon = new VariableProviderDaemon();
         mapper = new ObjectMapper();
     }
@@ -98,7 +89,7 @@ class VariableMetadataHandlerTest {
 
     @Test
     void authenticated_noWallId_aggregatesProviderDeclaredKeys() {
-        daemon.register(new FakeStaticProvider("system", "系统变量",
+        daemon.register(new FakeStaticProvider("system", "System Variables",
                 List.of(
                         new DeclaredKey("server.time", VarType.STRING, "当前时间", 60_000L),
                         new DeclaredKey("server.online", VarType.NUMBER, "在线人数", 30_000L)
@@ -114,7 +105,7 @@ class VariableMetadataHandlerTest {
             assertEquals(1, namespaces.size(), "no wallId → no user ns");
             JsonNode ns0 = namespaces.get(0);
             assertEquals("system", ns0.get("namespace").asText());
-            assertEquals("系统变量", ns0.get("displayName").asText());
+            assertEquals("System Variables", ns0.get("displayName").asText());
             assertFalse(ns0.get("dynamic").asBoolean());
             JsonNode keys = ns0.get("keys");
             assertEquals(2, keys.size());
@@ -127,16 +118,13 @@ class VariableMetadataHandlerTest {
 
     @Test
     void wallId_addsUserNamespaceAtFront_withUserVars() {
-        // 注册一个 system provider 做 baseline
-        daemon.register(new FakeStaticProvider("system", "系统变量",
+        daemon.register(new FakeStaticProvider("system", "System Variables",
                 List.of(new DeclaredKey("server.time", VarType.STRING, null, 60_000L))));
-        // wall A 上创建 2 个 user 变量
         store.create("user:w-aaa", "red_score", VarType.NUMBER, "0", "manual");
-        store.create("user:w-aaa", "blue_score", VarType.NUMBER, "0", "manual");
-        // wall B 的 user 变量不应出现在 wallId=w-aaa 的响应里
+        store.create("user:w-aaa", "blue_score", VarType.NUMBER, null, "manual");
         store.create("user:w-bbb", "other_score", VarType.NUMBER, "0", "manual");
 
-        // P2-3：session 服务端绑定到 w-aaa；即便客户端 query 传 w-bbb 也只返 w-aaa 的变量
+        // session 服务端绑定到 w-aaa；即便客户端 query 传 w-bbb 也只返 w-aaa 的变量
         VariableMetadataHandler handler = newHandler(sid -> "v".equals(sid),
                 sid -> "v".equals(sid) ? "w-aaa" : null);
         JavalinTest.test(buildApp(handler), (server, client) -> {
@@ -149,16 +137,20 @@ class VariableMetadataHandlerTest {
             JsonNode userNs = namespaces.get(0);
             assertEquals("user:w-aaa", userNs.get("namespace").asText(),
                     "user ns 首位 + 用 session 绑定 wall（忽略客户端 query wallId）");
-            assertEquals("我的变量", userNs.get("displayName").asText());
+            assertEquals("User Variables", userNs.get("displayName").asText());
             assertFalse(userNs.get("dynamic").asBoolean());
             JsonNode userKeys = userNs.get("keys");
             assertEquals(2, userKeys.size(), "wall A 的 2 个 user 变量");
             Set<String> keyNames = new HashSet<>();
-            for (JsonNode k : userKeys) keyNames.add(k.get("key").asText());
+            for (JsonNode k : userKeys) {
+                keyNames.add(k.get("key").asText());
+                if ("red_score".equals(k.get("key").asText())) {
+                    assertEquals("Default: 0", k.get("description").asText());
+                }
+            }
             assertTrue(keyNames.contains("red_score"));
             assertTrue(keyNames.contains("blue_score"));
             assertFalse(keyNames.contains("other_score"), "wall B 的变量不应出现");
-            // system 仍在
             assertEquals("system", namespaces.get(1).get("namespace").asText());
         });
     }
@@ -252,7 +244,7 @@ class VariableMetadataHandlerTest {
             JsonNode namespaces = root.get("namespaces");
             assertEquals(2, namespaces.size());
             // good 与 bad 都出现；bad 的 keys 空
-            Map<String, JsonNode> byNs = new java.util.HashMap<>();
+            Map<String, JsonNode> byNs = new HashMap<>();
             namespaces.forEach(n -> byNs.put(n.get("namespace").asText(), n));
             assertNotNull(byNs.get("good"));
             assertEquals(1, byNs.get("good").get("keys").size());
@@ -290,13 +282,10 @@ class VariableMetadataHandlerTest {
         });
     }
 
-    // ---------- 0.7.4：storeNamespacePrefix 下发（rail 幽灵变量根因修复） ----------
+    // ---------- storeNamespacePrefix 下发 ----------
 
     @Test
     void usesStoreNamespacePrefix_notDaemonKey() {
-        // 模拟 RailScheduleProvider：daemon key = "schedule_rail"（唯一性），但 store 写入前缀
-        // = "schedule"（与 ManualSchedule 共享）。picker 应看到 "schedule"，否则前端选中插入
-        // ${var:schedule_rail/X} 会因 interpolator 不识别 schedule_rail 前缀而 resolve miss。
         daemon.register(new PrefixOverrideProvider("schedule_rail", "schedule", "Rail Schedule",
                 List.of(new DeclaredKey("next_cars", VarType.STRING,
                         "[铁路网络] 下一班编组节数", 1000L))));
@@ -320,8 +309,7 @@ class VariableMetadataHandlerTest {
 
     @Test
     void defaultProvider_storeNamespacePrefix_equalsNamespace() {
-        // 普通 provider（未覆写 storeNamespacePrefix）下发的 namespace 仍 = namespace()。
-        daemon.register(new FakeStaticProvider("system", "系统变量",
+        daemon.register(new FakeStaticProvider("system", "System Variables",
                 List.of(new DeclaredKey("server.time", VarType.STRING, null, 60_000L))));
         VariableMetadataHandler handler = newHandler(sid -> "v".equals(sid));
         JavalinTest.test(buildApp(handler), (server, client) -> {
@@ -333,17 +321,15 @@ class VariableMetadataHandlerTest {
 
     // ---------- 辅助 ----------
 
-    private VariableMetadataHandler newHandler(java.util.function.Predicate<String> auth) {
+    private VariableMetadataHandler newHandler(Predicate<String> auth) {
         return new VariableMetadataHandler(store, daemon, auth, mapper);
     }
 
-    /** P2-3：注入 sessionId→wallId 解析器（模拟 session 服务端绑定的 wall）。 */
-    private VariableMetadataHandler newHandler(java.util.function.Predicate<String> auth,
-                                               java.util.function.Function<String, String> wallResolver) {
+    private VariableMetadataHandler newHandler(Predicate<String> auth,
+                                               Function<String, String> wallResolver) {
         return new VariableMetadataHandler(store, daemon, auth, wallResolver, mapper);
     }
 
-    /** 静态 namespace fake provider。 */
     private static class FakeStaticProvider implements VariableProvider {
         private final String ns;
         private final String display;
@@ -364,7 +350,6 @@ class VariableMetadataHandlerTest {
         @Override public List<DeclaredKey> declaredKeys() { return keys; }
     }
 
-    /** 0.7.4：storeNamespacePrefix ≠ namespace 的 provider（模拟 RailScheduleProvider）。 */
     private static final class PrefixOverrideProvider implements VariableProvider {
         private final String daemonKey;
         private final String storePrefix;
@@ -389,7 +374,6 @@ class VariableMetadataHandlerTest {
         @Override public List<DeclaredKey> declaredKeys() { return keys; }
     }
 
-    /** 子类型：每次 declaredKeys 调用计数 + 1（cache 验证用）。 */
     private static final class CountingStaticProvider extends FakeStaticProvider {
         private final AtomicInteger counter;
         CountingStaticProvider(String ns, String display, List<DeclaredKey> keys,
@@ -402,21 +386,5 @@ class VariableMetadataHandlerTest {
             counter.incrementAndGet();
             return super.declaredKeys();
         }
-    }
-
-    private static final class FakeDao extends UserVariableDao {
-        FakeDao() {
-            super(java.util.logging.Logger.getLogger("test"), null);
-        }
-        @Override
-        public void upsert(String wallId, String name, VarType type,
-                           String defaultValue, String currentValue, String boundTo,
-                           long createdAt, long updatedAt) {}
-        @Override
-        public void delete(String wallId, String name) {}
-        @Override
-        public int deleteByWall(String wallId) { return 0; }
-        @Override
-        public List<UserVariableDao.Row> loadAll() { return List.of(); }
     }
 }

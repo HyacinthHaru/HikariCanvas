@@ -1,50 +1,35 @@
 package ac.haru.hikaricanvas.variable.provider;
 
-import ac.haru.hikaricanvas.storage.UserVariableDao;
-import ac.haru.hikaricanvas.variable.Variable;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P3-J：{@link SystemVariableProvider} 单测。
- *
- * <p>用 {@link FakeDataSource} 注入测试值，避免依赖 Bukkit。覆盖：</p>
- * <ul>
- *   <li>initialize 注册全局 8 + per-wall (4 × N) 变量</li>
- *   <li>refresh push 全局值（time / online / tps / motd 等）</li>
- *   <li>registerWall / unregisterWall 幂等</li>
- *   <li>declaredKeys 完整暴露 12 项</li>
- *   <li>tps1m null / currentTick null → 跳过对应变量不报错</li>
- *   <li>shutdown 清状态</li>
- * </ul>
+ * {@link SystemVariableProvider} 全局与 per-wall 系统变量刷新及伪 wall 过滤单测。
  */
 class SystemVariableProviderTest {
 
-    private FakeUserVariableDao fakeDao;
     private VariableStore store;
     private FakeDataSource dataSource;
     private SystemVariableProvider provider;
 
     @BeforeEach
     void setUp() {
-        fakeDao = new FakeUserVariableDao();
-        store = new VariableStore(fakeDao, w -> { });
+        store = new VariableStore(new NoopUserVariableDao(), w -> { });
         dataSource = new FakeDataSource();
         provider = new SystemVariableProvider(store, dataSource);
     }
@@ -73,6 +58,7 @@ class SystemVariableProviderTest {
     @Test
     void namespace_isSystem() {
         assertEquals("system", provider.namespace());
+        assertEquals("System Variables", provider.displayName());
     }
 
     // ──────────────────────────────────────────────────────────
@@ -116,8 +102,8 @@ class SystemVariableProviderTest {
         assertEquals("uuid-1", store.get("system:w-1/wall.owner_uuid").get().currentValue());
         assertEquals("AliasOne", store.get("system:w-1/wall.alias").get().currentValue());
 
-        // w-2 alias 为 null，currentValue 应保持 null（create 不设 default + alias 没 push）
-        assertEquals(null, store.get("system:w-2/wall.alias").get().currentValue());
+        // w-2 alias 为 null，currentValue 应保持 null
+        assertNull(store.get("system:w-2/wall.alias").get().currentValue());
     }
 
     @Test
@@ -197,11 +183,9 @@ class SystemVariableProviderTest {
         provider.initialize();
         assertEquals("OldAlias", store.get("system:w-1/wall.alias").get().currentValue());
 
-        // 改 alias
         dataSource.wallMetas.put("w-1",
                 new SystemVariableProvider.WallMeta("w-1", "NewAlias", "P", "u"));
-        // P2-83：alias 刷新现在按 5s 节流（lastAliasPushAt）。initialize() 内的首次 refresh 已记一次
-        // push 时刻，紧接着的第二次 refresh 落在 5s 窗口内会被 skip。把节流表设回过去强制刷新。
+        // alias 刷新按 5s 节流（lastAliasPushAt），把节流表设回过去强制刷新
         forceAliasStale(provider);
         provider.refresh();
         assertEquals("NewAlias", store.get("system:w-1/wall.alias").get().currentValue());
@@ -213,11 +197,9 @@ class SystemVariableProviderTest {
         dataSource.tick = null;
         provider.initialize();
         forceAllStale(provider);
-        // 不应抛
         provider.refresh();
-        // tps / tick 的 currentValue 应保持原状（initialize 时也 null）
-        assertEquals(null, store.get("system/server.tps").get().currentValue());
-        assertEquals(null, store.get("system/server.tick").get().currentValue());
+        assertNull(store.get("system/server.tps").get().currentValue());
+        assertNull(store.get("system/server.tick").get().currentValue());
     }
 
     @Test
@@ -334,7 +316,7 @@ class SystemVariableProviderTest {
     /** 把所有全局 key 的 nextRefreshAt 设回过去，强制下一次 refresh 全部更新。 */
     private static void forceAllStale(SystemVariableProvider provider) {
         try {
-            java.lang.reflect.Field f = SystemVariableProvider.class.getDeclaredField("nextRefreshAt");
+            Field f = SystemVariableProvider.class.getDeclaredField("nextRefreshAt");
             f.setAccessible(true);
             @SuppressWarnings("unchecked")
             Map<String, Long> map = (Map<String, Long>) f.get(provider);
@@ -347,10 +329,10 @@ class SystemVariableProviderTest {
         }
     }
 
-    /** P2-83：把所有 per-wall alias 节流时刻设回过去，强制下一次 refresh 重刷 alias。 */
+    /** 把所有 per-wall alias 节流时刻设回过去，强制下一次 refresh 重刷 alias。 */
     private static void forceAliasStale(SystemVariableProvider provider) {
         try {
-            java.lang.reflect.Field f = SystemVariableProvider.class.getDeclaredField("lastAliasPushAt");
+            Field f = SystemVariableProvider.class.getDeclaredField("lastAliasPushAt");
             f.setAccessible(true);
             @SuppressWarnings("unchecked")
             Map<String, Long> map = (Map<String, Long>) f.get(provider);
@@ -464,17 +446,5 @@ class SystemVariableProviderTest {
         public String serverName() {
             return serverName;
         }
-    }
-
-    private static final class FakeUserVariableDao extends UserVariableDao {
-        FakeUserVariableDao() {
-            super(Logger.getLogger("test"), null);
-        }
-        @Override
-        public void upsert(String wallId, String name, ac.haru.hikaricanvas.variable.VarType type,
-                           String defaultValue, String currentValue, String boundTo,
-                           long createdAt, long updatedAt) {}
-        @Override public void delete(String wallId, String name) {}
-        @Override public List<Row> loadAll() { return new ArrayList<>(); }
     }
 }

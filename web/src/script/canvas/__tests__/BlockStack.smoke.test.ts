@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P4-C / P5-H2：BlockStack（触发器帽子 + 动作序列）渲染 smoke。
+ * BlockStack（触发器帽子 + 动作序列）渲染 smoke。
  *
- * <p>验证：① 帽子读 TRIGGER_DEFS 渲染规则名 + <b>可编辑触发类型 select</b> + 当前类型参数控件
- * （H2）；② 动作序列用 BlockNode 渲染，顶层 path = {@code actions/i}；③ 帽子
- * data-block-path='trigger'；④ absolute 定位坐标应用（props.x/y）；⑤ H2 切触发类型调
+ * <p>验证：① 帽子读 TRIGGER_DEFS 渲染规则名 + <b>可编辑触发类型 select</b> + 当前类型参数控件；
+ * ② 动作序列用 BlockNode 渲染，顶层 path = {@code actions/i}；③ 帽子
+ * data-block-path='trigger'；④ absolute 定位坐标应用（props.x/y）；⑤ 切触发类型调
  * setTrigger(makeDefaultTrigger)、改参数调 setTrigger 带新字段、lock 时控件 disabled。</p>
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -56,7 +56,7 @@ describe('BlockStack 渲染 smoke', () => {
         const w = mount(BlockStack, { props: { rule: makeRule(), x: 10, y: 20 } });
         await nextTick();
         expect(w.text()).toContain('我的规则');
-        // H2：触发类型 select —— 9 个 option（0.7.0 6 + 0.7.1-P2 3，label 走 script.blocks.<kind>），当前值 = timer
+        // 触发类型 select —— 9 个 option（label 走 script.blocks.<kind>），当前值 = timer
         const kindSelect = w.find('.hc-hat-kind-select');
         expect(kindSelect.exists()).toBe(true);
         expect((kindSelect.element as HTMLSelectElement).value).toBe('timer');
@@ -117,7 +117,7 @@ describe('BlockStack 渲染 smoke', () => {
         expect(w.find('.hc-hat-disabled').exists()).toBe(true);
     });
 
-    // ---- 0.7.0-P5-H2：可编辑触发器 ----
+    // ---- 可编辑触发器 ----
 
     it('切触发类型 → 调 setTrigger(makeDefaultTrigger(新类型))', async () => {
         const scripts = (await import('@/stores/scripts')).useScriptStore();
@@ -168,8 +168,8 @@ describe('BlockStack 渲染 smoke', () => {
         expect((w.find('.hc-hat-param input[type="number"]').element as HTMLInputElement).disabled).toBe(true);
     });
 
-    // ---- 0.7.1-P2：3 个新触发器进帽子 select ----
-    it('触发类型 select 含 3 个新触发器选项（右键画板 / 玩家离开范围 / 玩家退出游戏）', async () => {
+    // ---- 触发器选项覆盖 ----
+    it('触发类型 select 含扩展触发器选项（右键画板 / 玩家离开范围 / 玩家退出游戏）', async () => {
         const w = mount(BlockStack, { props: { rule: makeRule(), x: 0, y: 0 } });
         await nextTick();
         const optValues = w.findAll('.hc-hat-kind-select option').map((o) => (o.element as HTMLOptionElement).value);

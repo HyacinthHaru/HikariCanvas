@@ -9,32 +9,37 @@ import ac.haru.hikaricanvas.state.Layer;
 import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.state.RenderMode;
 import ac.haru.hikaricanvas.state.TextElement;
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.8 Part A review 补缺：{@link MissingResourceScanner} 单测——导入工程引用本服缺资源时
- * 产出 {@code missing-font} / {@code missing-icon} / {@code missing-variable} warning。
+ * {@link MissingResourceScanner} 单测——导入工程引用本服缺失资源时产出
+ * {@code missing-font} / {@code missing-icon} / {@code missing-variable} warning。
  *
- * <p>装配真 {@link FontRegistry}（loadBuiltIn 拿到内置字体 id 全集）、真 {@link IconRegistry}
- * （手动注册一个 user 图标）、真 {@link VariableStore}（用 fake DAO 注入 userglobal 变量）。
- * 变量判定<b>仅扫 userglobal</b>——user/* wall-scoped 导入本就要重设、schedule/rail 由 provider
- * 兜底，皆不报（见 scanner 类注释）。</p>
+ * <p>装配真 {@link FontRegistry}、真 {@link IconRegistry} 与真 {@link VariableStore}。
+ * 变量判定仅扫 {@code userglobal}——{@code user/*} 为 wall-scoped，{@code schedule}/{@code rail} 由
+ * provider 兜底，皆不报缺。</p>
  */
 class MissingResourceScannerTest {
 
     private static final Logger LOG = Logger.getLogger("missing-resource-scanner-test");
+
+    @TempDir
+    Path tmpDir;
 
     private FontRegistry fonts;
     private IconRegistry icons;
@@ -43,14 +48,12 @@ class MissingResourceScannerTest {
     @BeforeEach
     void setUp() {
         fonts = new FontRegistry(LOG);
-        fonts.loadBuiltIn();   // ark_pixel / inter / ... 内置 id 全集（缺时 jar 资源缺，但 id 已注册）
+        fonts.loadBuiltIn();
 
         icons = new IconRegistry(LOG);
-        // 不依赖 jar /icons/*.icons.json（构建期生成、CI 不一定有），手动注册一个 user 图标。
         registerUserIcon(icons, "logo");
 
         variables = new VariableStore(new NoopUserVariableDao(), wid -> {});
-        // 注入一个存在的 userglobal 变量
         variables.create(VariableStore.USER_GLOBAL_NAMESPACE, "red_score", VarType.NUMBER, "0", "manual");
     }
 
@@ -282,43 +285,14 @@ class MissingResourceScannerTest {
                 .findFirst().orElse(null);
     }
 
-    private static void registerUserIcon(IconRegistry reg, String id) {
-        // IconRegistry.loadExternal 扫目录；测试里走它太重。直接用最小 SVG 经 loadExternal
-        // 不便（要写临时文件）。改用反射注入 user pack —— 但 index/packs 私有。
-        // 折衷：写一个临时目录 + 一个合法 SVG，让真 loadExternal 注册。
+    private void registerUserIcon(IconRegistry reg, String id) {
         try {
-            java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("hc-icons-");
-            java.nio.file.Path svg = dir.resolve(id + ".svg");
-            java.nio.file.Files.writeString(svg,
-                    "<svg viewBox=\"0 0 24 24\"><path d=\"M0 0 L24 24 Z\"/></svg>");
+            Path dir = Files.createDirectories(tmpDir.resolve("icons"));
+            Path svg = dir.resolve(id + ".svg");
+            Files.writeString(svg, "<svg viewBox=\"0 0 24 24\"><path d=\"M0 0 L24 24 Z\"/></svg>");
             reg.loadExternal(dir);
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             throw new IllegalStateException(e);
         }
     }
-
-    /** 内存 no-op DAO：scanner 测只往 userglobal namespace 注入变量，user 持久化路径不触发。 */
-    private static final class NoopUserVariableDao extends UserVariableDao {
-        NoopUserVariableDao() {
-            super(LOG, null);
-        }
-
-        @Override
-        public void upsert(String wallId, String name, VarType type,
-                           String defaultValue, String currentValue, String boundTo,
-                           long createdAt, long updatedAt) {
-            // no-op
-        }
-
-        @Override
-        public void delete(String wallId, String name) {
-            // no-op
-        }
-
-        @Override
-        public List<Row> loadAll() {
-            return List.of();
-        }
-    }
-
 }

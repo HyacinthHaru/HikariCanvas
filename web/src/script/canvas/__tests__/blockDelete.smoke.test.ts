@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.1「拖积木到删除区删单个积木」smoke + 几何单测。
+ * 拖积木到删除区删单个积木 smoke + 几何单测。
  *
  * <p>三层验证：① 删除区几何纯函数（{@link computeDeleteZoneRect} / {@link pointInRect}）；
  * ② store 级 {@code scriptEdit.removeAction} 删对路径（含 if then/else 嵌套）；③ BlockCanvas
@@ -150,7 +150,7 @@ describe('BlockCanvas 端到端：拖积木到删除区', () => {
         // 拖 actions/1（wait）
         const block = w.find('[data-block-path="actions/1"]');
         await block.trigger('pointerdown', { button: 0, clientX: 50, clientY: 50, pointerId: 1 });
-        // 0.7.1 拖动阈值：需超阈值位移才真正启动拖动（删除区才 active）。
+        // 拖动阈值：需超阈值位移才真正启动拖动（删除区才 active）。
         window.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, clientY: 200 }));
         await nextTick();
         // 删除区出现（拖动作积木时 active）
@@ -184,7 +184,7 @@ describe('BlockCanvas 端到端：拖积木到删除区', () => {
 
         const block = w.find('[data-block-path="actions/1"]');
         await block.trigger('pointerdown', { button: 0, clientX: 50, clientY: 50, pointerId: 1 });
-        // 0.7.1 拖动阈值：需超阈值位移才真正启动拖动。
+        // 拖动阈值：需超阈值位移才真正启动拖动。
         window.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, clientY: 200 }));
         await nextTick();
 

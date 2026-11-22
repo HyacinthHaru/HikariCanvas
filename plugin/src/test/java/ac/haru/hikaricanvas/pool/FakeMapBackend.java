@@ -4,9 +4,11 @@ import org.bukkit.World;
 import org.bukkit.map.MapRenderer;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
-/** 0.9.6：{@link MapBackend} 内存 fake。核心：{@link #createMapCalls} 计 map 铸造次数（idcounts 膨胀）。 */
+/** {@link MapBackend} 内存 fake（{@link #createMapCalls} 统计 map 铸造次数）。 */
 final class FakeMapBackend implements MapBackend {
 
     int createMapCalls = 0;
@@ -17,7 +19,7 @@ final class FakeMapBackend implements MapBackend {
      * MapView 存在、但其 world 未加载的 mapId（{@code MapView.getWorld()} 返 null）。
      * 模拟 Multiverse 等插件管理的世界在 onEnable 时尚未加载的真实场景。
      */
-    final java.util.Set<Integer> mapViewsWithUnloadedWorld = new java.util.HashSet<>();
+    final Set<Integer> mapViewsWithUnloadedWorld = new HashSet<>();
 
     /**
      * 让后续 {@link #createMap} 从 {@code id} 开始发号。

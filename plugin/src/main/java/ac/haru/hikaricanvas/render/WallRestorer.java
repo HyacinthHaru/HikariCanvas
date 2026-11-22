@@ -1,13 +1,14 @@
 package ac.haru.hikaricanvas.render;
 
 import ac.haru.hikaricanvas.pool.MapPool;
+import ac.haru.hikaricanvas.state.Fill;
 import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.state.SolidFill;
 import ac.haru.hikaricanvas.storage.WallRepo;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
 
 import java.awt.image.BufferedImage;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -21,15 +22,14 @@ import java.util.logging.Logger;
  * MapView 缓存（{@link HikariCanvasRenderer}），同时把 mapIds 在 {@link MapPool} 里 bind 到
  * {@code wall:<wall_id>} 防 leak 扫描归还。
  *
- * <p><b>失败时怎么处置地图，按失败发生在 bind 之前还是之后分两种：</b></p>
+ * <p><b>失败时按发生在 bind 之前还是之后分两种处置：</b></p>
  * <ul>
- *   <li><b>bind 还没成功</b>（world 解析不到 / {@code bindToWall} 自己抛）：这一轮已经借到手的
- *       mapId 全部 {@link MapPool#releaseToFree} 回 FREE，不留半态预留。</li>
- *   <li><b>bind 已成功、后面的渲染炸了</b>（元素数据损坏、瞬时 OOM、AWT 抛错……）：
+ *   <li><b>bind 尚未成功</b>（world 未加载 / {@code bindToWall} 拒绝或抛异常）：
+ *       {@link MapPool#bindToWall} 是原子的，池状态未发生半态修改，直接记录日志并跳过恢复。</li>
+ *   <li><b>bind 已成功、后续渲染失败</b>（元素数据损坏、瞬时 OOM、AWT 抛错等）：
  *       <b>保留绑定关系</b>，只记录告警。这批地图在 DB 里本来就属于这面 wall（walls 行还在，
- *       泄漏检测认得它、不会回收），把它们放回 FREE 才是真正的灾难——下一次 confirm 会把
- *       同一张地图借给别的 wall，两面墙共用一张图互相覆盖像素，而原 wall 的 map_ids 指向已被
- *       抢走的地图，下次启动 bind 直接失败，这面墙就再也恢复不了了。</li>
+ *       泄漏检测认得它、不会回收）；若放回 FREE，下一次 confirm 会把同一张地图借给别的 wall，
+ *       导致两面墙共用一张图互相覆盖像素，且原 wall 下次启动 bind 直接失败。</li>
  * </ul>
  *
  * <p>失败的 wall_id 被记入 {@link #failedRestoreWallIds()}（线程安全只读快照）；
@@ -46,8 +46,8 @@ public final class WallRestorer {
     private final PlaceholderRenderer placeholder;
     /**
      * world 名 → {@link World} 解析 seam（生产默认 {@link Bukkit#getWorld}）。
-     * WallRestorerTest 注入 fake（返回 JDK Proxy World / 返 null 模拟世界未加载），
-     * 让「restore 失败 → releaseToFree 回滚」守卫无需 Bukkit server 即可跑。
+     * {@code WallRestorerTest} 注入 fake（返回 JDK Proxy World 或 {@code null} 模拟世界未加载），
+     * 无需启动 Bukkit server 即可覆盖启动期恢复路径。
      */
     private final Function<String, World> worldResolver;
 
@@ -83,7 +83,7 @@ public final class WallRestorer {
             try {
                 ok1 = restoreOne(w);
             } catch (Exception ex) {
-                // restoreOne 内部已尝试 release + log；这里兜底，确保单 wall 失败不影响其它
+                // 兜底保护，确保单 wall 异常不影响其它 wall 恢复
                 log.log(Level.SEVERE, "wall restore unexpected failure: " + w.wallId(), ex);
                 ok1 = false;
             }
@@ -115,8 +115,8 @@ public final class WallRestorer {
     }
 
     /**
-     * 单 wall 恢复：bind 池 → compose 像素。bind 之前失败 → 把本轮已借到的 mapId 全 release
-     * 回 FREE；bind 之后（渲染阶段）失败 → 保留绑定只记告警，理由见类 javadoc。
+     * 单 wall 恢复：bind 池 → compose 像素。bind 之前失败时池状态未变更，直接跳过；
+     * bind 之后（渲染阶段）失败则保留绑定关系并记录告警，理由见类注释。
      * 两种情况 WallRepo 行都不删除，留待下次重启再 retry。
      */
     private boolean restoreOne(WallRepo.Wall w) {
@@ -126,13 +126,8 @@ public final class WallRestorer {
             return false;
         }
 
-        // 这一轮已经借到手、但绑定关系还没落定的 mapId。bindToWall 目前是原子的
-        // （先全量校验 + 单事务落盘，再改内存），所以真正走到"要回滚"这一步的只有
-        // bindToWall 自己抛异常的情况；保留这个列表是为了 bind 将来变成多步时不出漏子。
-        List<Integer> bound = new ArrayList<>();
         boolean bindCommitted = false;
         try {
-            // bindToWall 需校验 world；先解析 wall 所在 world
             World world = worldResolver.apply(w.key().world());
             if (world == null) {
                 log.warning("WallRestorer: world '" + w.key().world()
@@ -140,17 +135,11 @@ public final class WallRestorer {
                 return false;
             }
 
-            boolean bindOk = mapPool.bindToWall(w.wallId(), mapIds, world);
-            if (!bindOk) {
-                // bindToWall 返回 false 表示 mapIds 已被别 wall 占（应该不可能——启动期没人借）
-                // 或者 mapId 不在池里（孤儿）。不能确定哪些已经 bind 成功，保守起见也释放整批：
-                // bindToWall 是原子的（先全扫描再全更新），失败时 0 个 bind，
-                // 所以 bound 列表保持空，下面 release 不会跑——安全。
+            if (!mapPool.bindToWall(w.wallId(), mapIds, world)) {
                 log.warning("WallRestorer: pool bind refused for " + w.wallId() + " mapIds=" + mapIds);
                 return false;
             }
-            bound.addAll(mapIds);
-            bindCommitted = true;  // 绑定关系已落定：后面再失败也不动这些地图
+            bindCommitted = true;
 
             ProjectState state = w.state();
             int widthMaps = Math.max(1, state.canvas().widthMaps());
@@ -161,9 +150,8 @@ public final class WallRestorer {
                 }
                 return true;
             }
-            // 传 wallId 让 ${var:user/X} 注入；启动期 variable store 加载在 compositor
-            // setVariableSupport 之前，restorer 仍可能在 setVariableSupport 前调用 —— 此时 interpolator
-            // 为 null，rasterize 走原行为；setVariableSupport 注入后再次 restore（极少见）也安全。
+            // 传 wallId 让 ${var:user/X} 注入；若 setVariableSupport 尚未注入，interpolator 为 null，
+            // rasterize 自然跳过占位符替换。
             BufferedImage img = compositor.rasterize(state, w.wallId());
             int total = mapIds.size();
             for (int i = 0; i < total; i++) {
@@ -173,36 +161,20 @@ public final class WallRestorer {
             return true;
         } catch (RuntimeException | Error ex) {
             if (bindCommitted) {
-                // 渲染阶段炸的。地图仍然是这面 wall 的（walls 行还在，泄漏检测认得它），
-                // 放回 FREE 会让下一次 confirm 把同一张图借给别人 → 两面墙共用一张地图，
-                // 且这面墙下次启动 bind 必失败、永久恢复不了。所以只报错，不动池。
                 log.log(Level.SEVERE,
                         "WallRestorer: wall " + w.wallId() + " failed while rendering; "
-                                + "its " + bound.size() + " map(s) stay bound to this wall "
-                                + bound + " (returning them to the free pool would let another"
+                                + "its " + mapIds.size() + " map(s) retained for this wall "
+                                + mapIds + " (returning them to the free pool would let another"
                                 + " wall grab them) — wall row preserved in DB for retry on"
                                 + " next start",
                         ex);
-                return false;
+            } else {
+                log.log(Level.SEVERE,
+                        "WallRestorer: wall " + w.wallId() + " restore skipped before pool"
+                                + " binding was committed — wall row preserved in DB for retry on"
+                                + " next start",
+                        ex);
             }
-            // bind 还没落定就失败：把这一轮已借到手的 mapId 全部还回 FREE，不留半态预留。
-            List<Integer> releasedNow = new ArrayList<>();
-            for (int mid : bound) {
-                try {
-                    if (mapPool.releaseToFree(mid)) releasedNow.add(mid);
-                } catch (Exception relEx) {
-                    log.log(Level.SEVERE,
-                            "WallRestorer: failed to release map_id=" + mid
-                                    + " after wall " + w.wallId() + " restore error", relEx);
-                }
-            }
-            log.log(Level.SEVERE,
-                    "WallRestorer: wall " + w.wallId() + " restore failed before the pool"
-                            + " binding was committed; released " + releasedNow.size() + "/"
-                            + bound.size() + " map(s) back to FREE pool: " + releasedNow
-                            + " — wall row preserved in DB for retry on next start",
-                    ex);
-            // 不重抛——单 wall 失败应该让其它 wall 继续 restore（caller loop 期望 boolean）
             return false;
         }
     }
@@ -213,11 +185,11 @@ public final class WallRestorer {
     }
 
     /**
-     * background 是 {@link ac.haru.hikaricanvas.state.Fill} 联合类型后的判等。
+     * background 是 {@link Fill} 联合类型后的判等。
      * 只把 {@code SolidFill #FFFFFF[FF]} 视为"白色背景"；渐变 / 半透明都不算 pristine。
      */
-    private static boolean isWhiteSolid(ac.haru.hikaricanvas.state.Fill bg) {
-        if (!(bg instanceof ac.haru.hikaricanvas.state.SolidFill s)) return false;
+    private static boolean isWhiteSolid(Fill bg) {
+        if (!(bg instanceof SolidFill s)) return false;
         String c = s.color();
         if (c == null) return false;
         return "#FFFFFF".equalsIgnoreCase(c) || "#FFFFFFFF".equalsIgnoreCase(c);

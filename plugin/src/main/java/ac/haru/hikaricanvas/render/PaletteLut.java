@@ -175,7 +175,7 @@ public final class PaletteLut {
     private byte[] buildLut() {
         byte[] out = new byte[LUT_SIZE];
         final int step = 1 << (8 - LUT_BITS); // 每档跨度 = 8
-        // 取 grid cell 的**中心点**作为代表色（减少边界量化误差）
+        // 取 grid cell 的中心点作为代表色（减少边界量化误差）
         final int midOffset = step / 2;        // 4
         for (int rq = 0; rq < LUT_DIM; rq++) {
             int r = rq * step + midOffset;

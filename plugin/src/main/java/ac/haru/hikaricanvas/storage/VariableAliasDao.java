@@ -12,7 +12,7 @@ import java.util.logging.Logger;
 
 /**
  * {@code variable_aliases} 表 DAO。schema 见
- * {@code db-migrations/V014__variable_aliases.sql} + {@code docs/variables.md §1.12}。
+ * {@code db-migrations/V014__variable_aliases.sql} + {@code docs/dynamic-data.md}。
  *
  * <p><b>per-wall</b>：alias 是 wall 局部状态——同一 fullName 在不同 wall 可起不同别名；
  * 同一 wall 内一个 fullName 只一个别名（主键 = wall_id + full_name）。alias 字段不要求

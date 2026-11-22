@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P4-D1 scriptEditStore 单测。
+ * scriptEditStore 单测。
  *
  * <p>编辑会话核心逻辑：working copy 深拷隔离 / 本地 undo-redo / dirty 标记 / debounce
  * auto-save / lock no-op / server-as-truth dirty 协调 / newRule 拿 server 发的 id /
@@ -189,7 +189,7 @@ describe('scriptEditStore — 变更入口 + dirty + undo', () => {
         expect(edit.undoStack.length).toBe(1);
     });
 
-    it('setActions 进 undo（D2 拖拽结果写这里）', () => {
+    it('setActions 进 undo（拖拽结果写回）', () => {
         const { edit } = setup();
         const newActions: ScriptAction[] = [
             { type: 'wait', ms: 100 },
@@ -225,7 +225,7 @@ describe('scriptEditStore — 变更入口 + dirty + undo', () => {
         expect(edit.undoStack.length).toBe(1);
     });
 
-    it('updateActionField coalesce=true：写回生效但不入 undo 栈（0.7.1-P4 幽灵拖动逐帧防爆栈）', () => {
+    it('updateActionField coalesce=true：写回生效但不入 undo 栈（幽灵拖动逐帧防爆栈）', () => {
         const { edit } = setup();
         const original = (edit.workingCopy!.actions[0] as { message: string }).message; // 'hi'
         // 模拟幽灵拖动：起拖存 1 份快照，逐帧 coalesce 写回。
@@ -279,7 +279,7 @@ describe('scriptEditStore — 变更入口 + dirty + undo', () => {
         expect(inner).toEqual({ type: 'sendMessage', text: 'hi', channel: 'chat', target: 'trigger' });
     });
 
-    // ---- 0.7.1 bug 修复：repeat body 里的积木编辑被静默丢弃（根因：scriptEdit 平行实现只认 if）----
+    // ---- repeat body 里的积木编辑 ----
 
     it('updateActionField 改 repeat body 内 incrementVariable 的 fullName（不被丢弃）', () => {
         const scripts = useScriptStore();
@@ -524,7 +524,7 @@ describe('scriptEditStore — setEnabled（即时，不进 debounce）', () => {
     });
 });
 
-describe('scriptEditStore — lock 守卫（K-UI-12）', () => {
+describe('scriptEditStore — lock 守卫', () => {
     function lockedSetup() {
         const scripts = useScriptStore();
         scripts.upsert(makeRule('sr-1', { name: 'v0' }));
@@ -553,7 +553,7 @@ describe('scriptEditStore — lock 守卫（K-UI-12）', () => {
         expect(sendScriptEnable).not.toHaveBeenCalled();
     });
 
-    it('lock 时 snapshotForUndo + coalesce updateActionField no-op（0.7.1-P4 幽灵拖动）', () => {
+    it('lock 时 snapshotForUndo + coalesce updateActionField no-op（幽灵拖动）', () => {
         const { edit } = lockedSetup();
         edit.snapshotForUndo();
         edit.updateActionField('actions/0', { message: 'x' } as Partial<ScriptAction>, true);
@@ -656,7 +656,7 @@ describe('scriptEditStore — server-as-truth dirty 协调', () => {
         expect(edit.dirty).toBe(false);
     });
 
-    // ---- P5 实测修复（根因 3）：拖拽中冻结整树替换 ----
+    // ---- 拖拽中冻结整树替换 ----
 
     it('dragging=true 时 server 回声不替换 workingCopy（防 v-for 重建打断 capture）', async () => {
         const scripts = useScriptStore();
@@ -817,7 +817,7 @@ describe('scriptEditStore — deleteRule', () => {
     });
 });
 
-// ---------- 0.7.0-P5-H：validationErrors 阻止 save（K-UI-9）----------
+// ---------- validationErrors 阻止 save ----------
 
 describe('scriptEditStore — validationErrors 预校验阻止 save', () => {
     function setup() {
@@ -874,7 +874,7 @@ describe('scriptEditStore — validationErrors 预校验阻止 save', () => {
     });
 });
 
-describe('scriptEditStore — activeElementBinding（0.7.1-P3 波2 T4）', () => {
+describe('scriptEditStore — activeElementBinding', () => {
     it('默认 null', () => {
         const edit = useScriptEditStore();
         expect(edit.activeElementBinding).toBe(null);
@@ -909,9 +909,9 @@ describe('scriptEditStore — activeElementBinding（0.7.1-P3 波2 T4）', () =>
     });
 });
 
-// ---------- D2：closeEditing / selectRule 校验未通过时给 net.lastError 提示 ----------
+// ---------- closeEditing / selectRule 校验未通过时给 net.lastError 提示 ----------
 
-describe('scriptEditStore — D2 校验未通过静默丢弃 → 非阻塞提示', () => {
+describe('scriptEditStore — 校验未通过时非阻塞提示与切规则保护', () => {
     function setup() {
         const scripts = useScriptStore();
         scripts.upsert(makeRule('sr-1'));
@@ -963,7 +963,7 @@ describe('scriptEditStore — D2 校验未通过静默丢弃 → 非阻塞提示
         expect(net.lastError).toBeNull();
     });
 
-    it('dirty + 校验错误时 selectRule 被挡住（不切走）+ net.lastError 提示（R16）', () => {
+    it('dirty + 校验错误时 selectRule 被挡住（不切走）+ net.lastError 提示', () => {
         const { edit, net, scripts } = setup();
         scripts.upsert(makeRule('sr-extra'));
         edit.selectRule('sr-1');
@@ -972,7 +972,7 @@ describe('scriptEditStore — D2 校验未通过静默丢弃 → 非阻塞提示
         expect(edit.validationErrors.length).toBeGreaterThan(0);
 
         net.lastError = null;
-        edit.selectRule('sr-extra'); // R16：校验未过 → 被挡，不切走、改动保留
+        edit.selectRule('sr-extra'); // 校验未过 → 被挡，不切走、改动保留
 
         expect(net.lastError).not.toBeNull();
         expect(net.lastError).toContain('validation'); // i18n 查表，测试环境默认 en
@@ -1060,7 +1060,7 @@ describe('scriptEditStore — D2 校验未通过静默丢弃 → 非阻塞提示
     });
 });
 
-// ---------- 自动保存失败时人已经切走（#161）----------
+// ---------- 自动保存失败时已切走其他规则 ----------
 
 /**
  * 时序：切规则前先 flush 上一条 → 回执几秒后才回来（ack 超时 / 断线），那时 selectedRuleId
@@ -1175,7 +1175,7 @@ describe('scriptEditStore — 保存失败回调认自己那条规则', () => {
     });
 });
 
-// ---------- setEnabled 失败回滚（#174）----------
+// ---------- setEnabled 失败回滚 ----------
 
 describe('scriptEditStore — setEnabled 失败回滚', () => {
     /**
@@ -1222,7 +1222,7 @@ describe('scriptEditStore — setEnabled 失败回滚', () => {
     });
 });
 
-// ---------- closeEditing 的返回值（#139）----------
+// ---------- closeEditing 的返回值 ----------
 
 describe('scriptEditStore — closeEditing 告诉调用方到底关没关', () => {
     it('校验挡住时返回 false 且编辑会话原样保留', () => {

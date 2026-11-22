@@ -38,7 +38,7 @@ class TriggerWireTest {
         assertEquals(new Trigger.PlayerNear(8), mapper.readValue(json, Trigger.class));
     }
 
-    // ---------- 0.7.1：3 个新触发器 round-trip ----------
+    // ---------- rightClickWall / playerLeaveRange / playerQuit round-trip ----------
 
     @Test
     void rightClickWallRoundtrip() throws Exception {
@@ -61,7 +61,7 @@ class TriggerWireTest {
         assertTrue(mapper.writeValueAsString(t).contains("\"type\":\"playerQuit\""));
     }
 
-    /** 0.7.1：playerLeaveRange 的 rangeBlocks 非整数值 → 拒（同 playerNear K8 纪律）。 */
+    /** playerLeaveRange 的 rangeBlocks 非整数值 → 拒。 */
     @Test
     void playerLeaveRangeFractionalRejected() {
         assertThrows(Exception.class, () -> mapper.readValue(
@@ -82,7 +82,7 @@ class TriggerWireTest {
                 () -> mapper.readValue("{\"fullName\":\"x\"}", Trigger.class));
     }
 
-    /** 0.7.0-P2-1(K8)：intervalSeconds 非整数值（1.9）→ 拒，不静默截断成 1。 */
+    /** intervalSeconds 非整数值（1.9）→ 拒，不静默截断成 1。 */
     @Test
     void timerFractionalIntervalRejected() {
         assertThrows(Exception.class, () -> mapper.readValue(

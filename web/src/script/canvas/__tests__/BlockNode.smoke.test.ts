@@ -1,14 +1,11 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P4-C → P5-F：BlockNode 递归渲染 smoke。
+ * BlockNode 递归渲染 smoke。
  *
- * <p>核心验证：① 各类 action 渲染不崩 + 标题出现 + 参数槽换成真控件（P5-F：BlockParamInput）；
+ * <p>核心验证：① 各类 action 渲染不崩 + 标题出现 + 参数槽渲染真实控件（BlockParamInput）；
  * ② if 嵌套递归渲染；③ {@code data-block-path} <b>与后端 trace blockId 同构</b>（嵌套子块 path
- * 精确）；④ 改字段触发 {@code edit.updateActionField}（P5-F 接入）。
+ * 精确）；④ 改字段触发 {@code edit.updateActionField}。
  * happy-dom + pinia + 锁中文 locale。</p>
- *
- * <p>P5-F 起 BlockNode 用 project / scriptEdit store，故 mount 前 setActivePinia。参数槽不再是
- * 「字段名: 原始值」纯文本占位，而是 input / select / 变量按钮——断言改为查控件与值。</p>
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
@@ -105,7 +102,7 @@ describe('BlockNode 渲染 smoke', () => {
     });
 });
 
-describe('BlockNode P5-F：字段改值回写 updateActionField', () => {
+describe('BlockNode 字段改值回写 updateActionField', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
@@ -151,7 +148,7 @@ describe('BlockNode if 递归 + path 同构', () => {
         const w = mountNode(ifAction, 'actions/0');
         await nextTick();
 
-        // G：condition 字段接 ConditionBuilder（可视模式解析 `var(...) > 5` 成行），
+        // condition 字段接 ConditionBuilder（可视模式解析 `var(...) > 5` 成行），
         // 不再是原始串占位 —— 验证构建器根元素已挂载而非裸串。
         expect(w.find('.hc-cond').exists()).toBe(true);
         // then 子块精确 path
@@ -195,7 +192,7 @@ describe('BlockNode if 递归 + path 同构', () => {
     });
 });
 
-describe('BlockNode 0.7.1-P2 repeat C 形渲染', () => {
+describe('BlockNode repeat C 形渲染', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
@@ -253,7 +250,7 @@ describe('BlockNode 0.7.1-P2 repeat C 形渲染', () => {
     });
 });
 
-describe('BlockNode 0.7.2-P3 repeatUntil C 形渲染（condition + maxIterations + body）', () => {
+describe('BlockNode repeatUntil C 形渲染（condition + maxIterations + body）', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
@@ -304,7 +301,7 @@ describe('BlockNode 0.7.2-P3 repeatUntil C 形渲染（condition + maxIterations
     });
 });
 
-describe('BlockNode 待完善角标（次要问题 1：扩展到 variable / condition / sound）', () => {
+describe('BlockNode 待完善角标（variable / condition / sound / element）', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
@@ -369,7 +366,7 @@ describe('BlockNode 待完善角标（次要问题 1：扩展到 variable / cond
     });
 });
 
-describe('BlockNode 0.7.1 友好元素皮肤渲染（setElementProperties）', () => {
+describe('BlockNode 友好元素皮肤渲染（setElementProperties）', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
@@ -459,7 +456,7 @@ describe('BlockNode 0.7.1 友好元素皮肤渲染（setElementProperties）', (
         expect(w.find('.hc-block-need-select').exists()).toBe(false);
     });
 
-    it('0.7.1-P3 波2：friendly 元素下拉 focusin → setActiveElementBinding(path)', async () => {
+    it('friendly 元素下拉 focusin → setActiveElementBinding(path)', async () => {
         const project = (await import('@/stores/project')).useProjectStore();
         project.setSnapshot({
             canvas: { width: 128, height: 128, background: '#000' },
@@ -480,7 +477,7 @@ describe('BlockNode 0.7.1 友好元素皮肤渲染（setElementProperties）', (
     });
 });
 
-describe('BlockNode 0.7.1-P3 波2：常规块元素字段 focusin 绑定', () => {
+describe('BlockNode 常规块元素字段 focusin 绑定', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
@@ -524,16 +521,10 @@ describe('BlockNode 0.7.1-P3 波2：常规块元素字段 focusin 绑定', () =>
 });
 
 /**
- * 0.7.1-P3 实测 Bug 1：点 element 字段下拉后去点预览元素 → 下拉关但没选中。
- *
- * <p>根因：element 字段是原生 select，展开浏览器原生下拉时点预览，浏览器先关下拉、吃掉这次
- * 点击，PreviewPane.onPointerDown 收不到 → 没填。修复：在元素字段旁加独立「从预览点选」按钮，
- * 点它直接 {@code edit.setActiveElementBinding(path)} 进入预览点选态（不碰 select、不展开下拉）。</p>
- *
- * <p>断言按钮存在 + 点击调 setActiveElementBinding(本积木 path)；常规块（setElementProperty /
- * nudgeElement）与友好块（setElementProperties）的元素字段都有此按钮。</p>
+ * 元素字段旁独立「从预览点选」按钮：点击直接 {@code edit.setActiveElementBinding(path)}
+ * 进入预览点选态（不依赖展开原生 select 下拉，避免浏览器关闭下拉时吞掉预览点击）。
  */
-describe('BlockNode 0.7.1-P3 Bug 1：「从预览点选」按钮（不依赖 select 展开）', () => {
+describe('BlockNode 「从预览点选」按钮（不依赖 select 展开）', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';

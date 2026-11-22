@@ -26,7 +26,7 @@ import java.util.logging.Logger;
  *   <li>单次使用：{@link #consume(String)} 成功即永久 mark used</li>
  * </ul>
  *
- * <p>限流（§2.4）与 WS 握手时的 Origin 校验在 T10 实装；本类只管核心生命周期。</p>
+ * <p>限流（§2.4）与 WS 握手时的 Origin 校验在 Web 层处理；本类只管核心生命周期。</p>
  */
 public final class TokenService {
 

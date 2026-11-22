@@ -3,23 +3,23 @@ package ac.haru.hikaricanvas.storage;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.io.TempDir;
 
-import java.io.File;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
 import java.util.logging.Logger;
 
 /**
- * 0.9.1 迁移 fixture 测试基建（data-model.md §6.6.3）。
+ * 迁移 fixture 测试基建（{@code docs/data-model.md §6.6.3}）。
  * 子类指定：目标迁移版本 N + baseline（N-1）+ fixture 名。流程：
  * runUpTo(baseline) 建 schema → 灌 {@code migration-fixtures/<name>/before.sql} 种子数据 →
  * runUpTo(N) 应用目标迁移 → 子类断言数据无损 / 新结构正确。
  */
 abstract class MigrationFixtureTestBase {
 
-    private Path tmpDir;
+    @TempDir
+    protected Path tmpDir;
+
     protected Database database;
     protected Jdbi jdbi;
 
@@ -31,7 +31,6 @@ abstract class MigrationFixtureTestBase {
 
     @BeforeEach
     void setUpFixture() throws Exception {
-        tmpDir = Files.createTempDirectory("hikari-fixture-");
         Logger log = Logger.getLogger("test");
         database = new Database(log, tmpDir.resolve("data.db"));
         jdbi = database.jdbi();
@@ -55,12 +54,7 @@ abstract class MigrationFixtureTestBase {
     }
 
     @AfterEach
-    void tearDownFixture() throws Exception {
+    void tearDownFixture() {
         if (database != null) database.close();
-        if (tmpDir != null && Files.exists(tmpDir)) {
-            try (var s = Files.walk(tmpDir)) {
-                s.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
-            }
-        }
     }
 }

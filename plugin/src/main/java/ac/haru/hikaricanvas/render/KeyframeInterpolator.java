@@ -47,7 +47,7 @@ import java.util.Map;
  * </ul>
  *
  * <p>前端镜像：{@code web/src/timeline/interpolation.ts}（编辑器本地预览用）；游戏内输出以
- * 本类为唯一权威（D9）。</p>
+ * 本类为唯一权威。</p>
  */
 public final class KeyframeInterpolator {
 

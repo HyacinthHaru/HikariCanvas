@@ -1,5 +1,5 @@
 /**
- * 0.6 P3（B3）：关键帧插值器前端镜像测试。
+ * 关键帧插值器前端镜像测试。
  *
  * 镜像后端 KeyframeInterpolator 的语义（rendering.md §9.1–§9.5）：mapTime 三模式 /
  * sampleNumeric 边界 + Str resolve / sampleColor / sampleFill / sampleText per 类型 /

@@ -10,6 +10,7 @@ import java.awt.Graphics2D;
 import java.awt.Shape;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Area;
+import java.awt.geom.Path2D;
 import java.awt.geom.Rectangle2D;
 
 /**
@@ -30,10 +31,10 @@ public final class PathRenderer implements ElementRenderer {
 
         // 填充
         if (p.fill() != null) {
-            java.awt.geom.Path2D path = parsed.path();
+            Path2D path = parsed.path();
             path.setWindingRule("evenodd".equals(p.fillRule())
-                    ? java.awt.geom.Path2D.WIND_EVEN_ODD
-                    : java.awt.geom.Path2D.WIND_NON_ZERO);
+                    ? Path2D.WIND_EVEN_ODD
+                    : Path2D.WIND_NON_ZERO);
             g.setPaint(FillPaintBuilder.fillToPaint(p.fill(), 0, 0, p.w(), p.h()));
             g.fill(path);
         }
@@ -48,10 +49,8 @@ public final class PathRenderer implements ElementRenderer {
             g.setColor(strokeColor);
             java.awt.Stroke prevStroke = g.getStroke();
             // path 有 arrow marker 时直线末端用 CAP_BUTT（平切端）：
-            // CAP_ROUND 会在 path end (arrow apex) 处画一个 r=strokeWidth/2 的半圆，
-            // 半圆中心 = arrow apex 位置但伸出 apex 朝外，跟 arrow V 形顶尖**视觉重叠**，
-            // 粗 stroke 时整个箭头看起来"糊在一起"。BUTT cap 让直线末端是平切矩形，跟 arrow base 对接
-            // 干净，无半圆突出；arrow 三角形 fill 完整覆盖直线末段，V 头清晰。
+            // CAP_ROUND 会在 path end 处画一个 r=strokeWidth/2 的半圆并伸出端点外侧，
+            // 与 arrow V 形底边视觉重叠；BUTT cap 让直线末端平切对接 arrow 底边，V 头清晰。
             // 对无 arrow marker 的 path，ROUND cap 保留（避免改变其他 path 视觉）。
             boolean hasArrowMarker = "arrow".equals(p.markerEnd())
                     || "arrow".equals(p.markerStart());

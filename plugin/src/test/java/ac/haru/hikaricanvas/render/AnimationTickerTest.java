@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link AnimationTicker} 单测（0.6 P2）。线程模型与播放语义见 {@code docs/architecture.md §5.5}
+ * {@link AnimationTicker} 单测。线程模型与播放语义见 {@code docs/architecture.md §5.5}
  * 与 {@code docs/timeline.md §3.1 / §5.2}。
  *
  * <p><b>确定性策略：</b>注入 fake {@code WallSource}（内存 Map，不碰 SQLite）+ fake
@@ -207,7 +207,7 @@ class AnimationTickerTest {
     @Test
     void autoRegisterAll_skipsNonManualTrigger() {
         FakeWallSource src = new FakeWallSource();
-        // 0.6 P5：VARIABLE_CHANGE + LOOP 启动期不自动播（由 TimelineTriggerRegistry 在变量变化时驱动）
+        // VARIABLE_CHANGE + LOOP 启动期不自动播（由 TimelineTriggerRegistry 在变量变化时驱动）
         TriggerConfig vc = new TriggerConfig(TriggerType.VARIABLE_CHANGE, Map.of("fullName", "user/hp"));
         src.walls.put("w-1", wall("w-1", stateWith("e-1", LoopMode.LOOP, "tl-1", 1, vc)));
         AnimationTicker t = newTicker(src, new FakeRenderer());
@@ -528,9 +528,9 @@ class AnimationTickerTest {
         assertNull(null);   // sanity
     }
 
-    // ---------- P2 审查修复回归（确定性语义面；真并发交错由锁内成员资格复核结构性排除） ----------
+    // ---------- 生命周期与状态同步语义 ----------
 
-    /** 审查 #0：stopWall 后 play 必须建全新 entry 并恢复 gate 可见性（不会粘在被摘除的旧 entry 上）。 */
+    /** stopWall 后 play 必须建全新 entry 并恢复 gate 可见性（不会粘在被摘除的旧 entry 上）。 */
     @Test
     void playAfterStopCreatesFreshEntry() {
         FakeWallSource src = new FakeWallSource();
@@ -546,7 +546,7 @@ class AnimationTickerTest {
         assertEquals(1, t.registeredCount());
     }
 
-    /** 审查 #1：play（非 resume）不直接动 diff，置标志由下一 tick 在 Ticker 线程 reset。 */
+    /** play（非 resume）不直接动 diff，置标志由下一 tick 在 Ticker 线程 reset。 */
     @Test
     void replayResetsDiffOnNextTickNotInline() {
         FakeWallSource src = new FakeWallSource();
@@ -574,7 +574,7 @@ class AnimationTickerTest {
         assertTrue(diffWasNullOnEntry[0], "重播后的首帧 diff 由 Ticker 线程 reset（全量基准重建）");
     }
 
-    /** 审查 #13：暂停态 entry 的 timeline 被删除后，invalidate 当场清理 stale 条目。 */
+    /** 暂停态 entry 的 timeline 被删除后，invalidate 当场清理 stale 条目。 */
     @Test
     void invalidatePausedEntryWithDeletedTimelineRemoves() {
         FakeWallSource src = new FakeWallSource();
@@ -596,7 +596,7 @@ class AnimationTickerTest {
         assertEquals(0, t.registeredCount(), "暂停态 stale 条目被当场清理");
     }
 
-    /** 审查 #3/#6/#8：gate 回调 onReactiveYield = invalidate（被吸收的 reactive 意图转重载+全量补发）。 */
+    /** gate 回调 onReactiveYield = invalidate（被吸收的 reactive 意图转重载+全量补发）。 */
     @Test
     void onReactiveYieldInvalidates() {
         FakeWallSource src = new FakeWallSource();
@@ -615,16 +615,12 @@ class AnimationTickerTest {
         assertEquals(Integer.MIN_VALUE, r.lastX(), "重载后渲染新 state（e-1 已不存在）");
     }
 
-    // ---------- P2-6：clearStaticDiff 线程契约（孤儿 FrameDiff 泄漏） ----------
+    // ---------- clearStaticDiff 线程契约（孤儿 FrameDiff 防护） ----------
 
     /**
-     * P2-6 回归：补间末帧序列「先 renderStatic（异步投 Ticker 线程 computeIfAbsent 建 diff）
-     * 再 clearStaticDiff」后，staticDiffs <b>不</b>得残留该 wall 条目。
-     *
-     * <p>旧实现 clearStaticDiff 在调用线程同步 remove → 排在异步 renderStatic 的 computeIfAbsent
-     * <b>之前</b>执行 → 该条目永不被清（每个静态墙补间完泄漏一条 byte[mapCount][16384]）。
-     * 修复后 clearStaticDiff 同走 scheduler.execute，单线程 FIFO 保证 remove 排在 computeIfAbsent
-     * 之后，孤儿条目被关死。</p>
+     * 补间末帧序列「先 renderStatic（异步投 Ticker 线程 computeIfAbsent 建 diff）
+     * 再 clearStaticDiff」后，staticDiffs <b>不</b>得残留该 wall 条目：
+     * clearStaticDiff 与 renderStatic 同走单线程 scheduler FIFO，保证 remove 排在 computeIfAbsent 之后。
      */
     @Test
     void clearStaticDiffAfterRenderStatic_leavesNoOrphan() {
@@ -649,8 +645,7 @@ class AnimationTickerTest {
     }
 
     /**
-     * P2-6 子项：renderStatic 单独投递（无后续 clear）确实会建一条 diff——
-     * 反向锚定「上面那条测试的 0 残留是 clear 真生效，而非 renderStatic 根本没建 diff」。
+     * renderStatic 单独投递（无后续 clear）确实会建一条 diff，确认上方 0 残留来自 clear 生效。
      */
     @Test
     void renderStaticAlone_createsStaticDiff() {

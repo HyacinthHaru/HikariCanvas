@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P4-A：blockTree 树操作单测。
+ * blockTree 树操作单测。
  *
  * <p>纯函数（无 Vue / DOM），vitest node 跑。重点：path 与后端 trace blockId 逐字符同构
  * （权威 ScriptRunner.java：顶层 {@code actions/i}、if 分支 {@code <ifPath>/then|else/i}）。
@@ -203,7 +203,7 @@ describe('blockTree.replaceAt', () => {
         expect(getAt(next, ['actions', '1', 'else', '0'])).toEqual({ type: 'log', message: 'E0!' });
     });
 
-    it('merge repeat body 内叶子（0.7.1 bug 根因覆盖）', () => {
+    it('merge repeat body 内叶子', () => {
         const a: ScriptAction[] = [
             repeatBlock(3, [{ type: 'incrementVariable', fullName: 'user/score', delta: 1 }]),
         ];
@@ -385,7 +385,7 @@ describe('blockTree.ifDepth', () => {
     });
 });
 
-// ---------- 0.7.1-P2：repeat 的 body 子序列（第三个嵌套序列键，与后端 ScriptRunner 同构）----------
+// ---------- repeat 的 body 子序列（与后端 ScriptRunner 同构）----------
 
 const repeatBlock = (count: number, body: ScriptAction[]): ScriptAction =>
     ({ type: 'repeat', count, body });
@@ -483,7 +483,7 @@ describe('blockTree.repeat body 导航（getAt / insertAt / removeAt / moveNode 
     });
 });
 
-// ---------- 0.7.2-P3：repeatUntil 的 body 子序列（与 repeat 共用 'body' 键 + isBodyContainer 泛化）----------
+// ---------- repeatUntil 的 body 子序列（共用 'body' 键 + isBodyContainer）----------
 
 const repeatUntilBlock = (condition: string, maxIterations: number, body: ScriptAction[]): ScriptAction =>
     ({ type: 'repeatUntil', condition, maxIterations, body });
@@ -550,7 +550,7 @@ describe('blockTree.repeatUntil body 导航（与 repeat 同走 isBodyContainer�
     });
 });
 
-// ---------- tween-P1：tweenBlock 的 body 子序列（照 repeatUntil 范式，共用 isBodyContainer）----------
+// ---------- tweenBlock 的 body 子序列（共用 isBodyContainer）----------
 
 import type { Easing } from '@/types/protocol';
 
@@ -626,7 +626,7 @@ describe('blockTree.tweenBlock body 导航（与 repeat/repeatUntil 同走 isBod
     });
 });
 
-// ---------- 0.7.3：randomBranch 双臂容器（照 if，then/else 路径同构）----------
+// ---------- randomBranch 双臂容器（与 if 的 then/else 路径同构）----------
 
 describe('blockTree — randomBranch 双臂容器', () => {
     /** 构造 randomBranch 节点。 */

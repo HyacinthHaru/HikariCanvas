@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P4-D2：buildSlots 纯逻辑 + collectSlots（happy-dom）单测。
+ * buildSlots 纯逻辑 + collectSlots（happy-dom）+ isTweenBodySlotAllowed 单测。
  *
  * <p>{@link buildSlots} 是"已测块矩形 → SlotRect[]"的纯推导（无 DOM）：验证序列 before 插槽
  * 枚举 / 尾插槽 / if 子序列槽 / 空容器占位槽 / <b>排除被拖块自身及其子树</b>。{@link collectSlots}
@@ -8,7 +8,7 @@
  * getBoundingClientRect，验证 DOM → buildSlots 接线正确。</p>
  */
 import { describe, expect, it } from 'vitest';
-import { buildSlots, collectSlots, type MeasuredBlock } from '../useBlockDrag';
+import { buildSlots, collectSlots, isTweenBodySlotAllowed, type MeasuredBlock } from '../useBlockDrag';
 import type { SlotRect } from '@/script/model/dropTarget';
 
 /** 造一个真实块测量项（矩形随便给，纯逻辑只看 path/kind/ruleId 推导落点）。 */
@@ -236,5 +236,76 @@ describe('collectSlots（happy-dom）— DOM 测量接线', () => {
         expect(keys).not.toContain('actions/1/then#0');
         expect(keys).not.toContain('actions/1/then#1');
         expect(keys).toContain('actions#0');
+    });
+});
+
+// ---------- isTweenBodySlotAllowed ----------
+
+function tweenBodySlot(): SlotRect {
+    return {
+        stackRuleId: 'r1',
+        parentPath: ['actions', '0', 'body'],
+        index: 0,
+        x: 0, y: 0, w: 200, h: 14,
+        containerBlockType: 'tweenBlock',
+    };
+}
+
+function topLevelSlot(): SlotRect {
+    return {
+        stackRuleId: 'r1',
+        parentPath: ['actions'],
+        index: 1,
+        x: 0, y: 0, w: 200, h: 14,
+    };
+}
+
+function repeatBodySlot(): SlotRect {
+    return {
+        stackRuleId: 'r1',
+        parentPath: ['actions', '1', 'body'],
+        index: 0,
+        x: 0, y: 0, w: 200, h: 14,
+        containerBlockType: 'repeat',
+    };
+}
+
+describe('isTweenBodySlotAllowed — tweenBlock body 约束', () => {
+    it('非 tweenBlock 插槽（顶层 actions）→ 任何积木允许', () => {
+        const slot = topLevelSlot();
+        expect(isTweenBodySlotAllowed('sendMessage', slot)).toBe(true);
+        expect(isTweenBodySlotAllowed('if', slot)).toBe(true);
+        expect(isTweenBodySlotAllowed('tweenBlock', slot)).toBe(true);
+    });
+
+    it('repeat body 插槽 → 任何积木允许（repeat 无白名单限制）', () => {
+        const slot = repeatBodySlot();
+        expect(isTweenBodySlotAllowed('sendMessage', slot)).toBe(true);
+        expect(isTweenBodySlotAllowed('moveTo', slot)).toBe(true);
+    });
+
+    it('tweenBlock body：可补间友好积木（moveTo / resize / rotateTo / setOpacity / setColor）→ 允许', () => {
+        const slot = tweenBodySlot();
+        expect(isTweenBodySlotAllowed('moveTo', slot)).toBe(true);
+        expect(isTweenBodySlotAllowed('resize', slot)).toBe(true);
+        expect(isTweenBodySlotAllowed('rotateTo', slot)).toBe(true);
+        expect(isTweenBodySlotAllowed('setOpacity', slot)).toBe(true);
+        expect(isTweenBodySlotAllowed('setColor', slot)).toBe(true);
+    });
+
+    it('tweenBlock body：非可补间积木（setText / show / hide / sendMessage / if / tweenBlock / wait）→ 拒绝', () => {
+        const slot = tweenBodySlot();
+        expect(isTweenBodySlotAllowed('setText', slot)).toBe(false);
+        expect(isTweenBodySlotAllowed('show', slot)).toBe(false);
+        expect(isTweenBodySlotAllowed('hide', slot)).toBe(false);
+        expect(isTweenBodySlotAllowed('sendMessage', slot)).toBe(false);
+        expect(isTweenBodySlotAllowed('if', slot)).toBe(false);
+        expect(isTweenBodySlotAllowed('tweenBlock', slot)).toBe(false);
+        expect(isTweenBodySlotAllowed('wait', slot)).toBe(false);
+    });
+
+    it('tweenBlock body：setElementProperties 按 actionKind 判定（moveTo 允许，setText 拒绝）', () => {
+        expect(isTweenBodySlotAllowed('setElementProperties', tweenBodySlot(), 'moveTo')).toBe(true);
+        expect(isTweenBodySlotAllowed('setElementProperties', tweenBodySlot(), 'setText')).toBe(false);
     });
 });

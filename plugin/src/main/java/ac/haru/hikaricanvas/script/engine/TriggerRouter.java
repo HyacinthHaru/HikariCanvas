@@ -5,11 +5,15 @@ import ac.haru.hikaricanvas.script.ScriptStore;
 import ac.haru.hikaricanvas.script.Trigger;
 import ac.haru.hikaricanvas.variable.VariableStore;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
@@ -20,11 +24,11 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 脚本触发器路由（{@code docs/scripting.md §3}）。3 触发器落地：
+ * 脚本触发器路由（{@code docs/scripting.md §3}），覆盖全部 9 种触发器：
  *
  * <ul>
  *   <li><b>variableChange</b>：倒排索引 {@code 解析后 fullName → Set<RuleRef>}
- *       （照 {@link ac.haru.hikaricanvas.render.TimelineTriggerRegistry} 范式）。
+ *       （与 {@link ac.haru.hikaricanvas.render.TimelineTriggerRegistry} 同构）。
  *       {@link #onVariableChange} 由 {@code VariableStore.fireChange} 同步回调，
  *       只在"值真的变了"（VALUE_SET / UPDATED / CREATED）时 O(1) 查表投递。</li>
  *   <li><b>timer</b>：自持单线程 daemon 调度器（{@code hikari-script-trigger}）
@@ -34,11 +38,14 @@ import java.util.logging.Logger;
  *       runner 单线程串行执行重活，timer 到期不该排在 wait 续接后面才投递。</li>
  *   <li><b>wallReady</b>：不进索引——{@link #fireWallReady} 时直查 {@code store.listByWall}
  *       （两触发点：启动恢复成功墙 + {@code SessionManager.confirm} 部署完成）。</li>
- *   <li><b>playerJoin / playerKill</b>：全局触发索引
- *       {@code Set<RuleRef>} 两枚——事件不带墙语义，到达时遍历全服该型规则
+ *   <li><b>playerJoin / playerKill / playerQuit</b>：全局触发索引
+ *       {@code Set<RuleRef>}——事件不带墙语义，到达时遍历全服该型规则
  *       （规则量受 per-wall 配额约束，O(全服规则) 可接受）。事件入口集中在
  *       {@link GameEventListenerHub}（主线程 MONITOR），本类 fire 方法只做
- *       store.find 最新 + enabled 判定 + submit。</li>
+ *       {@code store.find} 最新 + enabled 判定 + submit。</li>
+ *   <li><b>rightClickWall</b>：按墙索引 {@code wallId → Set<RuleRef>}，仅命中被右键画框所属墙。</li>
+ *   <li><b>playerNear / playerLeaveRange</b>：重建期解析墙原点产出 {@link NearEntry} 快照，
+ *       由 {@link PlayerNearSampler} 按进入沿 / 离开沿周期采样后回调 {@link #firePlayerNear}。</li>
  * </ul>
  *
  * <p><b>索引只存引用（防 stale rule）</b>：{@code RuleRef = (wallId, ruleId)}，触发时刻
@@ -78,7 +85,7 @@ public final class TriggerRouter {
     }
 
     /** 墙原点（世界 UUID + 坐标；playerNear 距离判定基准点）。 */
-    public record WallOrigin(java.util.UUID worldId, double x, double y, double z) {}
+    public record WallOrigin(UUID worldId, double x, double y, double z) {}
 
     /**
      * 墙原点数据源 seam（照 {@code AnimationTicker.WallSource} 范式）：
@@ -101,7 +108,7 @@ public final class TriggerRouter {
      * （playerLeaveRange）只在离开沿触发——两者共享同一采样器与状态表，按本字段分沿。
      */
     public record NearEntry(String wallId, String ruleId, int rangeBlocks,
-                            java.util.UUID worldId, double x, double y, double z,
+                            UUID worldId, double x, double y, double z,
                             boolean leaveEdge) {}
 
     /**
@@ -149,12 +156,12 @@ public final class TriggerRouter {
      */
     private final Map<String, Set<RuleRef>> rightClickByWall = new ConcurrentHashMap<>();
     /** wallId → 该墙的 playerNear 条目（rebuild 期解析好原点）。 */
-    private final Map<String, java.util.List<NearEntry>> nearByWall = new ConcurrentHashMap<>();
+    private final Map<String, List<NearEntry>> nearByWall = new ConcurrentHashMap<>();
     /**
      * near 条目扁平快照（volatile 整体替换，照 byFullName 的快照替换纪律）：
      * {@link PlayerNearSampler} 每轮采样无锁读 {@link #nearRules}，不碰结构锁。
      */
-    private volatile java.util.List<NearEntry> nearSnapshot = java.util.List.of();
+    private volatile List<NearEntry> nearSnapshot = List.of();
 
     /** 生产装配：自建单线程 daemon 调度器（线程名 {@code hikari-script-trigger}）。 */
     public TriggerRouter(ScriptStore store, ScriptRunner runner, FullNameResolver resolver,
@@ -218,7 +225,7 @@ public final class TriggerRouter {
             return;
         }
         int n = 0;
-        for (Map.Entry<String, java.util.List<ScriptRule>> e : store.snapshotAll().entrySet()) {
+        for (Map.Entry<String, List<ScriptRule>> e : store.snapshotAll().entrySet()) {
             for (ScriptRule r : e.getValue()) {
                 if (!r.enabled()) continue;
                 registerRuleSafely(e.getKey(), r);
@@ -379,7 +386,7 @@ public final class TriggerRouter {
      * near 条目扁平快照（{@link PlayerNearSampler} 每轮采样无锁读）。
      * volatile 整体替换 + 不可变 List——采样线程读到的永远是某次 rebuild 的完整一致视图。
      */
-    public java.util.List<NearEntry> nearRules() {
+    public List<NearEntry> nearRules() {
         return nearSnapshot;
     }
 
@@ -484,7 +491,7 @@ public final class TriggerRouter {
                     + wallId + " rule=" + rule.id());
             return;
         }
-        nearByWall.computeIfAbsent(wallId, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+        nearByWall.computeIfAbsent(wallId, k -> new CopyOnWriteArrayList<>())
                 .add(new NearEntry(wallId, rule.id(), rangeBlocks,
                         origin.worldId(), origin.x(), origin.y(), origin.z(), leaveEdge));
     }
@@ -562,14 +569,14 @@ public final class TriggerRouter {
     /** 重建 near 扁平快照（任何 nearByWall 结构变更后调，仅 synchronized 内）。 */
     private void refreshNearSnapshotLocked() {
         if (nearByWall.isEmpty()) {
-            nearSnapshot = java.util.List.of();
+            nearSnapshot = List.of();
             return;
         }
-        java.util.List<NearEntry> flat = new java.util.ArrayList<>();
-        for (java.util.List<NearEntry> entries : nearByWall.values()) {
+        List<NearEntry> flat = new ArrayList<>();
+        for (List<NearEntry> entries : nearByWall.values()) {
             flat.addAll(entries);
         }
-        nearSnapshot = java.util.List.copyOf(flat);
+        nearSnapshot = List.copyOf(flat);
     }
 
     private void cancelAllTimersLocked() {

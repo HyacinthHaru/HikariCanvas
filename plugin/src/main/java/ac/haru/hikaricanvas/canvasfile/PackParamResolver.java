@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -23,7 +25,7 @@ import java.util.regex.Pattern;
  *       {@link Interpolator}，含 16KB 单值上限 / 1MB 净膨胀上限）。</li>
  * </ol>
  *
- * <p><b>为何是纯文本替换（D3）：</b>参数化不挑字段。数值字段以字符串形态写占位符
+ * <p><b>为何是纯文本替换：</b>参数化不挑字段。数值字段以字符串形态写占位符
  * （{@code "x": "${off}"}），替换成 {@code "x": "10"} 后交给 {@link ProjectMaterializer} —— Jackson
  * scalar coercion 默认开，{@code "10"} 自动解析回 int。故本类不做类型感知的字段定位，只在 JSON 文本上
  * 跑一遍占位符替换。{@code ${param}} 无冒号、运行时 {@code ${var:X}} 有冒号，二者天然共存，替换只吃前者。</p>
@@ -65,7 +67,7 @@ public final class PackParamResolver {
      * 合法的参数类型全集。1.0 起冻结的契约——**不要往里加**，加了会让已导出的用户 pack
      * 在旧版本插件上打不开。这里只用来在解析期拒掉缺失 / 拼错的 type。
      */
-    private static final java.util.Set<String> VALID_TYPES = java.util.Set.of(
+    private static final Set<String> VALID_TYPES = Set.of(
             "string", "text", "int", "float", "bool", "color", "enum", "font");
 
     private PackParamResolver() {
@@ -73,8 +75,8 @@ public final class PackParamResolver {
 
     /**
      * 单条参数声明：{@code id}（占位符名）+ 复用的 {@link TemplateParam}（类型 + 校验元数据）。
-     * {@code id} 单独抽出 —— {@code TemplateParam} 记录本身不含 id（在旧模板里它是 Map 的 key），
-     * 而 pack 的 {@code params.json} 把 id 写进每个条目对象。
+     * {@code id} 单独抽出 —— {@code TemplateParam} 记录本身不含 id，而 pack 的 {@code params.json}
+     * 把 id 写进每个条目对象。
      */
     public record ParamDef(String id, TemplateParam param) {
     }
@@ -82,12 +84,8 @@ public final class PackParamResolver {
     /**
      * 解析 {@code params.json}（JSON 数组）为声明列表。每个条目读 {@code id}（必填、非空白），
      * 其余字段映射为 {@link TemplateParam}（record 上有 {@code @JsonIgnoreProperties(ignoreUnknown)}，
-     * 条目里的 {@code id} 被记录映射无害忽略，故这里单独抽 id）。
-     *
-     * <p>{@code type} 同样必填且必须在 {@link #VALID_TYPES} 内。缺 type 的 pack 以前能顺利注册进
-     * Gallery，直到套用时才在类型 switch 上 NPE——HTTP 导入退化成 500、WS {@code template.apply}
-     * 更糟（一帧回音都没有，前端只能挂等超时）。在解析期就拒掉，报错也说得清是哪个参数。
-     * 注意这不是给类型体系加约束：null / 拼错的值本来就不在契约里。</p>
+     * 条目里的 {@code id} 被记录映射无害忽略，故这里单独抽 id）；{@code type} 必填且必须在
+     * {@link #VALID_TYPES} 内。
      *
      * @throws CanvasImportException {@code IMPORT_MALFORMED} —— JSON 坏、非数组、条目非对象、
      *         缺 id，或 type 缺失 / 不在合法取值内
@@ -174,7 +172,7 @@ public final class PackParamResolver {
      * <p><b>替换值按 JSON 字符串转义：</b>project.json 是 JSON，占位符一律嵌在字符串字面量里
      * （数值字段也以 {@code "${x}"} 形态写，靠 materialize 的 Jackson coercion 解回数值）。若把
      * 含引号 / 反斜杠 / 换行的值（多行招牌、带引号文案）裸插进去会破坏 JSON 结构，故先按 JSON 字符串
-     * 转义再替换。纯数字值转义后不变，D3 数值 coercion 不受影响。</p>
+     * 转义再替换。纯数字值转义后不变，数值 coercion 不受影响。</p>
      */
     public static String substitute(String projectJson, Map<String, Object> values)
             throws CanvasImportException {
@@ -320,7 +318,7 @@ public final class PackParamResolver {
 
     /**
      * 只读字符序列包装：每次 {@code charAt} 计一步，超过预算就抛 {@link StepLimitExceeded}。
-     * 正则引擎的回溯全部体现为反复读字符，故这是给 {@link java.util.regex.Matcher} 上硬闸的
+     * 正则引擎的回溯全部体现为反复读字符，故这是给 {@link Matcher} 上硬闸的
      * 标准做法——比起另起线程 + 超时，它确定、可测，也不留悬挂线程。
      */
     private static final class StepLimited implements CharSequence {

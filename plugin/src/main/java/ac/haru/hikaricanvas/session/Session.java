@@ -46,12 +46,7 @@ public final class Session {
     private volatile SessionState state;
     private volatile Block pos1;
     private volatile Block pos2;
-    /**
-     * 两次点击各自的朝向。<b>必须分开记</b>：原先只有一个 face 字段、两次点击都往里写，
-     * 第二次点击会把第一次的朝向直接覆盖掉，于是 {@code WallResolver} 拿到的两个 face 参数
-     * 恒等，{@code NORMAL_MISMATCH}（两角朝向不一致）这条校验永远命中不了 ——
-     * 玩家先点北面再点东面，系统一声不吭地按东面建墙。
-     */
+    /** 两次点击各自的朝向，供 {@link WallResolver} 做两角法线一致性校验。 */
     private volatile BlockFace pos1Face;
     private volatile BlockFace pos2Face;
     private volatile WallResolver.Result.Ok wall;
@@ -65,7 +60,7 @@ public final class Session {
     /**
      * 会话级 IP 绑定。首次 WS auth 成功时设值；后续 reconnect 必须 IP 同源。
      * null = 尚未首次 auth；非 null = 已绑定，认 IP 字符串严格相等。
-     * 见 CLAUDE.md §lock-state 后的 IP 绑定决策。
+     * 契约见 {@code docs/security.md §2.5}。
      */
     private volatile String boundIp;
     /**

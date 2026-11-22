@@ -1,5 +1,5 @@
 /**
- * 0.4.0-P2-H pickerLogic 单测。
+ * pickerLogic 单测。
  *
  * 纯函数逻辑（无 Vue / DOM），直接 vitest node 跑。
  *
@@ -60,12 +60,12 @@ describe('buildGroups', () => {
         mkVar('papi', '%player_name%'),
     ];
 
-    // 0.4.3：按 id 查组，让测试不依赖 group 数组 index（未来加组无需逐一改测试）
+    // 按 id 查组，让测试不依赖 group 数组 index（未来加组无需逐一改测试）
     function groupItems(groups: ReturnType<typeof buildGroups>, id: string) {
         return groups.find((g) => g.id === id)?.items ?? [];
     }
 
-    it('6 组分类 + 跨 wall user 隔离（0.4.3 新增 myGlobal / othersGlobal）', () => {
+    it('6 组分类 + 跨 wall user 隔离（含 myGlobal / othersGlobal）', () => {
         const groups = buildGroups(vars, 'w-abc', '');
         expect(groups.map((g) => g.id))
             .toEqual(['mine', 'myGlobal', 'othersGlobal', 'plugin', 'system', 'papi']);
@@ -101,7 +101,7 @@ describe('buildGroups', () => {
         expect(totalCount(groups)).toBe(4);  // 不过滤
     });
 
-    // 0.4.2：alias 参与 keyword 命中
+    // alias 参与 keyword 命中
     it('keyword 命中 alias（Record 形态）', () => {
         const aliases: Record<string, string> = {
             'system/server.time': '服务器时间',
@@ -144,7 +144,7 @@ describe('buildGroups', () => {
         expect(totalCount(groups)).toBe(0);  // 没有 fullName 含 "红队"
     });
 
-    // 0.4.3：userglobal 分组 + owner 区分
+    // userglobal 分组 + owner 区分
     it('userglobal 分到 myGlobal / othersGlobal（按 owner = selfUuid）', () => {
         const SELF = '11111111-1111-1111-1111-111111111111';
         const OTHER = '22222222-2222-2222-2222-222222222222';
@@ -187,9 +187,9 @@ describe('flattenGroups / totalCount', () => {
     });
 });
 
-// ---------- P3-M metadata 合并 ----------
+// ---------- metadata 合并 ----------
 
-describe('declaredKeyToVariable (P3-M)', () => {
+describe('declaredKeyToVariable', () => {
     it('生成完整 Variable 骨架（cached/default 留 null）', () => {
         const v = declaredKeyToVariable('system', {
             key: 'server.time',
@@ -212,7 +212,7 @@ describe('declaredKeyToVariable (P3-M)', () => {
     });
 });
 
-describe('mergeMetadata (P3-M)', () => {
+describe('mergeMetadata', () => {
     const metadata: NamespaceMetadata[] = [
         {
             namespace: 'user:w-abc',
@@ -300,7 +300,7 @@ describe('mergeMetadata (P3-M)', () => {
     });
 });
 
-describe('isDynamicNamespace (P3-M)', () => {
+describe('isDynamicNamespace', () => {
     const metadata: NamespaceMetadata[] = [
         { namespace: 'system', displayName: 'System', dynamic: false, keys: [] },
         { namespace: 'scoreboard', displayName: 'Scoreboard', dynamic: true, keys: [] },
@@ -324,11 +324,11 @@ describe('isDynamicNamespace (P3-M)', () => {
 
 // ---------- buildGroups 接入 mergeMetadata 后行为不变 ----------
 
-describe('buildGroups + merged metadata (P3-M)', () => {
+describe('buildGroups + merged metadata', () => {
     function groupById(groups: ReturnType<typeof buildGroups>, id: string) {
         return groups.find((g) => g.id === id)?.items ?? [];
     }
-    it('用 mergeMetadata 输出走 buildGroups 仍按 id 分类正确（0.4.3 6 组）', () => {
+    it('用 mergeMetadata 输出走 buildGroups 仍按 id 分类正确（6 组）', () => {
         const metadata: NamespaceMetadata[] = [
             {
                 namespace: 'user:w-abc',
@@ -360,9 +360,9 @@ describe('buildGroups + merged metadata (P3-M)', () => {
     });
 });
 
-// ---------- 0.7.4：rail + manual 共享 schedule namespace（幽灵变量根因修复） ----------
+// ---------- rail + manual 共享 schedule namespace ----------
 
-describe('schedule namespace merge (rail + manual, 0.7.4)', () => {
+describe('schedule namespace merge (rail + manual)', () => {
     // 后端 VariableMetadataHandler 现以 storeNamespacePrefix 下发：manual + rail 都报 namespace="schedule"
     // （rail daemon key 是 schedule_rail，但前端只看 namespace 字段）。两块 key 不相交。
     const metadata: NamespaceMetadata[] = [

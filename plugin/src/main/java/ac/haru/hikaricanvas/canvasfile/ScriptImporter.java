@@ -7,6 +7,7 @@ import ac.haru.hikaricanvas.script.Action;
 import ac.haru.hikaricanvas.script.ScriptRule;
 import ac.haru.hikaricanvas.script.ScriptRuleValidator;
 import ac.haru.hikaricanvas.script.ScriptStore;
+import ac.haru.hikaricanvas.script.ValidationError;
 import ac.haru.hikaricanvas.script.engine.ConditionEvaluator;
 
 import java.util.ArrayList;
@@ -110,8 +111,7 @@ public final class ScriptImporter {
             //    ImportWarning.detail 语义即"稳定的具体对象码，前端据此选大白话文案"——故 detail
             //    存 ValidationError 的稳定 key（+ 参数附注）而非渲染后语句；前端 script-invalid
             //    文案已本地化外层句子（见 web/src/i18n/messages.ts）。
-            Optional<ac.haru.hikaricanvas.script.ValidationError> structErr =
-                    ScriptRuleValidator.validate(rule);
+            Optional<ValidationError> structErr = ScriptRuleValidator.validate(rule);
             if (structErr.isPresent()) {
                 warnings.add(new ImportWarning("script-invalid",
                         describeValidationError(structErr.get())));
@@ -240,11 +240,11 @@ public final class ScriptImporter {
     }
 
     /**
-     * 把 {@link ac.haru.hikaricanvas.script.ValidationError} 压成稳定的 detail 字符串
+     * 把 {@link ValidationError} 压成稳定的 detail 字符串
      * （{@code key} 或 {@code key [k=v, ...]}），供 {@code script-invalid} 提示携带。
      * 无 locale 渲染（导入路径无 session）——前端外层句子已本地化，detail 是稳定具体对象码。
      */
-    private static String describeValidationError(ac.haru.hikaricanvas.script.ValidationError ve) {
+    private static String describeValidationError(ValidationError ve) {
         if (ve.params().isEmpty()) return ve.key();
         StringBuilder sb = new StringBuilder(ve.key()).append(" [");
         boolean first = true;

@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * R10：损坏 / 篡改的 {@code palette.json} 含负 / &gt;255 rgb 分量时，{@link PaletteLut} 构造器
+ * 损坏 / 篡改的 {@code palette.json} 含负 / &gt;255 rgb 分量时，{@link PaletteLut} 构造器
  * 应就地 clamp 到 [0,255] 而非抛异常（单条坏色不拖垮启动），且 {@link PaletteLut#matchColor}
  * 仍正常工作。正常 palette 行为不变。
  */

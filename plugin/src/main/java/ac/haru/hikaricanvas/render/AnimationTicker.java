@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -87,7 +88,7 @@ public final class AnimationTicker implements AnimationTickerGate {
         };
     }
 
-    /** 渲染出口 seam：实现 = CanvasProjector 侧（B1 装配）；测试可 fake。 */
+    /** 渲染出口 seam：实现 = {@link CanvasProjector}；测试可注入 fake。 */
     public interface FrameRenderer {
 
         /**
@@ -514,7 +515,7 @@ public final class AnimationTicker implements AnimationTickerGate {
         if (shutdown) return;
         try {
             scheduler.execute(() -> staticWalls.remove(wallId));
-        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+        } catch (RejectedExecutionException ignored) {
             // 关停竞态，随进程退出整体回收
         }
     }
@@ -537,7 +538,7 @@ public final class AnimationTicker implements AnimationTickerGate {
                 staticDiffs.remove(wallId);
                 staticWalls.remove(wallId);
             });
-        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+        } catch (RejectedExecutionException ignored) {
             // 关停竞态（scheduler 已 shutdown）——staticDiffs 会随进程退出整体回收，无需补救
         }
     }

@@ -20,19 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.7.0-P5-E（K-UI-10）：{@link CommandTemplateHandler} 单测。
- *
- * <p>覆盖：</p>
- * <ol>
- *   <li>未鉴权（sessionId 缺 / 空 / 不存在）→ 401</li>
- *   <li>有模板 → 返列表（含 id + params 的 name/type/maxLength），且 <b>response body 不含
- *       command 原文</b>（安全核心 — 见 {@code docs/scripting.md §5.2}）</li>
- *   <li>空配置 → {@code {"templates":[]}}</li>
- *   <li>params 形态（name/type/maxLength）正确</li>
- *   <li>{@code session} query 别名（K-UI-10 规格写法）也被接受</li>
- *   <li>template id + param name 按字母序稳定输出（Map.copyOf 不保证声明序）</li>
- *   <li>online-player 类型原样下发</li>
- * </ol>
+ * {@link CommandTemplateHandler} 鉴权、模板元数据脱敏（不含 command 原文）与排序单测。
  */
 class CommandTemplateHandlerTest {
 

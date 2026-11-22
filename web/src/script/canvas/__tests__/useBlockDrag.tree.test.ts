@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P4-D2：拖拽落树集成测（happy-dom）—— palette insert / 画布 move 写入 working copy。
+ * 拖拽落树集成测（happy-dom）—— palette insert / 画布 move 写入 working copy。
  *
  * <p>用真实 scriptEdit store（mock wsClient）+ 手搭画布 DOM（带 data-block-path / data-slot-path
  * / data-rule-id + stub getBoundingClientRect + stub setPointerCapture）+ effectScope 跑
  * useBlockDrag。驱动 start* → 模拟松手（pointerup 在目标插槽中心）→ 断言 {@code edit.workingCopy.actions}
- * 是正确新树（同序列重排 / 跨堆—本测单堆 / 进 if 槽 / palette 顶层插入）。</p>
+ * 是正确新树（同序列重排 / 单堆 / 进 if 槽 / palette 顶层插入）。</p>
  *
- * <p>验证 D2 与 blockTree.moveNode 契约对齐："toIndex 按移动前渲染树测量" = collectSlots 在
+ * <p>验证与 blockTree.moveNode 契约对齐："toIndex 按移动前渲染树测量" = collectSlots 在
  * pointerdown 时刻测，故下标补偿由 moveNode 自理，集成层无需再算。</p>
  */
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
@@ -65,7 +65,7 @@ function pointerEvt(type: string, clientX: number, clientY: number, target?: HTM
 }
 
 /**
- * 0.7.1 拖动阈值：block/stack 源 pointerdown 后须有一次"超阈值位移"才真正启动拖动。本 helper
+ * 拖动阈值：block/stack 源 pointerdown 后须有一次"超阈值位移"才真正启动拖动。本 helper
  * 派发一个远超 {@link DRAG_THRESHOLD} 的 window pointermove，把 pending 推进成真拖动态，之后才能
  * 走原有的"松手落树"断言。（不影响 palette 源——palette 无阈值。）
  */
@@ -150,7 +150,7 @@ describe('palette 源 → insertAt 顶层', () => {
 
         const acts = edit.workingCopy!.actions;
         expect(acts).toHaveLength(2);
-        // P5 实测修复（根因 2）：palette 拖出的 if 带非空合法默认 condition（拖出即合法）。
+        // palette 拖出的 if 带非空合法默认 condition（拖出即合法）。
         expect(acts[0]).toEqual({ type: 'if', condition: 'var("user/score") > 0', then: [], else: [] });
         expect(acts[1]).toEqual({ type: 'wait', ms: 100 });
     });
@@ -194,7 +194,7 @@ describe('画布源 → moveNode', () => {
         const drag = makeDrag();
         // 拖 actions/0（块 A）
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
-        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
+        crossThreshold(); // 超阈值才真正启动拖动
         // 落到顶层尾插槽 index=2（块 actions/1 下沿 y≈140+30-14=156，中心≈163）
         window.dispatchEvent(pointerEvt('pointerup', 140, 163));
 
@@ -218,7 +218,7 @@ describe('画布源 → moveNode', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
-        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
+        crossThreshold(); // 超阈值才真正启动拖动
         // 落到 before-0 槽（块 A 顶，中心≈107）= 自身原位
         window.dispatchEvent(pointerEvt('pointerup', 140, 107));
 
@@ -245,7 +245,7 @@ describe('画布源 → moveNode', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
-        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
+        crossThreshold(); // 超阈值才真正启动拖动
         // 落到 then 空槽中心（top 170, h 22, 中心 181；x 在 [30,260]）
         window.dispatchEvent(pointerEvt('pointerup', 140, 181));
 
@@ -275,7 +275,7 @@ describe('画布源 → moveNode', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
-        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
+        crossThreshold(); // 超阈值才真正启动拖动
         window.dispatchEvent(pointerEvt('pointerup', 140, 900));
 
         expect(edit.workingCopy!.actions.map((x) => (x.type === 'log' ? x.message : x.type))).toEqual(['A', 'B']);
@@ -393,7 +393,7 @@ describe('补间体内重排（画布源友好积木）', () => {
     });
 });
 
-describe('拖拽期冻结 server 回声（根因 3）', () => {
+describe('拖拽期冻结 server 回声', () => {
     it('startBlockDrag → edit.dragging=true；松手 → false', () => {
         const scripts = useScriptStore();
         scripts.upsert(makeRule([
@@ -410,7 +410,7 @@ describe('拖拽期冻结 server 回声（根因 3）', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
-        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
+        crossThreshold(); // 超阈值才真正启动拖动
         // 拖拽中：dragging 为真
         expect(edit.dragging).toBe(true);
         // 松手（任意位置）→ abortDrag 复位 dragging
@@ -448,7 +448,7 @@ describe('拖拽期冻结 server 回声（根因 3）', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
-        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
+        crossThreshold(); // 超阈值才真正启动拖动
         expect(edit.dragging).toBe(true);
         window.dispatchEvent(pointerEvt('pointercancel', 0, 0));
         expect(edit.dragging).toBe(false);
@@ -466,7 +466,7 @@ describe('拖拽期冻结 server 回声（根因 3）', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
-        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
+        crossThreshold(); // 超阈值才真正启动拖动
         // 拖拽中 server patch 回来（改 name）：不该替换本地 workingCopy（仍为 makeRule 给的 'r'）。
         scripts.upsert({ ...makeRule([{ type: 'log', message: 'A' }]), name: 'server拖拽中' });
         await nextTick();
@@ -507,7 +507,7 @@ describe('lock 守卫', () => {
 });
 
 /**
- * 拖动中缩放画布 → 缓存的插槽几何全部作废（#97）。
+ * 拖动中缩放画布 → 缓存的插槽几何全部作废。
  *
  * <p>插槽矩形是 pointerdown 那一刻量的屏幕坐标，整个拖动期复用（每帧重量会卡）。而 ctrl+滚轮缩放
  * 不是 PointerEvent，pointer capture 拦不住它：缩放后积木的屏幕位置全变了，吸附线还画在旧位置，

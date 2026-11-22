@@ -1,5 +1,5 @@
 /**
- * 0.7.0 P1 scriptStore 单测。
+ * scriptStore 单测。
  *
  * <p>纯 Pinia store 逻辑（无 Vue 组件 / DOM），用 vitest node 跑。覆盖 initScripts /
  * upsert（新增 + 覆盖保位置）/ removeRule / reset / get / listSorted 顺序 + size。</p>
@@ -128,7 +128,7 @@ describe('scriptStore', () => {
         expect(s.get('sr-full')).toEqual(rule);
     });
 
-    // ---------- 0.7.0-P3 A2（K11）：lastTrace ----------
+    // ---------- lastTrace ----------
 
     it('lastTrace 初始 null；setLastTrace 落表（detail 缺省 step 兼容）', () => {
         const s = useScriptStore();

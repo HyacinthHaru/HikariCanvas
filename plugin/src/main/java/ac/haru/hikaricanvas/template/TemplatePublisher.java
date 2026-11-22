@@ -1,8 +1,10 @@
 package ac.haru.hikaricanvas.template;
 
 import ac.haru.hikaricanvas.render.CanvasCompositor;
+import ac.haru.hikaricanvas.state.ImageElement;
 import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.storage.TemplateRepo;
+import ac.haru.hikaricanvas.template.preview.TemplatePreviewService;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -11,8 +13,10 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -41,17 +45,17 @@ public final class TemplatePublisher {
      * 缩略图服务。发布 / 删除后要清掉对应模板的内存缓存，否则 Gallery 拿到的还是旧图。
      * 它在装配顺序上晚于 publisher 构造，故走 setter；可为 null（测试装配不接）。
      */
-    private volatile ac.haru.hikaricanvas.template.preview.TemplatePreviewService previewService;
+    private volatile TemplatePreviewService previewService;
     /**
      * 图片字节来源：内容 hash → PNG 字节（生产接 {@code ImageStorage::readPngBytes}）。
      * 可为 null——那样存出来的模板不带图片，套用时原图被 LRU 驱逐就变空白。
      */
-    private volatile java.util.function.Function<String, byte[]> assetSource;
+    private volatile Function<String, byte[]> assetSource;
     /**
      * 脚本字节来源：wallId → {@code scripts.json} 字节（{@code ScriptRule[]} 数组）。
      * 可为 null / 返 null——那样存出来的模板不带脚本。
      */
-    private volatile java.util.function.Function<String, byte[]> scriptSource;
+    private volatile Function<String, byte[]> scriptSource;
 
     public TemplatePublisher(Logger log, Path dataFolder,
                              TemplateRegistry registry,
@@ -67,18 +71,17 @@ public final class TemplatePublisher {
     }
 
     /** 装配缩略图服务（HikariCanvas 在 TemplatePreviewService 建好后调）。 */
-    public void setPreviewService(
-            ac.haru.hikaricanvas.template.preview.TemplatePreviewService previewService) {
+    public void setPreviewService(TemplatePreviewService previewService) {
         this.previewService = previewService;
     }
 
     /** 装配图片字节来源（生产传 {@code imageStorage::readPngBytes}）；不装 = 存模板不带图片。 */
-    public void setAssetSource(java.util.function.Function<String, byte[]> assetSource) {
+    public void setAssetSource(Function<String, byte[]> assetSource) {
         this.assetSource = assetSource;
     }
 
     /** 装配脚本字节来源（wallId → scripts.json 字节）；不装 = 存模板不带脚本。 */
-    public void setScriptSource(java.util.function.Function<String, byte[]> scriptSource) {
+    public void setScriptSource(Function<String, byte[]> scriptSource) {
         this.scriptSource = scriptSource;
     }
 
@@ -169,7 +172,7 @@ public final class TemplatePublisher {
     }
 
     /**
-     * Hard delete：YAML + preview PNG + DB 行 + registry 重载。callerUuid + isAdmin 控制鉴权。
+     * Hard delete：{@code .canvas} pack + preview PNG + DB 行 + registry 重载。callerUuid + isAdmin 控制鉴权。
      */
     public Result delete(String templateId, UUID callerUuid, boolean isAdmin) {
         var rowOpt = repo.findById(templateId);
@@ -248,18 +251,18 @@ public final class TemplatePublisher {
     }
 
     /**
-     * 扫工程里所有 {@link ac.haru.hikaricanvas.state.ImageElement} 引用的图片，逐个取 PNG 字节。
+     * 扫工程里所有 {@link ImageElement} 引用的图片，逐个取 PNG 字节。
      *
      * <p>取不到的（文件已被 LRU 驱逐 / 读失败）跳过并记一条 warn——存模板本身照常成功，
      * 只是这张图没带上。{@code assetSource} 没装配时返回空 map。</p>
      */
     private Map<String, byte[]> collectAssets(ProjectState state) {
-        java.util.function.Function<String, byte[]> src = this.assetSource;
+        Function<String, byte[]> src = this.assetSource;
         if (src == null || state == null || state.layers() == null) return Map.of();
-        Map<String, byte[]> out = new java.util.LinkedHashMap<>();
+        Map<String, byte[]> out = new LinkedHashMap<>();
         for (var layer : state.layers()) {
             for (var el : layer.elements()) {
-                if (!(el instanceof ac.haru.hikaricanvas.state.ImageElement im)) continue;
+                if (!(el instanceof ImageElement im)) continue;
                 String hash = im.source();
                 if (hash == null || out.containsKey(hash)) continue;
                 byte[] png;
@@ -282,7 +285,7 @@ public final class TemplatePublisher {
 
     /** 取该墙的积木脚本序列化字节；来源没装配、没 wallId 或该墙无脚本时返 null。 */
     private byte[] collectScripts(String wallId) {
-        java.util.function.Function<String, byte[]> src = this.scriptSource;
+        Function<String, byte[]> src = this.scriptSource;
         if (src == null || wallId == null) return null;
         try {
             byte[] json = src.apply(wallId);

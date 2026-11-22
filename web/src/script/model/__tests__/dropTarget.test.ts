@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P4-A：dropTarget 吸附几何单测（纯逻辑，vitest node）。
+ * dropTarget 吸附几何单测（纯逻辑，vitest node）。
  */
 import { describe, expect, it } from 'vitest';
 import { findDropTarget, type SlotRect } from '../dropTarget';

@@ -158,8 +158,7 @@ class BayerDitherTest {
 
     @Test
     void nullPaletteColorFallsBackToTransparentNotSkip() {
-        // R9：getColor(matched) 返 null 时旧代码 `continue` 静默保留原色（画面 glitch）。
-        // 现要求 fallback 到 TRANSPARENT_INDEX 取色。构造一个 palette：entries[0] = 透明色
+        // getColor(matched) 返 null 时应 fallback 到 TRANSPARENT_INDEX 取色。构造一个 palette：entries[0] = 透明色
         // (TRANSPARENT_INDEX，rgb 全 0)，entries[1] = 不透明项但其 `index` 字段=200 > 数组长度，
         // 于是 matchColor 返 byte 200，getColor(200) 越界返 null → 触发 fallback 路径。
         PaletteLut.PaletteEntry transparent =

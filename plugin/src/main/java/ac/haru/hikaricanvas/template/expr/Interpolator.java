@@ -5,7 +5,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 字符串字段中 {@code ${param_name}} 占位符的插值。契约见 {@code docs/template-spec.md §6.1}。
+ * 字符串字段中 {@code ${param_name}} 占位符的插值。契约见 {@code docs/template-pack.md §3.4}。
  *
  * <p><b>规则：</b></p>
  * <ul>

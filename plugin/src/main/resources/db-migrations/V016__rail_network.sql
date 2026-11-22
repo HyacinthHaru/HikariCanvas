@@ -1,14 +1,14 @@
--- 0.4.4 P1：铁路网络 schema。详见 docs/dynamic-data.md §18。
+-- 铁路网络持久化表（详见 docs/dynamic-data.md §18）。
 --
--- 5 张表 + FK 级联：
---   rail_lines        线路（owner / 颜色 / 短代号）
---   rail_stations     站点（含 sort_order + is_terminus）
---   rail_runs         ★车次（run_number + service_type + cars + 区间 + notes）
---   rail_timetable    ★每车次每站精确到秒的到/发时刻（支持跳站、不均站距、区间车）
+-- 5 张表 + 外键级联：
+--   rail_lines          线路（owner / 颜色 / 短代号）
+--   rail_stations       站点（含 sort_order + is_terminus）
+--   rail_runs           车次（run_number + service_type + cars + 区间 + notes）
+--   rail_timetable      每车次每站精确到秒的到/发时刻（支持跳站、不均站距、区间车）
 --   wall_rail_bindings  wall → 线路 + 本站 + 方向
 --
--- 与 0.4.0 V012 wall_schedules 共存：wall_rail_bindings.line_id IS NULL 时，
--- RailScheduleProvider 走 fallback 到旧 ManualScheduleProvider（per-wall 时刻表）。
+-- 与 V012 wall_schedules 共存：wall_rail_bindings.line_id IS NULL 时，
+-- RailScheduleProvider 回退到 ManualScheduleProvider（单墙手动时刻表）。
 --
 -- 关键设计：rail_timetable 每行存"该车次到该站"的精确时刻（不是按 travel_seconds
 -- 均匀推算）。支持：站间不均、大站快车跳站（stops_here=0）、区间车不到全线。

@@ -15,8 +15,6 @@ import java.util.Set;
  *
  * <p>插值类别（rendering.md §9.2）：数值类（x/y/w/h/rotation/opacity）线性 + easing；
  * 颜色 / Fill 类 sRGB 线性空间分量插值；离散类（text）step 取最近帧。</p>
- *
- * @since 0.6
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonIgnoreProperties(ignoreUnknown = true)

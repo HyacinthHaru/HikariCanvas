@@ -2,6 +2,7 @@ package ac.haru.hikaricanvas.state;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -84,7 +85,7 @@ class RdpSimplifierTest {
     @Test
     void noisyLineSimplifiedToFewerPoints() {
         // 直线上加小噪声 → 较大 epsilon 应大幅压缩
-        List<BrushPoint> noisy = new java.util.ArrayList<>();
+        List<BrushPoint> noisy = new ArrayList<>();
         for (int i = 0; i < 20; i++) {
             // y = x + 微噪声（< 0.5）
             noisy.add(pt(i, i + (i % 3 == 0 ? 0.3 : -0.2), 0.5));

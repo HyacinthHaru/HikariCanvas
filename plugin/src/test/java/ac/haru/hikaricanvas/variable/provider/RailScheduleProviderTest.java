@@ -6,7 +6,7 @@ import ac.haru.hikaricanvas.rail.RailStation;
 import ac.haru.hikaricanvas.rail.RailTimetableEntry;
 import ac.haru.hikaricanvas.rail.WallRailBinding;
 import ac.haru.hikaricanvas.storage.RailDao;
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,8 +15,7 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
-import java.util.logging.Logger;
+import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -25,12 +24,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.4 P2：RailScheduleProvider 计算单测（mock DataSource）。
+ * {@link RailScheduleProvider} 铁路时刻表精确查询与变量推送单测。
  */
 class RailScheduleProviderTest {
 
     private static final String WALL = "w-rail";
-    private static final UUID OWNER = UUID.randomUUID();
 
     private FakeDataSource ds;
     private VariableStore store;
@@ -39,7 +37,7 @@ class RailScheduleProviderTest {
     @BeforeEach
     void setUp() {
         ds = new FakeDataSource();
-        store = new VariableStore(new FakeUserVarDao(), wid -> {});
+        store = new VariableStore(new NoopUserVariableDao(), wid -> {});
         provider = new RailScheduleProvider(store, ds,
                 HikariCanvasConfig.ScheduleConfig.defaults(), Locale.SIMPLIFIED_CHINESE);
     }
@@ -94,8 +92,7 @@ class RailScheduleProviderTest {
     }
 
     /**
-     * 0.7.3 P2-13：next_arrival / next_departure 是两个独立字段。
-     * 中间站 arrival_time ≠ departure_time → 两 key 分别等于两列且不相等。
+     * next_arrival / next_departure 是两个独立字段；中间站两列不同时分别取各自时刻。
      */
     @Test
     void middleStation_arrivalAndDepartureAreIndependent() {
@@ -120,8 +117,7 @@ class RailScheduleProviderTest {
     }
 
     /**
-     * 0.7.3 P2-13：始发站无 arrival → next_arrival fallback departure_time；
-     * next_departure 取 departure_time（两者此时相等是预期的，因始发站只有发车时刻）。
+     * 始发站无 arrival → next_arrival 回退到 departure_time。
      */
     @Test
     void firstStation_arrivalFallsBackToDeparture() {
@@ -145,8 +141,7 @@ class RailScheduleProviderTest {
     }
 
     /**
-     * 0.7.3 P2-13：终到站无 departure → next_departure fallback arrival_time；
-     * next_arrival 取 arrival_time。
+     * 终到站无 departure → next_departure 回退到 arrival_time。
      */
     @Test
     void terminalStation_departureFallsBackToArrival() {
@@ -171,10 +166,7 @@ class RailScheduleProviderTest {
     }
 
     /**
-     * 0.7.3 P2-14（provider 侧契约）：RailOpDispatcher.handleStationDelete 删除被绑定站后
-     * 对每个绑定 wall 调本方法。验证 unregisterWall 把 station-bound wall 的 rail 快照彻底释放——
-     * registeredWalls 不再含该 wall（refresh 不再 push 旧 stationId 空串）+ hasWallBinding 转 false
-     * （ManualSchedule 的 skipPredicate 不再跳过 → 可接管）。
+     * 删除被绑定站后 unregisterWall 彻底释放 station-bound wall 的 rail 快照与绑定状态。
      */
     @Test
     void unregisterWall_releasesStationBoundSnapshot_forStationDelete() {
@@ -248,7 +240,6 @@ class RailScheduleProviderTest {
 
     @Test
     void declaredKeys_descriptionsHaveRailNetworkPrefix() {
-        // 0.7.4：rail 专属 key 描述带 [铁路网络] 前缀，让 picker 区分「铁路网络」vs「手填时刻表」。
         for (var k : provider.declaredKeys()) {
             assertTrue(k.description() != null && k.description().startsWith("[铁路网络]"),
                     "rail key 描述应带 [铁路网络] 前缀: " + k.key() + " → " + k.description());
@@ -257,9 +248,6 @@ class RailScheduleProviderTest {
 
     @Test
     void storeNamespacePrefix_isSchedule_notDaemonKey() {
-        // 0.7.4 根因修复：daemon key 唯一性用 "schedule_rail"，但 store 写入 / 前端展示 / interpolator
-        // 解析用真实前缀 "schedule"（与 ManualSchedule 共享）。picker 选 ${var:schedule/next_cars}
-        // 经 interpolator 注入 wallId → schedule:<wallId>/next_cars 命中真实变量。
         assertEquals("schedule_rail", provider.namespace());
         assertEquals("schedule", provider.storeNamespacePrefix());
     }
@@ -285,7 +273,7 @@ class RailScheduleProviderTest {
         ds.stations.add(station("s1", "L1", "St", 0));
         provider.initialize();
 
-        java.util.function.Predicate<String> skip = provider::hasWallBinding;
+        Predicate<String> skip = provider::hasWallBinding;
         assertTrue(skip.test(WALL));
         assertFalse(skip.test("w-non-rail"));
     }
@@ -341,14 +329,5 @@ class RailScheduleProviderTest {
         }
 
         @Override public LocalTime currentLocalTime() { return now; }
-    }
-
-    /** 复用 VariableStore 的 dao 占位（不会被调用）。 */
-    private static final class FakeUserVarDao extends UserVariableDao {
-        FakeUserVarDao() { super(Logger.getLogger("test"), null); }
-        @Override public void upsert(String w, String n, ac.haru.hikaricanvas.variable.VarType t,
-                String d, String c, String b, long ca, long ua) {}
-        @Override public void delete(String w, String n) {}
-        @Override public List<Row> loadAll() { return List.of(); }
     }
 }

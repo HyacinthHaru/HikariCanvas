@@ -7,7 +7,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * 0.6 P1 / D7：{@link HistoryStack} coalescing + 容量提升的单测。契约见
+ * {@link HistoryStack} coalescing + 容量提升单测。契约见
  * {@code docs/timeline.md §7}（撤销 / 历史）与 {@code docs/protocol.md §5.5}。
  *
  * <p>同包访问 package-private {@link HistoryStack}（{@code setClock} / {@code pastDepth} /
@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  *   <li>key 变化 / 时钟越窗 / key=null → 各自 push</li>
  *   <li>coalesced commit 清 future（弃 redo 分支）</li>
  *   <li>undo / 非合并 commitHistory 打断合并链</li>
- *   <li>容量：无激活时间轴 16、有激活时间轴提升到 64（D7）</li>
+ *   <li>容量：无激活时间轴 16、有激活时间轴提升到 64</li>
  * </ul>
  */
 class HistoryStackCoalesceTest {
@@ -198,11 +198,11 @@ class HistoryStackCoalesceTest {
             history.commitHistory(history.snapshotNow());
         }
         assertEquals(HistoryStack.MAX_HISTORY_TIMELINE, history.pastDepth(),
-                "有激活时间轴 → 容量提升到 64（D7）");
+                "有激活时间轴 → 容量提升到 64");
     }
 
     /**
-     * P1 审查确认项：容量提升是会话内粘性的——删除（最后一条）时间轴、activeTimelineId
+     * 容量提升是会话内粘性的——删除（最后一条）时间轴、activeTimelineId
      * 回 null 后容量保持 64，已积累的历史不被当场 trim 掉。
      */
     @Test

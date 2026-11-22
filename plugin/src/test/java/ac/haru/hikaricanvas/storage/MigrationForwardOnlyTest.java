@@ -16,10 +16,10 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 0.9.1 数据契约闸：1.0 起 forward-only。schema 自 V018 冻结——
+ * Schema forward-only 契约守卫（{@code docs/data-model.md §6.5}）：schema 自 V018 冻结——
  * 新迁移禁 DROP TABLE / DROP COLUMN / ALTER COLUMN（删列走逻辑删除、删表走 _archive 重命名）。
- * V001-V017 是 pre-release 激进期产物，grandfathered。
- * 确需破坏性变更时在该 .sql 顶部加注释 {@code -- @forward-only-exempt: <理由>} 显式豁免（需 code review）。
+ * V001-V017 为 grandfather 豁免；确需破坏性变更时在该 .sql 顶部加注释
+ * {@code -- @forward-only-exempt: <理由>} 显式豁免。
  */
 class MigrationForwardOnlyTest {
 

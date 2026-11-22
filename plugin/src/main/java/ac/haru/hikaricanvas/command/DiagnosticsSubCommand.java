@@ -1,6 +1,7 @@
 package ac.haru.hikaricanvas.command;
 
 import com.mojang.brigadier.Command;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
@@ -11,6 +12,7 @@ import ac.haru.hikaricanvas.render.AnimationTicker;
 import ac.haru.hikaricanvas.script.engine.TweenScheduler;
 import ac.haru.hikaricanvas.session.SessionManager;
 import ac.haru.hikaricanvas.session.TokenService;
+import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.storage.Database;
 import ac.haru.hikaricanvas.storage.WallRepo;
 import ac.haru.hikaricanvas.variable.VariableStore;
@@ -18,6 +20,7 @@ import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -26,30 +29,21 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 
 /**
- * {@code /canvas stats} 的实现 + {@code diagnose} 子命令族。
- *
- * <p>从 {@link CanvasCommand} 迁出原 {@code runStats}（信息太少：仅地图池 total/free/reserved
- * + 墙 + 会话 + token）并增强为多行输出：</p>
+ * {@code /canvas stats} 与 {@code /canvas diagnose <wall_id>} 的实现：
  * <ul>
  *   <li><b>池行</b>：total/free/reserved + 上限 + 画布数（锁定数）+ 会话数 + 令牌数</li>
- *   <li><b>分世界行</b>（多世界 / 非空时才发）：每 world 的 FREE map 数</li>
+ *   <li><b>分世界行</b>（多世界时才发）：每 world 的 FREE map 数</li>
  *   <li><b>变量行</b>：变量总数 + 按 namespace 前缀摘要（如 {@code user=12 system=8 …}）</li>
  *   <li><b>动画行</b>：注册中的时间轴墙数 + 活跃补间数</li>
  * </ul>
  *
- * <h2>架构（照 {@link VariableSubCommand} / {@link BenchmarkSubCommand} 范式）</h2>
- *
- * <p>构造注入各子系统的只读 accessor，纯逻辑 {@link #runStats}；Brigadier 注册由
- * {@link CanvasCommand}.build 直接 {@code .executes(diagnostics::runStats)}（{@code stats}
- * 节点 requires {@code canvas.admin} 不变）。多注几个依赖（{@link FrameDeployer} /
- * {@link JavaPlugin} / {@link WallRepo}）供 {@code diagnose} 子命令族复用。</p>
+ * <p>构造注入各子系统的只读 accessor，Brigadier 注册由 {@link CanvasCommand#build}
+ * 直接挂载（{@code stats} 与 {@code diagnose} 均要求 {@code canvas.admin}）。</p>
  *
  * <h2>线程</h2>
- *
- * <p>命令在 Bukkit 主线程执行：{@link MapPool} 读走 {@code synchronized}（与主线程
- * reserve/bind 互斥）；{@link VariableStore#statsByNamespace} / {@link TweenScheduler#activeCount}
- * / {@link AnimationTicker#registeredCount} 读 CHM 无锁；walls/locked 两条只读 SQL（照搬旧
- * runStats）。</p>
+ * <p>命令在 Bukkit 主线程执行：{@link MapPool} 读走 {@code synchronized}；
+ * {@link VariableStore#statsByNamespace} / {@link TweenScheduler#activeCount}
+ * / {@link AnimationTicker#registeredCount} 读 CHM 无锁。</p>
  */
 public final class DiagnosticsSubCommand {
 
@@ -160,15 +154,14 @@ public final class DiagnosticsSubCommand {
      * 活跃 session → ProjectState 解析 → 动画态 → 总结。任何环节都<b>不</b>触发修复。</p>
      *
      * <p><b>not-found vs state-corrupt 的区分</b>：{@link WallRepo#loadById} 在 {@code mapRow}
-     * 阶段已经反序列化 {@code project_json} → {@link ac.haru.hikaricanvas.state.ProjectState}，且把解析
+     * 阶段已经反序列化 {@code project_json} → {@link ProjectState}，且把解析
      * 失败<b>吞成 {@link Optional#empty()}</b>——所以"墙不存在"和"墙存在但工程数据损坏"经 loadById
      * 看起来一模一样。为真正区分二者，本入口额外用已注入的 {@link Database} 做一条<b>只读裸 SQL</b>
-     * （仅取 {@code project_json}，不反序列化），判断 walls 行是否物理存在：行缺失 = not-found；
-     * 行存在但 loadById 为空（解析失败）= state-corrupt。不新增 WallRepo 方法。</p>
+     * 判断 walls 行是否物理存在：行缺失 = not-found；行存在但 loadById 为空 = state-corrupt。</p>
      */
     public int runDiagnose(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();
-        String wallId = com.mojang.brigadier.arguments.StringArgumentType.getString(ctx, "wall_id");
+        String wallId = StringArgumentType.getString(ctx, "wall_id");
 
         Optional<WallRepo.Wall> wall = wallRepo.loadById(wallId);
         boolean rawRowExists = rawWallRowExists(wallId);
@@ -301,8 +294,8 @@ public final class DiagnosticsSubCommand {
     }
 
     /**
-     * {@code /canvas diagnose <wall_id>} 的 wallId tab 补全：照
-     * {@link VariableSubCommand} 范式从 {@link WallRepo#loadAll()} 列 wallId。前缀大小写不敏感匹配。
+     * {@code /canvas diagnose <wall_id>} 的 wallId tab 补全：从 {@link WallRepo#loadAll()} 列 wallId，
+     * 前缀大小写不敏感匹配。
      */
     public CompletableFuture<Suggestions> suggestWallIds(
             CommandContext<CommandSourceStack> ctx, SuggestionsBuilder b) {
@@ -320,7 +313,7 @@ public final class DiagnosticsSubCommand {
     /**
      * 把 {@code key=count} 对拼成单行空格分隔字符串（如 {@code world=32 world_nether=8}）。
      * 用 {@code unparsed} placeholder 注入——避免 world 名 / namespace 含 MiniMessage 特殊字符
-     * 被解析。保持枚举顺序（{@link java.util.LinkedHashMap}）。
+     * 被解析。保持枚举顺序（{@link LinkedHashMap}）。
      */
     private static String joinBreakdown(Map<String, Integer> m) {
         StringBuilder sb = new StringBuilder();

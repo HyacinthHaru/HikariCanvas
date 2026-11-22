@@ -134,11 +134,7 @@ public final class Messages {
 
     /**
      * 加载服主放在 {@code plugins/HikariCanvas/lang/} 下的外部文案，**按键合并**到已加载的内置文案上：
-     * 同名键用服主的，外部文件没写的键保留内置值。
-     *
-     * <p>此前是整份 {@code put} 替换。那样一旦服主改过某个语言文件，插件升级后新增的键在他的文件里
-     * 不存在，而兜底链的 defaultLocale 指向的也是这份被替换掉的外部文案 —— 结果玩家直接看到
-     * {@code canvas.error.foo} 这种原始键名。键级合并让"改了几句话"不再等于"锁死整套文案的版本"。</p>
+     * 同名键用服主的，外部文件没写的键保留内置值，避免插件升级新增键后外部部分覆盖导致原始键名泄漏。
      */
     public void loadExternal(Path langDir) {
         if (langDir == null || !Files.isDirectory(langDir)) return;

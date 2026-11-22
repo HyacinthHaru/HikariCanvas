@@ -2,18 +2,29 @@ package ac.haru.hikaricanvas.variable;
 
 import ac.haru.hikaricanvas.storage.UserGlobalVariableDao;
 import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.variable.provider.ScoreboardVariableProvider;
+import ac.haru.hikaricanvas.variable.provider.VariableProvider;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.regex.Pattern;
 
 /**
@@ -73,19 +84,14 @@ public final class VariableStore {
     /** wallId → fullName set（倒排索引；Compositor render 前 markWallReferences 维护）。 */
     private final ConcurrentHashMap<String, Set<String>> byWall = new ConcurrentHashMap<>();
     /**
-     * markWallReferences 的 per-wallId 条带锁。
-     *
-     * <p>原 markWallReferences 的「快照 previous → 算 diff → 逐项写 bucket + referencedByWalls」
-     * 三步非原子：同一 wall 的两个并发 markWallReferences（如 Compositor render 线程 + ready
-     * payload 构造）交错执行会让 byWall 桶与各 Variable.referencedByWalls 互相不对称（一个有、
-     * 另一个无）。用 per-wallId monitor 把整段串行化，对外原子可见。markWallReferences 调用
-     * 频率低（仅渲染 / refresh 时），per-wall 锁开销可忽略。</p>
+     * markWallReferences 的 per-wallId 条带锁，将「快照 previous → 算 diff → 逐项写 bucket 与
+     * referencedByWalls」整段串行化，保证同一 wall 并发刷新时双向索引一致。
      */
     private final ConcurrentHashMap<String, Object> wallRefMonitors = new ConcurrentHashMap<>();
 
     private final UserVariableDao dao;
     /** 任意 wall dirty 通知（接到 ProjectionThrottler#dirty）；可为 noop。 */
-    private final java.util.function.Consumer<String> wallDirtyCallback;
+    private final Consumer<String> wallDirtyCallback;
 
     // ── 全局用户变量持久化 + owner 信息（namespace = userglobal） ──
 
@@ -106,8 +112,7 @@ public final class VariableStore {
      * createGlobal 频率极低（玩家手动建全局变量），用一把锁串行化整个 count→create→persist
      * 流程，强制 happens-before，开销可忽略。
      */
-    private final java.util.concurrent.locks.ReentrantLock globalCreateLock =
-            new java.util.concurrent.locks.ReentrantLock();
+    private final ReentrantLock globalCreateLock = new ReentrantLock();
 
     /**
      * 全局变量 key → owner 信息（在内存）。
@@ -128,14 +133,13 @@ public final class VariableStore {
      *
      * <p>{@link VariableInterpolator} 在 {@code resolve} 时若 store 内查不到 fullName，会逐个
      * 调用已注册的 hook（BiConsumer 参数为 fullName + namespace）。动态 Provider（如
-     * {@link ac.haru.hikaricanvas.variable.provider.ScoreboardVariableProvider}）可在 hook 里
+     * {@link ScoreboardVariableProvider}）可在 hook 里
      * 自筛 namespace 匹配，决定是否自动 {@link #create} + 加入 refresh tracking。</p>
      *
      * <p>注意：hook 在调用线程同步执行——hook 实现应快速返回（异步处理走自己的 daemon），
      * 不阻塞 interpolate；hook 抛异常会被吞掉 + log warning（详见 {@link #notifyDynamicLookup}）。</p>
      */
-    private final java.util.List<java.util.function.BiConsumer<String, String>> dynamicLookupHooks =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final List<BiConsumer<String, String>> dynamicLookupHooks = new CopyOnWriteArrayList<>();
 
     /**
      * 变量变更广播 listener。
@@ -150,11 +154,9 @@ public final class VariableStore {
      * + log warning，不影响其他 listener / store 主路径。HikariCanvas onEnable 注入实际 listener
      * 把变更通过 SessionManager → OpPushCallback.pushPatch 广播给绑定该 wall 的所有 session。</p>
      */
-    private final java.util.List<VariableChangeListener> changeListeners =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final List<VariableChangeListener> changeListeners = new CopyOnWriteArrayList<>();
 
-    public VariableStore(UserVariableDao dao,
-                         java.util.function.Consumer<String> wallDirtyCallback) {
+    public VariableStore(UserVariableDao dao, Consumer<String> wallDirtyCallback) {
         this.dao = Objects.requireNonNull(dao, "dao");
         this.wallDirtyCallback = wallDirtyCallback == null ? wid -> {} : wallDirtyCallback;
     }
@@ -162,13 +164,12 @@ public final class VariableStore {
     /**
      * 注册动态 namespace 查找 hook。
      *
-     * <p>由 Provider 在 {@link ac.haru.hikaricanvas.variable.provider.VariableProvider#initialize()}
+     * <p>由 Provider 在 {@link VariableProvider#initialize()}
      * 内调用一次；hook 在 {@link VariableInterpolator} 遇 missing 变量时同步被回调。</p>
      *
      * @param hook 接收 (fullName, namespace) 的回调；hook 自己负责按 namespace 自筛。
      */
-    public void registerDynamicLookupHook(
-            java.util.function.BiConsumer<String, String> hook) {
+    public void registerDynamicLookupHook(BiConsumer<String, String> hook) {
         Objects.requireNonNull(hook, "hook");
         dynamicLookupHooks.add(hook);
     }
@@ -195,8 +196,8 @@ public final class VariableStore {
             try {
                 hook.accept(fullName, namespace);
             } catch (Exception e) {
-                java.util.logging.Logger.getLogger(VariableStore.class.getName())
-                        .log(java.util.logging.Level.WARNING,
+                Logger.getLogger(VariableStore.class.getName())
+                        .log(Level.WARNING,
                                 "dynamic lookup hook threw for " + fullName + ": " + e.getMessage(),
                                 e);
             }
@@ -258,8 +259,8 @@ public final class VariableStore {
             try {
                 listener.onChange(event);
             } catch (Exception e) {
-                java.util.logging.Logger.getLogger(VariableStore.class.getName())
-                        .log(java.util.logging.Level.WARNING,
+                Logger.getLogger(VariableStore.class.getName())
+                        .log(Level.WARNING,
                                 "VariableChangeListener threw for " + fullName
                                         + " (" + type + "): " + e.getMessage(), e);
             }
@@ -470,7 +471,7 @@ public final class VariableStore {
             // 复杂度 O(W × N_per_wall)：wall 数量通常 ≪ 100，每个 wall 引用变量数 ≪ 50，
             // create 频率本身极低（仅启动期 + 注册时），总开销可忽略。
             Set<String> initialRefs = new HashSet<>();
-            for (java.util.Map.Entry<String, Set<String>> wallEntry : byWall.entrySet()) {
+            for (Map.Entry<String, Set<String>> wallEntry : byWall.entrySet()) {
                 if (wallEntry.getValue().contains(k)) {
                     initialRefs.add(wallEntry.getKey());
                 }
@@ -609,8 +610,8 @@ public final class VariableStore {
             try {
                 listener.onChange(event);
             } catch (Exception e) {
-                java.util.logging.Logger.getLogger(VariableStore.class.getName())
-                        .log(java.util.logging.Level.WARNING,
+                Logger.getLogger(VariableStore.class.getName())
+                        .log(Level.WARNING,
                                 "VariableChangeListener threw for " + fullName
                                         + " (DELETED): " + e.getMessage(), e);
             }
@@ -786,8 +787,8 @@ public final class VariableStore {
             try {
                 listener.onChange(event);
             } catch (Exception e) {
-                java.util.logging.Logger.getLogger(VariableStore.class.getName())
-                        .log(java.util.logging.Level.WARNING,
+                Logger.getLogger(VariableStore.class.getName())
+                        .log(Level.WARNING,
                                 "VariableChangeListener threw for WALL_REFS_UPDATED wall="
                                         + wallId + ": " + e.getMessage(), e);
             }
@@ -830,8 +831,8 @@ public final class VariableStore {
                 } catch (VariableException e) {
                     // 已被并发删 / 不存在 → 忽略；其他 code 不该出现在内存删除路径
                     if (e.code() != VariableException.Code.VARIABLE_NOT_FOUND) {
-                        java.util.logging.Logger.getLogger(VariableStore.class.getName())
-                                .log(java.util.logging.Level.WARNING,
+                        Logger.getLogger(VariableStore.class.getName())
+                                .log(Level.WARNING,
                                         "clearWallReferences delete failed: " + fn, e);
                     }
                 }
@@ -988,7 +989,7 @@ public final class VariableStore {
         }
         if (ms > 0 && ms < MIN_TTL_MS) {
             throw new VariableException(VariableException.Code.TTL_INVALID,
-                    "ttl must be 0 (永久) or >= " + MIN_TTL_MS + "ms (got " + ms + "ms)");
+                    "ttl must be 0 (permanent) or >= " + MIN_TTL_MS + "ms (got " + ms + "ms)");
         }
         return ms;
     }
@@ -1012,12 +1013,12 @@ public final class VariableStore {
      * {@code scoreboard} / 插件 namespace）原样作 key。</p>
      *
      * <p>无锁读：CHM 的 {@code values()} 迭代器弱一致，统计期并发写最多影响 ±1，对观测无害。
-     * 返回 {@link java.util.LinkedHashMap}（key 按计数降序，便于 stats 行展示主要来源在前）。</p>
+     * 返回 {@link LinkedHashMap}（key 按计数降序，便于 stats 行展示主要来源在前）。</p>
      *
      * @return namespace 前缀 → 变量数（按计数降序）。
      */
-    public java.util.Map<String, Integer> statsByNamespace() {
-        java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+    public Map<String, Integer> statsByNamespace() {
+        Map<String, Integer> counts = new HashMap<>();
         for (Variable v : store.values()) {
             String ns = v.namespace();
             int colon = ns.indexOf(':');
@@ -1025,14 +1026,13 @@ public final class VariableStore {
             counts.merge(prefix, 1, Integer::sum);
         }
         // 按计数降序，计数相同按 key 字典序，稳定可读
-        java.util.List<java.util.Map.Entry<String, Integer>> sorted =
-                new java.util.ArrayList<>(counts.entrySet());
+        List<Map.Entry<String, Integer>> sorted = new ArrayList<>(counts.entrySet());
         sorted.sort((a, b) -> {
             int c = Integer.compare(b.getValue(), a.getValue());
             return c != 0 ? c : a.getKey().compareTo(b.getKey());
         });
-        java.util.Map<String, Integer> out = new java.util.LinkedHashMap<>();
-        for (java.util.Map.Entry<String, Integer> e : sorted) out.put(e.getKey(), e.getValue());
+        Map<String, Integer> out = new LinkedHashMap<>();
+        for (Map.Entry<String, Integer> e : sorted) out.put(e.getKey(), e.getValue());
         return out;
     }
 

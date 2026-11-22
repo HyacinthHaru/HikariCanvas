@@ -33,19 +33,18 @@ public final class FillValidator {
      */
     public static void validate(Fill fill) {
         if (fill == null) return;
-        if (fill instanceof SolidFill s) {
-            validateColor(s.color(), "fill.color");
-        } else if (fill instanceof LinearGradient g) {
-            validateAngle(g.angle());
-            validateStops(g.stops());
-        } else if (fill instanceof RadialGradient g) {
-            validateUnit(g.cx(), "fill.cx");
-            validateUnit(g.cy(), "fill.cy");
-            validateRadius(g.r());
-            validateStops(g.stops());
-        } else {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "unknown fill subtype: " + fill.getClass().getName());
+        switch (fill) {
+            case SolidFill s -> validateColor(s.color(), "fill.color");
+            case LinearGradient g -> {
+                validateAngle(g.angle());
+                validateStops(g.stops());
+            }
+            case RadialGradient g -> {
+                validateUnit(g.cx(), "fill.cx");
+                validateUnit(g.cy(), "fill.cy");
+                validateRadius(g.r());
+                validateStops(g.stops());
+            }
         }
     }
 

@@ -1,15 +1,16 @@
 /**
- * 0.7.1-P3-T3：预览框坐标系纯函数。
+ * 预览框坐标系纯函数单测。
  *
  * <p>{@link computePreviewTransform} fit-scale + 居中；{@link wallToPreview} /
- * {@link previewToWall} 互逆（round-trip < 0.5px）。互逆是硬约束——P4「幽灵拖动设目标坐标」
- * 靠它把预览里指针位置反算成墙坐标，差一点就会偏。</p>
+ * {@link previewToWall} 互逆（round-trip &lt; 0.5px）；{@link clientToWall} 按画布
+ * 实际布局矩形比例映射指针坐标。</p>
  */
 import { describe, it, expect } from 'vitest';
 import {
     computePreviewTransform,
     wallToPreview,
     previewToWall,
+    clientToWall,
     type PreviewTransform,
 } from '../previewCoords';
 
@@ -80,5 +81,35 @@ describe('wallToPreview / previewToWall 互逆', () => {
         const back = previewToWall(t, t.offsetX, t.offsetY);
         expect(Math.abs(back.x)).toBeLessThan(0.001);
         expect(Math.abs(back.y)).toBeLessThan(0.001);
+    });
+});
+
+describe('clientToWall', () => {
+    // canvas CSS 宽是 round(wallW*scale)，本函数以 crect 真实尺寸比例映射，不经 transform.offset。
+    const crect = { left: 100, top: 50, width: 256, height: 128 };
+    const wallW = 512;
+    const wallH = 256;
+
+    it('canvas 左上角 client 点 → 墙原点 (0,0)', () => {
+        const r = clientToWall(crect, wallW, wallH, 100, 50)!;
+        expect(r.x).toBeCloseTo(0, 6);
+        expect(r.y).toBeCloseTo(0, 6);
+    });
+
+    it('canvas 右下角 client 点 → 墙右下 (wallW, wallH)', () => {
+        const r = clientToWall(crect, wallW, wallH, 100 + 256, 50 + 128)!;
+        expect(r.x).toBeCloseTo(wallW, 6);
+        expect(r.y).toBeCloseTo(wallH, 6);
+    });
+
+    it('中点 client → 墙中点', () => {
+        const r = clientToWall(crect, wallW, wallH, 100 + 128, 50 + 64)!;
+        expect(r.x).toBeCloseTo(wallW / 2, 6);
+        expect(r.y).toBeCloseTo(wallH / 2, 6);
+    });
+
+    it('crect 任一维 ≤ 0 → null（canvas 未布局）', () => {
+        expect(clientToWall({ left: 0, top: 0, width: 0, height: 128 }, wallW, wallH, 5, 5)).toBeNull();
+        expect(clientToWall(crect, 0, wallH, 5, 5)).toBeNull();
     });
 });

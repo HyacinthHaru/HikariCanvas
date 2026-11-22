@@ -5,12 +5,12 @@ import ac.haru.hikaricanvas.schedule.WallSchedule;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -19,41 +19,32 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P3-L：{@link ScheduleDao} CRUD + 级联删测试。
- *
- * <p>真实 SQLite + MigrationRunner 跑 V001..V012；FK CASCADE 由 schema 触发。每个测试新建临时
- * dir + data.db，互相隔离。</p>
+ * {@link ScheduleDao} CRUD 与外键级联删除单测。
  */
 class ScheduleDaoTest {
 
-    private Path tmpDir;
+    @TempDir
+    Path tmpDir;
+
     private Database database;
     private ScheduleDao dao;
 
     @BeforeEach
-    void setUp() throws Exception {
-        tmpDir = Files.createTempDirectory("hikari-schedule-test-");
+    void setUp() {
         Logger log = Logger.getLogger("test");
         database = new Database(log, tmpDir.resolve("data.db"));
         new MigrationRunner(database.jdbi(), log).run();
         dao = new ScheduleDao(log, database.jdbi());
-        // 插入一个 walls 行，让 FK 通过
         insertWall("w-test-1");
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         if (database != null) database.close();
-        if (tmpDir != null && Files.exists(tmpDir)) {
-            try (var s = Files.walk(tmpDir)) {
-                s.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(java.io.File::delete);
-            }
-        }
     }
 
-    /** AtomicInteger 给每次 insertWall 一个唯一 origin_x，绕开 walls (world, origin_*, facing) UNIQUE 约束。 */
-    private static final java.util.concurrent.atomic.AtomicInteger ORIGIN_COUNTER =
-            new java.util.concurrent.atomic.AtomicInteger();
+    private static final AtomicInteger ORIGIN_COUNTER =
+            new AtomicInteger();
 
     private void insertWall(String wallId) {
         int ox = ORIGIN_COUNTER.incrementAndGet();
@@ -238,7 +229,7 @@ class ScheduleDaoTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.4.0 bugfix（Bug 4）：precision 字段 CRUD
+    //  precision 字段 CRUD
     // ──────────────────────────────────────────────────────────
 
     @Test

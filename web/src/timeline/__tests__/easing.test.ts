@@ -1,5 +1,5 @@
 /**
- * 0.6 P3（B3）：缓动求解器双端一致性测试——前端半边。
+ * 缓动求解器双端一致性测试——前端半边。
  *
  * 读仓库根 `rendering-test/easing-vectors.json`（第三方 Python 参照实现生成），逐 case
  * 逐 sample 校验 `ease(easing, t)` 落在容差 `1e-6` 内。Java 端 EasingSolverVectorsTest

@@ -15,10 +15,12 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -27,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.7.0-P2-5：{@link TriggerRouter} 单元测试（索引 / timer 调度 / 链深读取 / 关停）。
+ * {@link TriggerRouter} 单元测试（索引 / timer 调度 / 链深读取 / 关停）。
  * 全 fake：内存 ScriptStore（dao null）+ 真 ScriptRunner（同步替身调度）+ 记录型 sink +
  * 手动 tick timer 替身。全链贯通（含真 VariableStore 事件）在 {@link EndToEndScriptTest}。
  */
@@ -35,10 +37,10 @@ class TriggerRouterTest {
 
     private static final Logger LOG = Logger.getLogger("test");
     private static final String WALL = "w-rt";
-    /** B2：fake 墙原点所在世界（near 测试共用）。 */
-    private static final java.util.UUID WORLD_ID =
-            java.util.UUID.fromString("00000000-0000-0000-0000-000000000001");
-    /** B2：fake 原点源——所有墙原点固定 (0,0,0)。 */
+    /** fake 墙原点所在世界（near 测试共用）。 */
+    private static final UUID WORLD_ID =
+            UUID.fromString("00000000-0000-0000-0000-000000000001");
+    /** fake 原点源——所有墙原点固定 (0,0,0)。 */
     private static final TriggerRouter.WallOriginSource ORIGIN_AT_ZERO =
             wallId -> new TriggerRouter.WallOrigin(WORLD_ID, 0, 0, 0);
 
@@ -56,7 +58,7 @@ class TriggerRouterTest {
         ScriptBudget budget = new ScriptBudget(
                 HikariCanvasConfig.ScriptsConfig.defaults(), clock::get);
         ConditionEvaluator conditions = new ConditionEvaluator(LOG,
-                (java.util.function.Function<String, String>) null);
+                (Function<String, String>) null);
         runner = new ScriptRunner(conditions, sink, budget, null, LOG, new InlineScheduler());
         fakeTimers = new FakeTimerScheduler();
         router = new TriggerRouter(scriptStore, runner,
@@ -172,7 +174,7 @@ class TriggerRouterTest {
         assertEquals(0, sink.blockIds.size(), "stale 索引条目不执行已禁用规则");
     }
 
-    // ---------- 链深读取（K1） ----------
+    // ---------- 链深读取 ----------
 
     @Test
     void chainDepth_nullThreadLocal_isDepth0_runnerThreadIsPlus1() {
@@ -265,7 +267,7 @@ class TriggerRouterTest {
         assertTrue(fakeTimers.entries.get(0).future.cancelled);
     }
 
-    // ---------- playerJoin / playerKill 全局索引（0.7.0-P3 B1 / K15） ----------
+    // ---------- playerJoin / playerKill 全局索引 ----------
 
     @Test
     void globalIndex_rebuildAddsAndRemoves() {
@@ -381,7 +383,7 @@ class TriggerRouterTest {
         assertEquals(1, sink.blockIds.size(), "关停后 fire no-op");
     }
 
-    // ---------- 0.7.1：playerQuit 全局索引 ----------
+    // ---------- playerQuit 全局索引 ----------
 
     @Test
     void quitIndex_rebuildAddsAndRemoves() {
@@ -431,7 +433,7 @@ class TriggerRouterTest {
         assertEquals(0, sink.blockIds.size(), "关停后 fire no-op");
     }
 
-    // ---------- 0.7.1：rightClickWall 按墙索引 ----------
+    // ---------- rightClickWall 按墙索引 ----------
 
     @Test
     void rightClickWall_perWallIndex_firesOnlyMatchingWall() {
@@ -477,7 +479,7 @@ class TriggerRouterTest {
         assertEquals(0, router.rightClickRuleCount(WALL), "关停清空 rightClick 索引");
     }
 
-    // ---------- 0.7.1：playerLeaveRange 进 NearEntry（leaveEdge=true） ----------
+    // ---------- playerLeaveRange 进 NearEntry（leaveEdge=true） ----------
 
     @Test
     void playerLeaveRange_indexedAsNearEntryWithLeaveEdge() {
@@ -515,7 +517,7 @@ class TriggerRouterTest {
                 "playerLeaveRange 规则 → PLAYER_LEAVE_RANGE source");
     }
 
-    // ---------- playerNear 索引 + firePlayerNear（0.7.0-P3 B2 / K14） ----------
+    // ---------- playerNear 索引 + firePlayerNear ----------
 
     @Test
     void nearIndex_rebuildAssemblesEntryWithOrigin() {
@@ -618,7 +620,7 @@ class TriggerRouterTest {
 
     // ---------- fakes ----------
 
-    /** 同步直跑调度替身（照 ScriptRunnerTest.InlineScheduler）。 */
+    /** 同步直跑调度替身。 */
     private static final class InlineScheduler implements ScriptRunner.TaskScheduler {
         final Deque<Runnable> pending = new ArrayDeque<>();
 
@@ -637,7 +639,7 @@ class TriggerRouterTest {
         }
     }
 
-    /** 记录投递的 RunSubmitter 替身（B1：ctx 形态断言）。 */
+    /** 记录投递的 RunSubmitter 替身（校验 TriggerContext 形态）。 */
     private static final class RecordingSubmitter implements TriggerRouter.RunSubmitter {
         final List<String> wallIds = new ArrayList<>();
         final List<TriggerContext> contexts = new ArrayList<>();

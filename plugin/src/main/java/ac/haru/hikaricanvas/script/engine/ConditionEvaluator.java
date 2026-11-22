@@ -31,22 +31,22 @@ import java.util.logging.Logger;
  *       （照 {@code VariableInterpolator.resolveValue} 的 fallback 链，去掉 inline
  *       fallback 档——条件文法无 {@code |fallback=} 语法）。null → truthy=false</li>
  *   <li>parse 失败 / eval 抛（含模板路径专属的 UndeclaredParam 等）→ {@code false} +
- *       WARNING（<b>每条件串只 WARN 一次</b>,防坏条件每帧刷屏）——坏条件不许炸链</li>
- *   <li>条件 null / 空白 → {@code false}（validator 已拦非空,这里是兜底,不 WARN）</li>
+ *       WARNING（<b>每条件串只 WARN 一次</b>，防坏条件每帧刷屏）——坏条件不许炸链</li>
+ *   <li>条件 null / 空白 → {@code false}（validator 已拦非空，这里是兜底，不 WARN）</li>
  * </ul>
  *
  * <h2>parse 缓存</h2>
  *
  * <p>{@code condition 串 → Expr} 的 {@link ConcurrentHashMap} 缓存；<b>parse 失败缓存
- * 负结果</b>（{@code PARSE_FAILED} 哨兵）,坏条件不会每次触发重 parse。规则更新换
- * condition 串即换 key,旧 entry 由容量上限兜底清理（{@link #CACHE_MAX} 超限整体
- * clear——规则总量受 per-wall 配额约束,正常永远到不了上限）。</p>
+ * 负结果</b>（{@code PARSE_FAILED} 哨兵），坏条件不会每次触发重 parse。规则更新换
+ * condition 串即换 key，旧 entry 由容量上限兜底清理（{@link #CACHE_MAX} 超限整体
+ * clear——规则总量受 per-wall 配额约束，正常永远到不了上限）。</p>
  *
- * <p>线程安全：全部状态是并发容器,可被 ScriptRunner 线程 + 任意管理线程并发调用。</p>
+ * <p>线程安全：全部状态是并发容器，可被 ScriptRunner 线程 + 任意管理线程并发调用。</p>
  */
 public final class ConditionEvaluator {
 
-    /** parse 缓存容量上限,超限整体 clear（防异常输入面把缓存撑爆）。 */
+    /** parse 缓存容量上限，超限整体 clear（防异常输入面把缓存撑爆）。 */
     static final int CACHE_MAX = 4096;
 
     /** parse 失败负缓存哨兵。 */
@@ -61,7 +61,7 @@ public final class ConditionEvaluator {
     private final ConcurrentHashMap<String, Object> parseCache = new ConcurrentHashMap<>();
     /** 已 WARN 过的条件串（每串只刷一次日志；同受 {@link #CACHE_MAX} 上界约束）。 */
     private final Set<String> warned = ConcurrentHashMap.newKeySet();
-    /** 实际 parse 次数（缓存生效的单测侧证;非公开契约）。 */
+    /** 实际 parse 次数（缓存生效的单测侧证；非公开契约）。 */
     private final AtomicInteger parseCount = new AtomicInteger();
 
     /** 生产装配：resolver 读 {@link VariableStore} cached 值。store 可 null（求值时变量恒 miss）。 */
@@ -102,8 +102,8 @@ public final class ConditionEvaluator {
         if (cached == PARSE_FAILED) return false;
         Expr expr = (Expr) cached;
 
-        // per-eval 构一个带 wallId 注入的 evaluator（两字段对象,分配可忽略;
-        // resolver 必须捕获本次 eval 的 wallId,不能跨 wall 复用）
+        // per-eval 构一个带 wallId 注入的 evaluator（两字段对象，分配可忽略；
+        // resolver 必须捕获本次 eval 的 wallId，不能跨 wall 复用）
         Function<String, String> resolver = lookup == null ? null
                 : raw -> lookup.apply(VariableInterpolator.resolveFullName(raw, wallId));
         ExpressionEvaluator evaluator = new ExpressionEvaluator(resolver, log);
@@ -111,13 +111,13 @@ public final class ConditionEvaluator {
             return evaluator.evalBoolean(expr, Map.of());
         } catch (RuntimeException e) {
             // UndeclaredParam（脚本条件不支持模板参数标识符）/ VarUnsupported（lookup
-            // 为 null 时写了 var()）等 → false,不炸链
+            // 为 null 时写了 var()）等 → false，不炸链
             warnOnce(condition, "eval failed", e);
             return false;
         }
     }
 
-    /** 实际 parse 次数（包级,单测缓存侧证用）。 */
+    /** 实际 parse 次数（包级，单测缓存侧证用）。 */
     int parseCountForTest() {
         return parseCount.get();
     }
@@ -158,8 +158,8 @@ public final class ConditionEvaluator {
     }
 
     /**
-     * 默认 lookup：照 {@code VariableInterpolator.resolveValue} 的 fallback 链
-     * （cached fresh → default → null）,去掉 inline fallback 档。
+     * 默认 lookup：与 {@code VariableInterpolator.resolveValue} 的 fallback 链对齐
+     * （cached fresh → default → null），去掉 inline fallback 档。
      *
      * <p>包级共享：{@code ActionExecutor.incrementVariable} 读当前值用同款链
      * （保证条件判定与累加起算值取自同一语义）。</p>
@@ -175,7 +175,7 @@ public final class ConditionEvaluator {
                 }
                 return v.defaultValue();
             }
-            // 触发动态 namespace 注册 hook（scoreboard 等）——首次 miss,后续有数据
+            // 触发动态 namespace 注册 hook（scoreboard 等）——首次 miss，后续有数据
             store.notifyDynamicLookup(fullName);
             return null;
         };

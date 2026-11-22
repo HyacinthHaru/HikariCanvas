@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P4-C：blockDefs 完整性 + 字段覆盖 wire 单测（纯逻辑，vitest node）。
+ * blockDefs 完整性 + 字段覆盖 wire 单测（纯逻辑，vitest node）。
  *
  * <p>核心契约：每种触发器 / 动作都有 def；每个 def 的 fields <b>覆盖该 wire 类型的全部
  * 数据字段</b>（对照 protocol.ts 的 ScriptTrigger / ScriptAction 手抄的期望字段集）。
@@ -13,10 +13,12 @@ import {
     CATEGORY_COLOR_VAR,
     FRIENDLY_ELEMENT_DEFS,
     FRIENDLY_PALETTE_KINDS,
+    TWEENABLE_KINDS,
     makeDefaultAction,
     type BlockDef,
 } from '../blockDefs';
 import { ELEMENT_PROPERTIES, MESSAGE_CHANNELS, SCALE_OPS, MESSAGE_TARGETS } from '../validator';
+import type { Easing } from '@/types/protocol';
 
 /** 期望的触发器字段集（手抄自 protocol.ts ScriptTrigger，含无数据字段的空集）。 */
 const EXPECTED_TRIGGER_FIELDS: Record<string, string[]> = {
@@ -26,7 +28,6 @@ const EXPECTED_TRIGGER_FIELDS: Record<string, string[]> = {
     playerKill: [],
     playerNear: ['rangeBlocks'],
     wallReady: [],
-    // 0.7.1-P2：3 个新触发器。
     rightClickWall: [],
     playerLeaveRange: ['rangeBlocks'],
     playerQuit: [],
@@ -43,31 +44,22 @@ const EXPECTED_ACTION_FIELDS: Record<string, string[]> = {
     runCommand: ['templateId', 'params'],
     log: ['message'],
     if: ['condition', 'then', 'else'],
-    // 0.7.1-P1：4 个低风险新动作 + 相对移动（setElementProperties 走 FRIENDLY_ELEMENT_DEFS，不进 ACTION_DEFS）。
+    // setElementProperties 走 FRIENDLY_ELEMENT_DEFS，不进 ACTION_DEFS。
     nudgeElement: ['elementId', 'dx', 'dy'],
-    // 0.7.2-P3：sendMessage 加 target（trigger 默认 / all 全服）。
     sendMessage: ['text', 'channel', 'target'],
     setRandomVariable: ['fullName', 'min', 'max'],
     scaleVariable: ['fullName', 'op', 'factor'],
     playTimelineAwait: ['timelineId'],
-    // 0.7.1-P2：有界循环（control category，count + body statements 子序列槽）。
     repeat: ['count', 'body'],
-    // 0.7.2-P3：重复直到条件（control category，condition + maxIterations + body statements 子序列槽）。
     repeatUntil: ['condition', 'maxIterations', 'body'],
-    // 0.7.1-P5：3 个剩余动作（停止 / 粒子 / 等待直到）。stopScript 无字段；
-    // playParticle wire 字段名 particle（与后端 record 同名）+ count + 3 offset；
-    // waitUntil 复用 condition 字段（type:'condition'）+ timeoutMs。
     stopScript: [],
     playParticle: ['particle', 'count', 'offsetX', 'offsetY', 'offsetZ'],
     waitUntil: ['condition', 'timeoutMs'],
-    // 0.7.2-P2：变量积木（复制 / 拼接）+ 元素积木（克隆 / 删除）。
     copyVariable: ['source', 'target'],
     appendVariable: ['fullName', 'text'],
     cloneElement: ['elementId', 'offsetX', 'offsetY'],
     deleteElement: ['elementId'],
-    // tween-P1：补间包裹积木（control category，durationMs + easing select + body statements）。
     tweenBlock: ['durationMs', 'easing', 'body'],
-    // 0.7.3：4 个新积木。
     randomBranch: ['probability', 'then', 'else'],
     setElementLayer: ['elementId', 'mode'],
     roundVariable: ['fullName', 'mode'],
@@ -79,7 +71,7 @@ function fieldNames(def: BlockDef): string[] {
 }
 
 describe('blockDefs.TRIGGER_DEFS', () => {
-    it('恰好 9 个触发器（0.7.0 6 个 + 0.7.1-P2 3 个，与 protocol.ts ScriptTrigger 同数）', () => {
+    it('恰好 9 个触发器（与 protocol.ts ScriptTrigger 同数）', () => {
         expect(Object.keys(TRIGGER_DEFS).sort()).toEqual(
             Object.keys(EXPECTED_TRIGGER_FIELDS).sort(),
         );
@@ -103,7 +95,7 @@ describe('blockDefs.TRIGGER_DEFS', () => {
 });
 
 describe('blockDefs.ACTION_DEFS', () => {
-    it('动作集与 EXPECTED_ACTION_FIELDS 一致（0.7.0 9 个 + 0.7.1-P1 5 个 + 0.7.1-P2 repeat + 0.7.1-P5 3 个 + 0.7.2-P2 4 个 + 0.7.2-P3 repeatUntil + tween-P1 tweenBlock + 0.7.3 4 个 = 28）', () => {
+    it('动作集与 EXPECTED_ACTION_FIELDS 一致（共 28 个）', () => {
         expect(Object.keys(ACTION_DEFS).sort()).toEqual(
             Object.keys(EXPECTED_ACTION_FIELDS).sort(),
         );
@@ -176,13 +168,11 @@ describe('blockDefs.ACTION_DEFS', () => {
         expect(seek.optional).toBe(true);
     });
 
-    // ---- 0.7.1-P1：5 个新动作的 def 形态 + select 选项与后端白名单一致 ----
-    it('5 个新动作 def 存在 + kind/category/colorVar 正确', () => {
+    it('扩展动作 def 存在 + kind/category/colorVar 正确', () => {
         expect(ACTION_DEFS.nudgeElement.category).toBe('action');
         expect(ACTION_DEFS.sendMessage.category).toBe('action');
         expect(ACTION_DEFS.setRandomVariable.category).toBe('action');
         expect(ACTION_DEFS.scaleVariable.category).toBe('action');
-        // playTimelineAwait 归 timeline 分类（与 playTimeline 同配色 mauve）。
         expect(ACTION_DEFS.playTimelineAwait.category).toBe('timeline');
         expect(ACTION_DEFS.playTimelineAwait.colorVar).toBe('--ctp-mauve');
     });
@@ -199,7 +189,6 @@ describe('blockDefs.ACTION_DEFS', () => {
         expect(op.options?.map((o) => o.value).sort()).toEqual([...SCALE_OPS].sort());
     });
 
-    // ---- 0.7.1-P2：repeat（有界循环，control category，count + body 子序列槽）----
     it('repeat def：category=control / colorVar=green / 字段 count(number 1..100) + body(statements)', () => {
         const def = ACTION_DEFS.repeat;
         expect(def.kind).toBe('repeat');
@@ -213,7 +202,6 @@ describe('blockDefs.ACTION_DEFS', () => {
         expect(body.type).toBe('statements');
     });
 
-    // ---- 0.7.2-P3：repeatUntil（重复直到，C 形 control，condition + maxIterations + body）----
     it('repeatUntil def：category=control / colorVar=green / 字段 condition(condition) + maxIterations(number 1..100) + body(statements)', () => {
         const def = ACTION_DEFS.repeatUntil;
         expect(def.kind).toBe('repeatUntil');
@@ -229,7 +217,6 @@ describe('blockDefs.ACTION_DEFS', () => {
         expect(body.type).toBe('statements');
     });
 
-    // ---- 0.7.2-P3：sendMessage 加 target 下拉（trigger / all，与后端 MESSAGE_TARGETS 一致）----
     it('sendMessage.target 选项与后端 MESSAGE_TARGETS 一致（trigger / all）', () => {
         const target = ACTION_DEFS.sendMessage.fields.find((f) => f.name === 'target')!;
         expect(target.type).toBe('scope');
@@ -257,7 +244,6 @@ describe('blockDefs.FRIENDLY_ELEMENT_DEFS', () => {
             for (const k of Object.keys(def.defaultPatch)) {
                 expect(ELEMENT_PROPERTIES.has(k)).toBe(true);
             }
-            // 可编辑字段名也必须落白名单（字段值 = patch 键）。
             for (const f of def.fields) {
                 expect(ELEMENT_PROPERTIES.has(f.name)).toBe(true);
             }
@@ -276,19 +262,13 @@ describe('blockDefs.FRIENDLY_ELEMENT_DEFS', () => {
         expect(FRIENDLY_ELEMENT_DEFS.moveTo.defaultPatch).toEqual({ x: '0', y: '0' });
     });
 
-    // ---- 0.7.3 D3：setColor 产出 color 键（不是 fill）修复 ----
     it('setColor 字段 = color（不是 fill），defaultPatch.color = #FFFFFF', () => {
-        // 回归：旧版 setColor 的 fields[0].name='fill' + defaultPatch={fill:'#FFFFFF'}，
-        // 导致补间引擎把 fill 键发给 TextElement → applyTextPatch 抛"unknown text field: fill"
-        // + from==to（fill 兜底成目标色）→ 文字变色补间既不动画也不落盘。
-        // 修复后 patch 键为 color，后端 color 分支（TweenScheduler L434）端到端可达。
         const def = FRIENDLY_ELEMENT_DEFS.setColor;
         expect(def.fields.map((f) => f.name)).toEqual(['color']);
         expect(def.defaultPatch).toEqual({ color: '#FFFFFF' });
     });
 
     it('setColor defaultPatch 键在 ELEMENT_PROPERTIES 白名单内（color 已加入）', () => {
-        // 双重确认：setColor 产出 color → ELEMENT_PROPERTIES 需含 color → validator 放行
         expect(ELEMENT_PROPERTIES.has('color')).toBe(true);
         const k = Object.keys(FRIENDLY_ELEMENT_DEFS.setColor.defaultPatch)[0];
         expect(ELEMENT_PROPERTIES.has(k)).toBe(true);
@@ -327,9 +307,7 @@ describe('blockDefs.defFor', () => {
     });
 });
 
-// ---- 0.7.3：4 个新积木 def 形态 ----
-
-describe('blockDefs.ACTION_DEFS — 0.7.3 新积木', () => {
+describe('blockDefs.ACTION_DEFS — randomBranch / setElementLayer / roundVariable / showTitle', () => {
     it('randomBranch def：category=control / colorVar=green / 字段 probability(number 0..100) + then/else(statements)', () => {
         const def = ACTION_DEFS.randomBranch;
         expect(def.kind).toBe('randomBranch');
@@ -381,9 +359,7 @@ describe('blockDefs.ACTION_DEFS — 0.7.3 新积木', () => {
     });
 });
 
-// ---- 0.7.3：makeDefaultAction 默认值 ----
-
-describe('blockDefs.makeDefaultAction — 0.7.3 新积木默认值', () => {
+describe('blockDefs.makeDefaultAction — 默认值', () => {
     it('randomBranch 默认 probability=50 + then/else 空数组', () => {
         const a = makeDefaultAction('randomBranch');
         expect(a.type).toBe('randomBranch');
@@ -423,6 +399,47 @@ describe('blockDefs.makeDefaultAction — 0.7.3 新积木默认值', () => {
             expect(a.fadeOutMs).toBe(500);
             expect(a.target).toBe('trigger');
         }
+    });
+});
+
+describe('blockDefs — tweenBlock 与缓动配置', () => {
+    it('TWEENABLE_KINDS 集合内容符合预期（5 项）', () => {
+        expect(TWEENABLE_KINDS.has('moveTo')).toBe(true);
+        expect(TWEENABLE_KINDS.has('resize')).toBe(true);
+        expect(TWEENABLE_KINDS.has('rotateTo')).toBe(true);
+        expect(TWEENABLE_KINDS.has('setOpacity')).toBe(true);
+        expect(TWEENABLE_KINDS.has('setColor')).toBe(true);
+        expect(TWEENABLE_KINDS.has('setText')).toBe(false);
+        expect(TWEENABLE_KINDS.has('show')).toBe(false);
+        expect(TWEENABLE_KINDS.has('hide')).toBe(false);
+    });
+
+    it('tweenBlock easing 选项包含 cubicBezier（指向 timeline.easingCustom）', () => {
+        const tweenDef = ACTION_DEFS.tweenBlock;
+        const easingField = tweenDef.fields.find((f) => f.name === 'easing');
+        expect(easingField).toBeDefined();
+        const cubicOption = easingField?.options?.find((o) => o.value === 'cubicBezier');
+        expect(cubicOption).toBeDefined();
+        expect(cubicOption?.labelKey).toBe('timeline.easingCustom');
+    });
+
+    it('tweenBlock 默认 action easing 为 easeInOut（无 bezier）', () => {
+        const action = makeDefaultAction('tweenBlock');
+        if (action.type !== 'tweenBlock') throw new Error('wrong type');
+        expect(action.easing.type).toBe('easeInOut');
+        expect(action.easing.bezier).toBeUndefined();
+    });
+
+    it('cubicBezier easing 对象结构与切换语义', () => {
+        const existingEasing: Easing = { type: 'easeInOut' };
+        const defaultBezier: [number, number, number, number] = [0.25, 0.1, 0.25, 1];
+        const newEasing: Easing = { type: 'cubicBezier', bezier: existingEasing.bezier ?? defaultBezier };
+        expect(newEasing.type).toBe('cubicBezier');
+        expect(newEasing.bezier).toEqual([0.25, 0.1, 0.25, 1]);
+
+        const linear: Easing = { type: 'linear' };
+        expect(linear.type).toBe('linear');
+        expect(linear.bezier).toBeUndefined();
     });
 });
 

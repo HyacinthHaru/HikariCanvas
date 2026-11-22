@@ -1,14 +1,12 @@
 /**
- * 0.7.0-P4-D2 / P5 实测修复：makeDefaultAction / makeDefaultTrigger 全 kind 合法性单测（纯逻辑）。
+ * makeDefaultAction / makeDefaultTrigger 全 kind 合法性单测（纯逻辑）。
  *
  * <p>契约：每个 kind 产出的默认对象 type 正确、字段齐（与 protocol.ts wire 形态对齐）、
  * 数值落在后端 validator 范围内（间隔 / 范围 / 等待 / 音量 / 音调）、枚举取合法白名单值、
  * if 的 then/else 为空数组（非 null）。未知 kind 兜底返合法对象（不抛 / 不返 undefined）。</p>
  *
- * <p><b>P5 实测修复（根因 2）</b>：不依赖墙状态的引用字段（变量名 / 声音 / if 条件）改为非空
- * 合理默认，让"拖出新块即合法"——避免空引用被前端 validator + 后端立刻判非法、红字轰炸 +
- * 卡自动保存。本测新增「拖出即过 validateRule」与「if 默认条件能被 tryParseCondition 解析回
- * 可视模式」两组断言守这个行为。</p>
+ * <p>不依赖墙状态的引用字段（变量名 / 声音 / if 条件）具备非空默认，让"拖出新块即合法"，
+ * 且 if 默认条件能被 tryParseCondition 解析回可视模式。</p>
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -78,7 +76,7 @@ describe('makeDefaultAction — 全 kind 合法', () => {
         expect(makeDefaultAction('log')).toEqual({ type: 'log', message: '' });
     });
 
-    // ---- 0.7.1-P1：友好元素积木默认（kind → setElementProperties，patch 取 FRIENDLY_ELEMENT_DEFS 默认）----
+    // ---- 友好元素积木默认（kind → setElementProperties，patch 取 FRIENDLY_ELEMENT_DEFS 默认）----
     it('moveTo：setElementProperties{kind:moveTo, elementId:"", patch:{x:0,y:0}}', () => {
         expect(makeDefaultAction('moveTo')).toEqual({
             type: 'setElementProperties', elementId: '', patch: { x: '0', y: '0' }, kind: 'moveTo',
@@ -108,7 +106,7 @@ describe('makeDefaultAction — 全 kind 合法', () => {
         }
     });
 
-    // ---- 0.7.1-P1：4 个低风险新动作 + nudge 默认 ----
+    // ---- 扩展动作默认 ----
     it('nudgeElement：elementId 留空 + dx/dy 默认 0', () => {
         expect(makeDefaultAction('nudgeElement')).toEqual({ type: 'nudgeElement', elementId: '', dx: 0, dy: 0 });
     });
@@ -129,7 +127,7 @@ describe('makeDefaultAction — 全 kind 合法', () => {
         expect(makeDefaultAction('playTimelineAwait')).toEqual({ type: 'playTimelineAwait', timelineId: '' });
     });
 
-    // ---- 0.7.1-P2：repeat（count=3 + 空 body；空 body 由用户拖块填，故拖出态会提示"循环体不能为空"）----
+    // ---- repeat（count=3 + 空 body；空 body 由用户拖块填，故拖出态会提示"循环体不能为空"）----
     it('repeat：count=3 + 空 body 数组（非 null）', () => {
         const a = makeDefaultAction('repeat');
         expect(a).toEqual({ type: 'repeat', count: 3, body: [] });
@@ -204,7 +202,7 @@ describe('makeDefaultTrigger — 全 kind 合法', () => {
         expect(makeDefaultTrigger('wallReady')).toEqual({ type: 'wallReady' });
     });
 
-    // ---- 0.7.1-P2：3 个新触发器默认 ----
+    // ---- 扩展触发器默认 ----
     it('rightClickWall / playerQuit：无字段，只带 type', () => {
         expect(makeDefaultTrigger('rightClickWall')).toEqual({ type: 'rightClickWall' });
         expect(makeDefaultTrigger('playerQuit')).toEqual({ type: 'playerQuit' });
@@ -224,7 +222,7 @@ describe('makeDefaultTrigger — 全 kind 合法', () => {
     });
 });
 
-// ---------- P5 实测修复（根因 2）：拖出新块即合法（过前端 validateRule，无错）----------
+// ---------- 拖出新块即合法（过前端 validateRule，无错）----------
 
 /** 造一条最小合法规则壳，把待测动作塞进 actions[0]（除该动作外其余字段都合法）。 */
 function ruleWithAction(action: ScriptRule['actions'][number]): ScriptRule {
@@ -242,9 +240,8 @@ function ruleWithTrigger(trigger: ScriptRule['trigger']): ScriptRule {
     };
 }
 
-describe('拖出新块即合法 — 不依赖墙状态的 kind 过 validateRule（根因 2）', () => {
+describe('拖出新块即合法 — 不依赖墙状态的 kind 过 validateRule', () => {
     // 这些 kind 的引用字段都有非空合法默认（或本就无引用字段），拖出/切换瞬间不该报错。
-    // 0.7.1 新增：sendMessage（text 空串后端合法）/ setRandomVariable / scaleVariable（变量名非空默认）。
     const SELF_VALID_ACTIONS =
         ['setVariable', 'incrementVariable', 'playSound', 'wait', 'log', 'if',
             'sendMessage', 'setRandomVariable', 'scaleVariable'] as const;
@@ -255,8 +252,7 @@ describe('拖出新块即合法 — 不依赖墙状态的 kind 过 validateRule�
         });
     }
 
-    // variableChange 触发器（带非空默认变量名）切换瞬间也应合法。
-    // 0.7.1-P2：rightClickWall / playerQuit（无字段）+ playerLeaveRange（rangeBlocks 默认 8）也即合法。
+    // 全部触发器（含带非空默认字段的 variableChange / timer / playerNear / playerLeaveRange）切换瞬间合法。
     const SELF_VALID_TRIGGERS = [
         'variableChange', 'timer', 'playerNear', 'playerJoin', 'playerKill', 'wallReady',
         'rightClickWall', 'playerLeaveRange', 'playerQuit',
@@ -277,22 +273,18 @@ describe('拖出新块即合法 — 不依赖墙状态的 kind 过 validateRule�
             .some((e) => e.message.includes('时间轴 ID'))).toBe(true);
         expect(validateRule(ruleWithAction(makeDefaultAction('runCommand')))
             .some((e) => e.message.includes('模板 ID'))).toBe(true);
-        // 0.7.1：友好元素积木 / nudge（elementId 空）+ playTimelineAwait（timelineId 空）同理。
         expect(validateRule(ruleWithAction(makeDefaultAction('moveTo')))
             .some((e) => e.message.includes('元素 ID'))).toBe(true);
         expect(validateRule(ruleWithAction(makeDefaultAction('nudgeElement')))
             .some((e) => e.message.includes('元素 ID'))).toBe(true);
         expect(validateRule(ruleWithAction(makeDefaultAction('playTimelineAwait')))
             .some((e) => e.message.includes('时间轴 ID'))).toBe(true);
-        // 0.7.1-P2：repeat 默认 body 空 → 拖出态报"循环体不能为空"（用户须往 body 拖块）。
+        // repeat / repeatUntil 默认 body 空 → 拖出态报"循环体不能为空"（用户须往 body 拖块）。
         expect(validateRule(ruleWithAction(makeDefaultAction('repeat')))
             .some((e) => e.message.includes('循环体不能为空'))).toBe(true);
-        // 0.7.2-P3：repeatUntil 默认 body 空 → 拖出态报"重复循环体不能为空"（condition 有合法默认，
-        // 仅 body 空，用户须往 body 拖块；与 repeat 同文案）。
         expect(validateRule(ruleWithAction(makeDefaultAction('repeatUntil')))
             .some((e) => e.message === '重复循环体不能为空')).toBe(true);
-        // tween-P1：tweenBlock 默认 body 含 moveTo（elementId 空）→ 拖出态报元素 ID 缺失
-        // （body 非空，durationMs/easing 合法，仅 body[0].elementId 空需用户点选）。
+        // tweenBlock 默认 body 含 moveTo（elementId 空）→ 拖出态报元素 ID 缺失。
         expect(validateRule(ruleWithAction(makeDefaultAction('tweenBlock')))
             .some((e) => e.message.includes('元素 ID'))).toBe(true);
     });

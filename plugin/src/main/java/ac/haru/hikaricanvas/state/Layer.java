@@ -49,11 +49,7 @@ public record Layer(
         if (blendMode == null) blendMode = BlendMode.NORMAL;
     }
 
-    /**
-     * 6-arg 兼容构造器：colorTag 字段引入之前的代码不传 {@code colorTag}，全代 null。
-     * 让现有 {@code new Layer(...)} 调用点（LayerOperations / ProjectState / ProjectSnapshot）
-     * 不必逐一改签名也能编译通过。
-     */
+    /** 7 参兼容构造器：省略 {@code colorTag}（默认 {@code null}）。 */
     public Layer(String id, String name, boolean visible, boolean locked,
                  float opacity, BlendMode blendMode, List<Element> elements) {
         this(id, name, visible, locked, opacity, blendMode, null, elements);

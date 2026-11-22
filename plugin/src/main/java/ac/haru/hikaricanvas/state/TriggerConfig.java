@@ -12,10 +12,10 @@ import java.util.Map;
  * 时间轴触发配置。契约见 {@code docs/timeline.md §2.5 / §5} 与
  * {@code docs/protocol.md §7}。
  *
- * <p>{@code params} 按触发类型携带参数（如 {@code VARIABLE_CHANGE} 的 {@code fullName}）。
- * P1 仅存储；{@code VARIABLE_CHANGE} 的 {@code fullName} 须经
- * {@code VariableInterpolator.resolveFullName} 注入 wallId 才能匹配内部形式 —— 该注入发生在
- * P5 listener 注册时，存储侧保留用户原始输入（timeline.md §5.2 R）。</p>
+ * <p>{@code params} 按触发类型携带参数（如 {@code VARIABLE_CHANGE} / {@code SCHEDULE} 的
+ * {@code fullName}）。存储侧保留用户原始输入，运行期由 {@code TimelineTriggerRegistry} 经
+ * {@code VariableInterpolator.resolveFullName} 按 {@code wallId} 解析为内部完整名
+ * （{@code docs/timeline.md §5.2}）。</p>
  *
  * <p>记录不可变：{@code params} 在 canonical 构造器里防御拷贝。</p>
  */

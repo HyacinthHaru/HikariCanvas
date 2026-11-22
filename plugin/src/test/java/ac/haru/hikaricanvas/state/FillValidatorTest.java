@@ -196,7 +196,7 @@ class FillValidatorTest {
         assertThrows(RuntimeException.class, () -> FillValidator.validate(g));
     }
 
-    // ---------- parseFillNullable 协议严格性（R12：未知字段拒绝）----------
+    // ---------- parseFillNullable 协议严格性（未知字段拒绝）----------
 
     @Test
     void parseFillAcceptsValidLinearObject() {
@@ -212,7 +212,7 @@ class FillValidatorTest {
 
     @Test
     void parseFillRejectsUnknownKeyInLinear() {
-        // R12：协议入口渐变对象的未知字段应被拒（FILL_MAPPER_STRICT，不再静默忽略）。
+        // 协议入口渐变对象的未知字段应被拒绝（FILL_MAPPER_STRICT）。
         Map<String, Object> linear = Map.of(
                 "type", "linear",
                 "angle", 45.0,
@@ -225,7 +225,7 @@ class FillValidatorTest {
 
     @Test
     void parseFillStillAcceptsStringSolid() {
-        // 字符串形态（M0–M10 兼容）不受协议严格化影响。
+        // 纯色 hex 字符串形态兼容不受协议严格化影响。
         assertDoesNotThrow(() -> ElementValidator.parseFillNullable("#FF0000"));
     }
 }

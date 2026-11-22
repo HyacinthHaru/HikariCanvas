@@ -1,11 +1,10 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P5 实测修复（渲染数据源主根因）：BlockCanvas 渲染<b>当前编辑规则</b>用 workingCopy。
+ * BlockCanvas 渲染<b>当前编辑规则</b>用 workingCopy。
  *
- * <p>这是最关键的回归测试——0.7.0 之前画布只读 {@code scripts.listSorted}（server 镜像），
- * 但所有编辑改的是 {@code scriptEdit.workingCopy}（本地副本）。本套验证：选中规则后对 workingCopy
- * 的改动（{@code setActions} 加积木 / {@code setTrigger} 改触发器 / {@code updateActionField} 改字段）
- * <b>立即反映到画布 DOM</b>，无需等 800ms debounce save 回 server。</p>
+ * <p>本套验证：选中规则后对 {@code scriptEdit.workingCopy} 的改动（{@code setActions} 加积木 /
+ * {@code setTrigger} 改触发器 / {@code updateActionField} 改字段）<b>立即反映到画布 DOM</b>，
+ * 无需等 800ms debounce save 回 server。</p>
  *
  * <p>mock wsClient：本地编辑链路（selectRule / setActions / setTrigger）不真发网络；断言只看画布
  * DOM 是否随 workingCopy 即时变化。</p>
@@ -45,7 +44,7 @@ beforeEach(() => {
     useUiStore().locale = 'zh';
 });
 
-describe('BlockCanvas 渲染当前编辑规则用 workingCopy（主根因回归）', () => {
+describe('BlockCanvas 渲染当前编辑规则用 workingCopy', () => {
     it('setActions 加一个积木 → 画布立即出现新积木 DOM（不等 save）', async () => {
         const scripts = useScriptStore();
         scripts.initScripts([makeRule('sr-1')]); // server 镜像只有 1 个动作（actions/0）
@@ -146,9 +145,8 @@ describe('BlockCanvas 渲染当前编辑规则用 workingCopy（主根因回归�
         w.unmount();
     });
 
-    it('0.7.1：palette 拖友好积木「移到」→ workingCopy 多一条 setElementProperties{kind:moveTo} → 画布立即渲染「移到」', async () => {
-        // 验证 0.7.0「渲染数据源」根因修复在 friendly 路径也成立：palette 落块走 insertAt +
-        // makeDefaultAction（与 useBlockDrag.onPointerUp palette 分支同款），改 workingCopy 立即上屏。
+    it('palette 拖友好积木「移到」→ workingCopy 多一条 setElementProperties{kind:moveTo} → 画布立即渲染「移到」', async () => {
+        // palette 落块走 insertAt + makeDefaultAction（与 useBlockDrag.onPointerUp palette 分支同款），改 workingCopy 立即上屏。
         const scripts = useScriptStore();
         scripts.initScripts([makeRule('sr-1')]); // server 镜像只有 actions/0（log）
         const edit = useScriptEditStore();

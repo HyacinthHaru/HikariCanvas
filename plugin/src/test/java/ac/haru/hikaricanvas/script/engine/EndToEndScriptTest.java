@@ -6,8 +6,9 @@ import ac.haru.hikaricanvas.script.Action;
 import ac.haru.hikaricanvas.script.ScriptRule;
 import ac.haru.hikaricanvas.script.ScriptStore;
 import ac.haru.hikaricanvas.script.Trigger;
+import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.storage.AuditLog;
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.VariableInterpolator;
 import ac.haru.hikaricanvas.variable.VariableStore;
@@ -17,6 +18,8 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
@@ -26,24 +29,23 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.7.0-P2-5：脚本引擎 MVP 端到端集成测试（照 {@code variable.EndToEndSmokeTest} 风格）。
+ * 脚本引擎端到端集成测试。
  *
- * <p>全真内存装配链：真 VariableStore（fake dao）+ 真 ScriptStore（dao null）+ 真
+ * <p>内存装配链：真 VariableStore + 真 ScriptStore（dao null）+ 真
  * ConditionEvaluator / ScriptRunner（trampoline 队列调度替身——submit 串行排队，与生产
  * 单线程 SES 同语义且防 ABA 同步递归爆栈）+ 真 ActionExecutor（fake TickerControl，
  * plugin null 直跑）+ 真 TriggerRouter（手动 tick timer 替身）。监听全接：
  * {@code variableStore.registerChangeListener(router::onVariableChange)} +
  * {@code scriptStore.addListener(router::rebuildWall)}。</p>
  *
- * <p>本测试防回归的是"装配链"——变量变化 → 路由 → 预算闸 → 条件 → 动作 → 再触发的
- * 完整闭环；个体模块 case 见各自单测。</p>
+ * <p>本测试覆盖变量变化 → 路由 → 预算闸 → 条件 → 动作 → 再触发的完整闭环。</p>
  */
 class EndToEndScriptTest {
 
     private static final Logger LOG = Logger.getLogger("test");
-    /** B2：fake 墙原点所在世界（near 全链 case 共用；原点固定 (100,64,100)）。 */
-    private static final java.util.UUID WORLD_ID =
-            java.util.UUID.fromString("00000000-0000-0000-0000-0000000000e2");
+    /** fake 墙原点所在世界（near 全链用例共用；原点固定 (100,64,100)）。 */
+    private static final UUID WORLD_ID =
+            UUID.fromString("00000000-0000-0000-0000-0000000000e2");
 
     private final AtomicLong clock = new AtomicLong(1_000_000L);
     private VariableStore variableStore;
@@ -56,7 +58,7 @@ class EndToEndScriptTest {
 
     @BeforeEach
     void setUp() {
-        variableStore = new VariableStore(new FakeUserVariableDao(), w -> {});
+        variableStore = new VariableStore(new NoopUserVariableDao(), w -> {});
         scriptStore = new ScriptStore(LOG, null, 16);
         ticker = new FakeTickerControl();
         scheduler = new TrampolineScheduler();
@@ -64,8 +66,7 @@ class EndToEndScriptTest {
         ConditionEvaluator conditions = new ConditionEvaluator(LOG, variableStore);
         ActionExecutor executor = new ActionExecutor(variableStore, ticker,
                 null, null, null, LOG);
-        // AuditLog(null jdbi)：record() 内 NPE 自吞走 log fallback（0.4.10 P3-4 既有纪律）；
-        // 装上它让 K5 限频判定路径被走到（经 RecordingBudget 侧证）。
+        // AuditLog(null jdbi)：record() 内异常自吞，装上它以侧证 audit 限频判定路径
         ScriptRunner runner = new ScriptRunner(conditions, executor, budget,
                 new AuditLog(null, LOG), LOG, scheduler);
         timers = new TriggerRouterTest.FakeTimerScheduler();
@@ -233,7 +234,7 @@ class EndToEndScriptTest {
         assertEquals("2", value("user:w-1/hits"), "新 fullName 触发");
     }
 
-    // ── ⑧ 进服事件全链（0.7.0-P3 B1：Hub 转发语义 → Router 全局索引 → 执行） ──
+    // ── ⑧ 进服事件全链（Hub 转发语义 → Router 全局索引 → 执行） ──
 
     @Test
     void playerJoin_firesGlobalRulesAcrossWalls() {
@@ -253,7 +254,7 @@ class EndToEndScriptTest {
         assertEquals("1", value("user:w-2/joins"), "enabled 规则各跑一次；disabled 跳过");
     }
 
-    // ── ⑨ playerNear 全链（0.7.0-P3 B2：Sampler 状态机 → Router firePlayerNear → 执行） ──
+    // ── ⑨ playerNear 全链（Sampler 状态机 → Router firePlayerNear → 执行） ──
 
     @Test
     void playerNear_edgeTriggeredViaSamplerAndRouter() {
@@ -262,8 +263,7 @@ class EndToEndScriptTest {
                 List.of(new Action.IncrementVariable("user/visits", 1)));
 
         // fake 玩家位置源（可变 list 模拟移动）；nearRules / sink 全接真 Router
-        java.util.List<PlayerNearSampler.PlayerPos> world =
-                new java.util.concurrent.CopyOnWriteArrayList<>();
+        List<PlayerNearSampler.PlayerPos> world = new CopyOnWriteArrayList<>();
         PlayerNearSampler sampler = new PlayerNearSampler(
                 () -> List.copyOf(world), router::nearRules, router::firePlayerNear,
                 LOG, 1);   // sampleTicks=1：每次 tick 都真采样
@@ -374,7 +374,7 @@ class EndToEndScriptTest {
         }
 
         @Override
-        public void renderStatic(String wallId, ac.haru.hikaricanvas.state.ProjectState frame) {
+        public void renderStatic(String wallId, ProjectState frame) {
         }
 
         @Override
@@ -382,7 +382,7 @@ class EndToEndScriptTest {
         }
     }
 
-    /** 记录 shouldAuditBlock 的 budget（照 ScriptRunnerTest.RecordingBudget）。 */
+    /** 记录 shouldAuditBlock 的 budget。 */
     private static final class RecordingBudget extends ScriptBudget {
         int shouldAuditCalls = 0;
         int shouldAuditAllowed = 0;
@@ -397,28 +397,6 @@ class EndToEndScriptTest {
             boolean allowed = super.shouldAuditBlock(ruleKey);
             if (allowed) shouldAuditAllowed++;
             return allowed;
-        }
-    }
-
-    /** 纯内存 dao 替身（照 variable.EndToEndSmokeTest.FakeUserVariableDao）。 */
-    private static final class FakeUserVariableDao extends UserVariableDao {
-        FakeUserVariableDao() {
-            super(Logger.getLogger("test"), null);
-        }
-
-        @Override
-        public void upsert(String wallId, String name, VarType type,
-                           String defaultValue, String currentValue, String boundTo,
-                           long createdAt, long updatedAt) {
-        }
-
-        @Override
-        public void delete(String wallId, String name) {
-        }
-
-        @Override
-        public List<Row> loadAll() {
-            return new ArrayList<>();
         }
     }
 }

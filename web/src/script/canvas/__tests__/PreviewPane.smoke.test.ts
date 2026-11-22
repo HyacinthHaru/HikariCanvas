@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.1-P3-T3：PreviewPane 渲染 smoke。
+ * PreviewPane 渲染 smoke。
  *
  * <p>真实 mount：(1) 空态 project.state==null → 占位「未选择墙」+ 不调 renderProjectState；
  * (2) 有墙 state → canvas.getContext('2d') 被调 + renderProjectState(ctx, state) 被调。
@@ -26,7 +26,7 @@ vi.mock('@/render/PreviewRenderer', () => ({
 }));
 
 // wsClient mock —— scriptEdit store import 它（updateActionField → debounce → doSave 才用，
-// 但 mock 掉避免 import 真模块时连带 side-effect）。波2 测试不触发 send。
+// 但 mock 掉避免 import 真模块时连带 side-effect）。测试不触发 send。
 vi.mock('@/network/wsClient', () => ({
     getWsClient: () => ({
         sendScriptCreate: vi.fn(() => Promise.resolve()),
@@ -76,7 +76,7 @@ function fakeState(): ProjectState {
     } as unknown as ProjectState;
 }
 
-describe('PreviewPane 渲染 smoke（0.7.1-P3-T3）', () => {
+describe('PreviewPane 渲染 smoke', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
@@ -126,7 +126,7 @@ describe('PreviewPane 渲染 smoke（0.7.1-P3-T3）', () => {
     });
 });
 
-// ---------- 0.7.1-P3 波2：点选填 elementId + 取当前值 + 高亮 ----------
+// ---------- 点选填 elementId + 取当前值 + 高亮 ----------
 
 /** 墙 256×128（widthMaps 2 × heightMaps 1）+ 一个 rect 元素（默认 e-1 在 (100,30) 40×40）。 */
 function fakeStateWithElement(el?: Partial<Element>): ProjectState {
@@ -168,7 +168,7 @@ function restoreHostSize() {
     delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientHeight;
 }
 
-describe('PreviewPane 点选填 elementId + 高亮（0.7.1-P3 波2 T5）', () => {
+describe('PreviewPane 点选填 elementId + 高亮', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
@@ -263,7 +263,7 @@ describe('PreviewPane 点选填 elementId + 高亮（0.7.1-P3 波2 T5）', () =>
     });
 });
 
-describe('PreviewPane 点选取当前坐标值（0.7.1-P3 波2 T6）', () => {
+describe('PreviewPane 点选取当前坐标值', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';

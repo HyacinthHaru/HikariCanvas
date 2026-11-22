@@ -2,8 +2,7 @@ package ac.haru.hikaricanvas.variable.plugin;
 
 import ac.haru.hikaricanvas.api.NamespaceInfo;
 import ac.haru.hikaricanvas.storage.AuditLog;
-import ac.haru.hikaricanvas.storage.UserVariableDao;
-import ac.haru.hikaricanvas.variable.VarType;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import ac.haru.hikaricanvas.variable.provider.VariableProviderDaemon;
 import org.bukkit.plugin.Plugin;
@@ -21,23 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.4.0-P4-Q：{@link PluginCleanupListener} 单测。
- *
- * <p>覆盖：</p>
- * <ul>
- *   <li>外部 plugin disable 触发 registry 移除 + provider 移除</li>
- *   <li>registry 返 0 namespace（plugin 没 registerNamespace 过）→ scheduler 不调度</li>
- *   <li>registry 返 N namespace → scheduler 收到 (PURGE_DELAY_TICKS, runnable)；执行 runnable 调 purgeNamespaceData</li>
- *   <li>HikariCanvas 自己 disable → 整个 listener 直接 return</li>
- *   <li>registry 抛异常 → catch + log，不传播给 Bukkit event bus</li>
- *   <li>purge 单 namespace 失败 → 其他 namespace 仍执行 purge</li>
- *   <li>bukkitAsyncScheduler null host → NPE</li>
- *   <li>构造 null 校验</li>
- * </ul>
+ * {@link PluginCleanupListener} 外部插件卸载回收与宽限期清理单测。
  */
 class PluginCleanupListenerTest {
 
-    private FakeUserVariableDao fakeDao;
     private VariableStore store;
     private VariableProviderDaemon daemon;
     private PluginNamespaceRegistry registry;
@@ -47,16 +33,12 @@ class PluginCleanupListenerTest {
     private PluginCleanupListener listener;
 
     private Plugin pluginA;
-    private Plugin pluginB;
 
     @BeforeEach
     void setUp() {
-        fakeDao = new FakeUserVariableDao();
-        store = new VariableStore(fakeDao, w -> { });
+        store = new VariableStore(new NoopUserVariableDao(), w -> { });
         daemon = new VariableProviderDaemon();
         registry = new PluginNamespaceRegistry();
-        // P 任务接入后 HikariCanvasAPIImpl 构造需要 PushRateLimiter；测试用 unlimited
-        // 配置不影响 cleanup 行为。0.4.10 P3-4：再加 AuditLog（null jdbi → record fallback log）。
         PushRateLimiter limiter = new PushRateLimiter(PushRateLimiter.Config.unlimited());
         AuditLog auditLog = new AuditLog(null, Logger.getLogger("test"));
         api = new HikariCanvasAPIImpl(registry, store, daemon, limiter, auditLog);
@@ -64,7 +46,6 @@ class PluginCleanupListenerTest {
         host = fakePlugin("HikariCanvas");
         listener = new PluginCleanupListener(registry, api, host, scheduler);
         pluginA = fakePlugin("PluginA");
-        pluginB = fakePlugin("PluginB");
     }
 
     @AfterEach
@@ -217,21 +198,5 @@ class PluginCleanupListenerTest {
         }
 
         record ScheduledTask(long delayTicks, Runnable task) {}
-    }
-
-    // ──────────────────────────────────────────────────────────
-    //  Fake UserVariableDao（与 HikariCanvasAPIImplTest 共用风格；这里独立 copy 避免跨包依赖）
-    // ──────────────────────────────────────────────────────────
-
-    static final class FakeUserVariableDao extends UserVariableDao {
-        FakeUserVariableDao() {
-            super(Logger.getLogger("test"), null);
-        }
-        @Override
-        public void upsert(String wallId, String name, VarType type,
-                           String defaultValue, String currentValue, String boundTo,
-                           long createdAt, long updatedAt) {}
-        @Override public void delete(String wallId, String name) {}
-        @Override public List<Row> loadAll() { return new ArrayList<>(); }
     }
 }

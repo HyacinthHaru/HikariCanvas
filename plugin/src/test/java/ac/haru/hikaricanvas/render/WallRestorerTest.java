@@ -33,17 +33,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link WallRestorer} 启动期恢复守卫。核心是失败时地图的归属：
  *
  * <ul>
- *   <li><b>bind 之前</b>失败（世界没加载 / bindToWall 自己抛）→ 这一轮借到手的地图全部
- *       {@link MapPool#releaseToFree} 回 FREE，不留半态预留。</li>
+ *   <li><b>bind 之前</b>失败（世界未加载 / {@link MapPool#bindToWall} 原子校验抛异常）→ 不提交任何绑定，
+ *       地图维持原状，不留半态预留。</li>
  *   <li><b>bind 之后</b>失败（渲染阶段炸）→ 保留绑定。walls 行还在，这些地图本来就属于这面墙；
  *       还回 FREE 会被下一面墙借走，造成两墙共用一张地图 + 这面墙永久恢复不了。</li>
  * </ul>
  *
  * <p><b>测试策略</b>（照 {@code MapPoolInvariantTest} 范式）：真 SQLite（tmpdir Database +
- * MigrationRunner）+ {@link FakeMapBackendForRender}（不可用 MockBukkit）+ JDK Proxy 造 fake
+ * MigrationRunner）+ {@link FakeMapBackend}（不可用 MockBukkit）+ JDK Proxy 造 fake
  * {@link World} + 真 {@link WallRepo} seed 一面 pristine 白墙 + 真 {@link MapPool}。用
  * {@link WallRestorer} 的 {@code worldResolver} seam 注入 fake world 解析。case 2 用
- * {@link ThrowingRenderer} 子类 override {@code update} 抛异常，驱动失败回滚路径。</p>
+ * {@link ThrowingRenderer} 子类 override {@code update} 抛异常，驱动失败处置路径。</p>
  *
  * <p>断言直读 {@link MapPool#stats()} 的 free/reserved——最终不泄漏的唯一权威。</p>
  */
@@ -168,13 +168,9 @@ class WallRestorerTest {
     // ──────────────────────────────────────────────────────────
 
     /**
-     * 这条曾经反着断言（渲染失败也把地图全 releaseToFree），当时的理由是"wall 没恢复成功，
-     * 地图卡在 RESERVED 就是软泄漏"。这个理由不成立：walls 行还在库里，泄漏检测认得这面墙，
-     * 根本不会去回收它的地图 —— 它们本来就是这面墙的。
-     *
-     * <p>反过来，把地图还回 FREE 才是真的灾难：下一次 confirm 会把同一张地图借给别的墙，
-     * 两面墙共用一张图互相覆盖像素；而这面墙的 map_ids 仍指向被抢走的地图，下次启动
-     * bindToWall 直接被拒，从此再也恢复不了 —— 一次瞬时渲染异常换来一面永久坏掉的墙。</p>
+     * bind 成功后渲染抛异常时必须保留地图绑定：walls 行仍在库中，泄漏检测认得这面墙；
+     * 若把地图还回 FREE，下次 confirm 会把同一张地图借给别的墙（两墙共用一张图互相覆盖像素），
+     * 且原墙的 map_ids 指向已被抢走的地图，后续重启 bindToWall 也会直接被拒。
      */
     @Test
     void restore_renderFailureAfterBind_keepsMapsBoundToTheWall() {

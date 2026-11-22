@@ -6,6 +6,8 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.tree.LiteralCommandNode;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
+import ac.haru.hikaricanvas.HikariCanvas;
+import ac.haru.hikaricanvas.HikariCanvasConfig;
 import ac.haru.hikaricanvas.deploy.CanvasWand;
 import ac.haru.hikaricanvas.deploy.FrameDeployer;
 import ac.haru.hikaricanvas.deploy.WallResolver;
@@ -21,6 +23,9 @@ import ac.haru.hikaricanvas.template.preview.TemplatePreviewService;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
@@ -36,29 +41,27 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Level;
+import java.util.regex.Pattern;
 
 /**
- * {@code /canvas} 根命令。wall 模型命令族（详见 docs/architecture.md §3、PROPOSAL.md §5.2.x）：
+ * {@code /canvas} 根命令。wall 模型命令族（详见 {@code docs/architecture.md §3}）：
  * <ul>
  *   <li>{@code edit / wand / cancel} — 选区入口</li>
  *   <li>{@code confirm} — 锁定墙面，新建 wall（部署 ItemFrame + 借池）或 bind 现有 wall（不部署）+ 签发 token URL</li>
- *   <li>{@code open <wall_id\|alias>} — 直接打开已有 wall（绕过 SELECTING）</li>
+ *   <li>{@code open <wall_id|alias>} — 直接打开已有 wall（绕过 SELECTING）</li>
  *   <li>{@code list} — 玩家自己的画清单</li>
  *   <li>{@code alias} — wall 元数据修改（标签层）</li>
  *   <li>lock 状态由前端 TopBar 按钮触发 ws 的 wall.lock/unlock（不走命令）</li>
  *   <li>{@code delete <wall_id> [confirm]} — 删除 wall（30s 二次确认）</li>
- *   <li>{@code stats / cleanup} — 管理员</li>
+ *   <li>{@code stats / diagnose / reload / var / bench} — 管理与诊断子命令</li>
  * </ul>
- *
- * <p>{@code commit} 子命令彻底废止——保存通过 op auto-save 实现。</p>
  */
 public final class CanvasCommand {
 
     /** delete 二次确认的窗口（毫秒）。在此期间内 player 再敲带 confirm 才真删。 */
     private static final long DELETE_CONFIRM_WINDOW_MS = 30_000;
     /** wall alias 字符集：字母数字 _ -，长度 2-32。与 WebServer / 前端三路一致。 */
-    private static final java.util.regex.Pattern ALIAS_PATTERN =
-            java.util.regex.Pattern.compile("^[A-Za-z0-9_-]{2,32}$");
+    private static final Pattern ALIAS_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{2,32}$");
 
     private final JavaPlugin plugin;
     private final SessionManager sessionManager;
@@ -82,10 +85,8 @@ public final class CanvasCommand {
      * 玩家最近的 /canvas delete <wallId> 待确认条目。
      * 外层 key = playerUuid；内层 key = wallId，value = pending 元数据。
      *
-     * <p>多 wall 并存：玩家可同时对多个不同 wall 各起一个 pending（30s 窗口内），
-     * 互不覆盖。后续敲 {@code /canvas delete <wallId> confirm} 时按 (player, wallId)
-     * 精确匹配。原来用 {@code Map<UUID, PendingDelete>} 会导致连续两个 {@code delete A}
-     * 后 {@code delete B} 第二条覆盖第一条 → 玩家若想 confirm A 会得到 "mismatched" 报错。</p>
+     * <p>多 wall 并存：玩家可同时对多个不同 wall 各起一个 pending（30s 窗口内），互不覆盖；
+     * 后续敲 {@code /canvas delete <wallId> confirm} 时按 (player, wallId) 精确匹配。</p>
      *
      * <p>清理：{@link QuitListener} 在玩家退出时清整层 bucket（{@code pendingDeletes.remove(playerUuid)}）；
      * 另在 {@link #runDeleteFirstStep} 入口顺手 reap 该玩家已超 30s 的旧条目。无独立 reap task。</p>
@@ -133,9 +134,7 @@ public final class CanvasCommand {
     }
 
     public LiteralCommandNode<CommandSourceStack> build() {
-        // canvas.use = 基础总开关（security.md §5 一直这么写，但此前全仓零引用——
-        // 服主收掉它以为封停了插件，实际所有命令照跑）。挂在根节点上：Brigadier 的
-        // requires 沿树继承，收掉即整族 /canvas 命令不可见。default: true，正常玩家无感。
+        // canvas.use 为根级开关：Brigadier 的 requires 沿树继承，收掉即整族 /canvas 命令不可见。
         var root = Commands.literal("canvas")
                 .requires(src -> src.getSender().hasPermission("canvas.use"));
         if (variableSubCommand != null) {
@@ -151,9 +150,6 @@ public final class CanvasCommand {
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
                         .executes(this::runEdit))
                 .then(Commands.literal("wand")
-                        // canvas.wand（不是 canvas.edit）——security.md §6 的检查点表一直
-                        // 写的就是这个节点，只是从没接上；服主想单独收掉发魔杖的权限时
-                        // 之前收了个寂寞。default: true，正常玩家无感。
                         .requires(src -> isPlayerWith(src, "canvas.wand"))
                         .executes(this::runWand))
                 .then(Commands.literal("confirm")
@@ -408,7 +404,7 @@ public final class CanvasCommand {
                     ? "<aqua>  [L] <wall_id><alias_part> · <width>x<height> · <world> (<x>,<y>,<z>) <facing></aqua>"
                     : "<gray>  [D] <wall_id><alias_part> · <width>x<height> · <world> (<x>,<y>,<z>) <facing></gray>";
         }
-        Component label = net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
+        Component label = MiniMessage.miniMessage()
                 .deserialize(lineRaw,
                         Placeholder.unparsed("wall_id", w.wallId()),
                         Placeholder.unparsed("alias_part", aliasPart),
@@ -548,13 +544,7 @@ public final class CanvasCommand {
             messages.send(player, "command.delete.not-owner-confirm");
             return Command.SINGLE_SUCCESS;
         }
-        // 拆 ItemFrame。
-        //
-        // 世界未加载时**必须拒绝删除**：原实现直接 frames=0 跳过拆框，仍执行 deleteWall
-        // （releaseWall 置 FREE + 删 walls 行）。后果是残留 ItemFrame 的 wall_id PDC 还在，
-        // 而 FrameProtectionListener 只看 PDC 不查 walls 行是否还在 → 普通玩家永远拆不掉；
-        // 归还池的 mapId 被新 wall 复用 → 旧框直接显示新 wall 像素（跨墙串台）；该位置再选区
-        // 被判 stale 但 wall 行已删、无法再 delete。
+        // 世界未加载时必须拒绝删除，防止残留带 wall_id PDC 的 ItemFrame。
         World world = plugin.getServer().getWorld(w.key().world());
         if (world == null) {
             messages.send(player, "command.delete.world-not-loaded",
@@ -562,9 +552,7 @@ public final class CanvasCommand {
                     Placeholder.unparsed("world", w.key().world()));
             return Command.SINGLE_SUCCESS;
         }
-        // removeForWall 走 world.getEntitiesByClass，**只遍历已加载区块**。不先强加载就会
-        // 漏掉未加载区块里的画框，产生和"世界未加载"同样的残留。按 wall 尺寸算保守区块半径
-        // （每个 map 占 1 格，chunk 16 格）后同步加载一圈。
+        // removeForWall 走 world.getEntitiesByClass（仅遍历已加载区块），先同步加载 wall 覆盖区块。
         int span = Math.max(w.widthMaps(), w.heightMaps());
         int chunkRadius = (span / 16) + 1;
         int originChunkX = w.key().originX() >> 4;
@@ -575,18 +563,11 @@ public final class CanvasCommand {
             }
         }
         int frames = frameDeployer.removeForWall(wallId, world);
-        // 注意：**不**按「frames < 期望数」判失败并中止——被玩家破坏过的墙本来就少框，
-        // 那样会让合法的清理操作永远删不掉。真正的失败机制（世界未加载 / 区块未加载）
-        // 已在上面两步各自堵死。
-        // SessionManager.deleteWall 释放池 + 删 walls 行（含 cancel 任何活跃 session）
-        sessionManager.deleteWall(wallId);
-        // 复查一遍行到底没了没有。deleteWall 是"先把地图释放回池、后删 walls 行"，删行失败
-        // （比如 SQLITE_BUSY 5 秒没抢到写锁）它自己不报错 —— 那样玩家会以为删掉了，实际留下
-        // 最糟的组合：行还在、地图却已经能被下一面墙借走。宁可如实说"没删成，再来一次"。
-        if (wallRepo.loadById(wallId).isPresent()) {
-            plugin.getLogger().severe("delete: wall row " + wallId + " is still present after"
-                    + " deleteWall — its maps were already returned to the pool. Player was told"
-                    + " the deletion failed; retry /canvas delete " + wallId);
+        // SessionManager.deleteWall 先删 walls 行、再释放地图（含 cancel 任何活跃 session）；
+        // 若 DB 删行失败则地图仍保持 RESERVED，返回 false。
+        if (!sessionManager.deleteWall(wallId)) {
+            plugin.getLogger().severe("delete: failed to delete wall row " + wallId
+                    + " (its maps remain RESERVED); retry /canvas delete " + wallId);
             messages.send(player, "command.delete.failed",
                     Placeholder.unparsed("wall_id", wallId));
             return Command.SINGLE_SUCCESS;
@@ -637,11 +618,8 @@ public final class CanvasCommand {
                     Placeholder.unparsed("message", pe.message()));
             return Command.SINGLE_SUCCESS;
         }
-        // confirm 撞 locked + 非 owner + 无 bypass → Forbidden
         if (result instanceof SessionManager.ConfirmResult.Forbidden fb) {
-            // fb.message() 是动态服务器错误信息，直接用 Component.text 转发
-            player.sendMessage(Component.text(fb.message(),
-                    net.kyori.adventure.text.format.NamedTextColor.RED));
+            player.sendMessage(Component.text(fb.message(), NamedTextColor.RED));
             return Command.SINGLE_SUCCESS;
         }
 
@@ -704,10 +682,6 @@ public final class CanvasCommand {
     }
 
     /**
-     * 发送带 ClickEvent（open_url）和 HoverEvent 的编辑器链接。
-     * lang 文件只提供 hover 文字，链接本体由 Java 构建（MiniMessage 不支持动态 url click tag）。
-     */
-    /**
      * 下发编辑器链接。玩家得到可点击的 Component；<b>控制台得到不带任何装饰的明文行</b>。
      *
      * <p>控制台不做可点链接不只是"点不了"——带颜色 / 下划线的 Component 会把 ANSI 控制码
@@ -723,26 +697,24 @@ public final class CanvasCommand {
             return;
         }
         String prefixRaw = messages.rawOrNull(messages.localeId(sender), prefixKey);
-        Component prefix = net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
+        Component prefix = MiniMessage.miniMessage()
                 .deserialize(prefixRaw != null ? prefixRaw.replace("<url>", "") : "Open editor: ");
         sender.sendMessage(prefix);
         sender.sendMessage(Component.text(url));   // 明文独占一行，便于整行复制
     }
 
+    /**
+     * 发送带 ClickEvent（open_url）和 HoverEvent 的编辑器链接。
+     * lang 文件只提供 hover 文字，链接本体由 Java 构建（MiniMessage 不支持动态 url click tag）。
+     */
     private void sendEditorUrlComponent(Player player, String url, String prefixKey, String hoverKey) {
-        // hover 文字来自 lang
         String hoverRaw = messages.rawOrNull(messages.localeId(player), hoverKey);
         if (hoverRaw == null) hoverRaw = "Click to open in browser";
-        // 前缀文字：lang 中 urlKey 的非 url 部分，直接用 MiniMessage 渲染 prefix key
-        // 约定 lang 格式："<gray>Open editor: </gray><aqua><underlined><url></underlined></aqua>"
-        // 这里把 <url> 替换为真实 url 并用 Placeholder 注入，Adventure 会渲染文字但无法附 ClickEvent。
-        // 因此：用 Component 拼装，lang 仅贡献文字颜色语义。
         String prefixRaw = messages.rawOrNull(messages.localeId(player), prefixKey);
-        Component prefix = net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
+        Component prefix = MiniMessage.miniMessage()
                 .deserialize(prefixRaw != null ? prefixRaw.replace("<url>", "") : "Open editor: ");
-        Component link = Component.text(url,
-                net.kyori.adventure.text.format.NamedTextColor.AQUA)
-                .decorate(net.kyori.adventure.text.format.TextDecoration.UNDERLINED)
+        Component link = Component.text(url, NamedTextColor.AQUA)
+                .decorate(TextDecoration.UNDERLINED)
                 .clickEvent(ClickEvent.openUrl(url))
                 .hoverEvent(HoverEvent.showText(Component.text(hoverRaw)));
         player.sendMessage(prefix.append(link));
@@ -752,12 +724,12 @@ public final class CanvasCommand {
 
     private int runReloadConfig(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();
-        if (!(plugin instanceof ac.haru.hikaricanvas.HikariCanvas hc)) {
+        if (!(plugin instanceof HikariCanvas hc)) {
             messages.send(sender, "command.reload.config-type-mismatch");
             return Command.SINGLE_SUCCESS;
         }
         plugin.reloadConfig();
-        ac.haru.hikaricanvas.HikariCanvasConfig fresh = ac.haru.hikaricanvas.HikariCanvasConfig.load(plugin);
+        HikariCanvasConfig fresh = HikariCanvasConfig.load(plugin);
         hc.applyConfig(fresh);
         messages.send(sender, "command.reload.config-ok",
                 Placeholder.unparsed("summary", fresh.summary()));

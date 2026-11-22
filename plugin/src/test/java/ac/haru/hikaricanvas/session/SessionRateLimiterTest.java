@@ -10,12 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.9.3 Task 3：{@link SessionRateLimiter} 反复超限回调语义单测。
- *
- * <p>用低阈值（burst=2 / window=10s / violationThreshold=3 / violationWindow=60s）+
- * 捕获回调入参的方式断言：跨阈值触发一次、同窗口内不重复触发、会话间互不影响、
- * allow() 返回值不受影响。窗口靠时钟过期的复位路径不在此单测（limiter 无时钟 seam，
- * 与既有实现一致），交由人工 / 集成验证。</p>
+ * {@link SessionRateLimiter} 反复超限回调语义单测。
  */
 class SessionRateLimiterTest {
 

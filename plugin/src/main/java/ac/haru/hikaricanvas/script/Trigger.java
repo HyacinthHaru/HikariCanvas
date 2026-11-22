@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
 /**
- * 墙脚本触发器的多态联合：六种触发时机。
+ * 墙脚本触发器的多态联合：9 种触发时机。
  * 契约见 {@code docs/scripting.md §2.2}。
  *
  * <p>wire 形态为扁平字段 + {@code type} 判别（camelCase），与 {@link ac.haru.hikaricanvas.state.KfValue}
@@ -16,6 +16,9 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
  *   <li>{@code {"type":"playerKill"}} → {@link PlayerKill}</li>
  *   <li>{@code {"type":"playerNear","rangeBlocks":8}} → {@link PlayerNear}</li>
  *   <li>{@code {"type":"wallReady"}} → {@link WallReady}</li>
+ *   <li>{@code {"type":"rightClickWall"}} → {@link RightClickWall}</li>
+ *   <li>{@code {"type":"playerLeaveRange","rangeBlocks":8}} → {@link PlayerLeaveRange}</li>
+ *   <li>{@code {"type":"playerQuit"}} → {@link PlayerQuit}</li>
  * </ul>
  *
  * <p>数值范围等结构校验在 {@link ScriptRuleValidator} 做，本类型只管 wire 形态。</p>

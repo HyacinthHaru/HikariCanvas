@@ -1,12 +1,16 @@
 package ac.haru.hikaricanvas.web;
 
-import io.javalin.websocket.WsMessageContext;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
 import ac.haru.hikaricanvas.session.SessionRateLimiter;
 import ac.haru.hikaricanvas.state.PatchOp;
+import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.state.StatePatch;
+import ac.haru.hikaricanvas.storage.AuditLog;
 import ac.haru.hikaricanvas.storage.VariableAliasDao;
+import ac.haru.hikaricanvas.storage.WallRepo;
+import io.javalin.websocket.WsMessageContext;
+import org.bukkit.plugin.Plugin;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,7 +21,7 @@ import static ac.haru.hikaricanvas.web.WebHelpers.asPayloadMap;
 import static ac.haru.hikaricanvas.web.WebHelpers.stringOrNull;
 
 /**
- * {@code variable.alias.*} WS op 分发器。详见 {@code docs/variables.md §1.12} +
+ * {@code variable.alias.*} WS op 分发器。详见 {@code docs/dynamic-data.md} 与
  * {@code docs/protocol.md §5.13}。
  *
  * <h2>3 个 op</h2>
@@ -37,11 +41,11 @@ import static ac.haru.hikaricanvas.web.WebHelpers.stringOrNull;
  *
  * <p>{@code /aliases/<encoded fullName>}（JSON Pointer 编码 ~ → ~0, / → ~1）。
  * add/replace 携 alias 字符串；remove 不携 value。前端 wsClient 按 {@code /aliases/} 前缀
- * 分拣后落 {@link ac.haru.hikaricanvas.variable} mirror（VariableAliasStore）。</p>
+ * 分拣后写入前端 {@code variableAliases} store。</p>
  *
  * <p>同 {@link ScheduleOpDispatcher} 风格，不走 EditSession（别名不影响 ProjectState
- * / 像素 dirty / version），dispatcher 自己产生 state.patch（version=0 占位，前端不读
- * 此通道的 version）发推。</p>
+ * 或像素 dirty、不递增版本号），dispatcher 直接构造 {@code state.patch} 并填入当前会话的
+ * {@link ProjectState#version()}，避免前端 mirror 版本号回退。</p>
  */
 final class VariableAliasDispatcher {
 
@@ -53,19 +57,19 @@ final class VariableAliasDispatcher {
     private final SessionManager sessionManager;
     private final SessionRateLimiter rateLimiter;
     private final VariableAliasDao dao;
-    private final ac.haru.hikaricanvas.storage.WallRepo wallRepo;
+    private final WallRepo wallRepo;
     private final OpPushCallback push;
-    private final ac.haru.hikaricanvas.storage.AuditLog auditLog;
+    private final AuditLog auditLog;
     /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
-    private final org.bukkit.plugin.Plugin plugin;
+    private final Plugin plugin;
 
     VariableAliasDispatcher(SessionManager sessionManager,
                             SessionRateLimiter rateLimiter,
                             VariableAliasDao dao,
-                            ac.haru.hikaricanvas.storage.WallRepo wallRepo,
+                            WallRepo wallRepo,
                             OpPushCallback push,
-                            ac.haru.hikaricanvas.storage.AuditLog auditLog,
-                            org.bukkit.plugin.Plugin plugin) {
+                            AuditLog auditLog,
+                            Plugin plugin) {
         this.sessionManager = sessionManager;
         this.rateLimiter = rateLimiter;
         this.dao = dao;
@@ -225,7 +229,7 @@ final class VariableAliasDispatcher {
     private boolean checkPermission(WsMessageContext ctx, Envelope in, String sessionId,
                                     Session s, String op) {
         UUID callerUuid = s.playerUuid();
-        ac.haru.hikaricanvas.storage.WallRepo.Wall wall = wallRepo.loadById(s.wallId()).orElse(null);
+        WallRepo.Wall wall = wallRepo.loadById(s.wallId()).orElse(null);
         if (wall == null) {
             ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
             return false;
@@ -274,7 +278,7 @@ final class VariableAliasDispatcher {
      */
     private static long currentVersion(Session s) {
         if (s == null) return 0L;
-        ac.haru.hikaricanvas.state.ProjectState ps = s.projectState();
+        ProjectState ps = s.projectState();
         return ps == null ? 0L : ps.version();
     }
 

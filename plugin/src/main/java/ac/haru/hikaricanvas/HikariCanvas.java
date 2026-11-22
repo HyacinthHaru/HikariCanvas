@@ -1,6 +1,7 @@
 package ac.haru.hikaricanvas;
 
-import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
+import ac.haru.hikaricanvas.api.HikariCanvasAPI;
+import ac.haru.hikaricanvas.canvasfile.AssetIngest;
 import ac.haru.hikaricanvas.command.BenchmarkSubCommand;
 import ac.haru.hikaricanvas.command.CanvasCommand;
 import ac.haru.hikaricanvas.command.DiagnosticsSubCommand;
@@ -9,37 +10,63 @@ import ac.haru.hikaricanvas.deploy.FrameDeployer;
 import ac.haru.hikaricanvas.deploy.FrameProtectionListener;
 import ac.haru.hikaricanvas.deploy.MapPacketSender;
 import ac.haru.hikaricanvas.deploy.WallResolver;
+import ac.haru.hikaricanvas.i18n.Messages;
+import ac.haru.hikaricanvas.image.ImageQuotaService;
+import ac.haru.hikaricanvas.image.ImageStorage;
+import ac.haru.hikaricanvas.image.UploadHandler;
 import ac.haru.hikaricanvas.pool.MapPool;
 import ac.haru.hikaricanvas.render.AnimationTicker;
-import ac.haru.hikaricanvas.render.TimelineTriggerRegistry;
 import ac.haru.hikaricanvas.render.BufferPool;
 import ac.haru.hikaricanvas.render.CanvasCompositor;
 import ac.haru.hikaricanvas.render.CanvasProjector;
-import ac.haru.hikaricanvas.render.WallRestorer;
+import ac.haru.hikaricanvas.render.FontMetricsTable;
 import ac.haru.hikaricanvas.render.FontRegistry;
 import ac.haru.hikaricanvas.render.HikariCanvasRenderer;
+import ac.haru.hikaricanvas.render.IconRegistry;
 import ac.haru.hikaricanvas.render.PaletteLut;
 import ac.haru.hikaricanvas.render.PlaceholderRenderer;
 import ac.haru.hikaricanvas.render.ProjectionThrottler;
+import ac.haru.hikaricanvas.render.TimelineTriggerRegistry;
+import ac.haru.hikaricanvas.render.WallRestorer;
+import ac.haru.hikaricanvas.script.ScriptRule;
+import ac.haru.hikaricanvas.script.ScriptStore;
+import ac.haru.hikaricanvas.script.engine.ActionExecutor;
+import ac.haru.hikaricanvas.script.engine.ConditionEvaluator;
+import ac.haru.hikaricanvas.script.engine.ElementPropertyApplier;
+import ac.haru.hikaricanvas.script.engine.GameEventListenerHub;
+import ac.haru.hikaricanvas.script.engine.PlayerNearSampler;
+import ac.haru.hikaricanvas.script.engine.ScriptBudget;
+import ac.haru.hikaricanvas.script.engine.ScriptRunner;
+import ac.haru.hikaricanvas.script.engine.TickerControl;
+import ac.haru.hikaricanvas.script.engine.TraceStep;
+import ac.haru.hikaricanvas.script.engine.TriggerContext;
+import ac.haru.hikaricanvas.script.engine.TriggerRouter;
+import ac.haru.hikaricanvas.script.engine.TweenScheduler;
 import ac.haru.hikaricanvas.session.SessionManager;
 import ac.haru.hikaricanvas.session.SessionRateLimiter;
 import ac.haru.hikaricanvas.session.SessionReaper;
 import ac.haru.hikaricanvas.session.TokenService;
 import ac.haru.hikaricanvas.session.WandListener;
+import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.state.StatePatch;
 import ac.haru.hikaricanvas.storage.AuditLog;
+import ac.haru.hikaricanvas.storage.BackupReaper;
 import ac.haru.hikaricanvas.storage.Database;
 import ac.haru.hikaricanvas.storage.ImageUploadDao;
-import ac.haru.hikaricanvas.storage.TemplateRepo;
-import ac.haru.hikaricanvas.storage.WallRepo;
-import ac.haru.hikaricanvas.storage.BackupReaper;
 import ac.haru.hikaricanvas.storage.MigrationRunner;
-import ac.haru.hikaricanvas.image.ImageQuotaService;
-import ac.haru.hikaricanvas.image.ImageStorage;
-import ac.haru.hikaricanvas.image.UploadHandler;
+import ac.haru.hikaricanvas.storage.RailDao;
+import ac.haru.hikaricanvas.storage.ScheduleDao;
+import ac.haru.hikaricanvas.storage.ScriptDao;
+import ac.haru.hikaricanvas.storage.TemplateRepo;
+import ac.haru.hikaricanvas.storage.UserGlobalVariableDao;
+import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.storage.VariableAliasDao;
+import ac.haru.hikaricanvas.storage.WallRepo;
 import ac.haru.hikaricanvas.template.TemplatePublisher;
 import ac.haru.hikaricanvas.template.TemplateRegistry;
 import ac.haru.hikaricanvas.template.preview.TemplatePreviewService;
 import ac.haru.hikaricanvas.template.preview.WallPreviewService;
+import ac.haru.hikaricanvas.variable.VariableInterpolator;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import ac.haru.hikaricanvas.variable.plugin.HikariCanvasAPIImpl;
 import ac.haru.hikaricanvas.variable.plugin.PluginCleanupListener;
@@ -47,22 +74,36 @@ import ac.haru.hikaricanvas.variable.plugin.PluginNamespaceRegistry;
 import ac.haru.hikaricanvas.variable.plugin.PushRateLimiter;
 import ac.haru.hikaricanvas.variable.provider.ManualScheduleProvider;
 import ac.haru.hikaricanvas.variable.provider.ProviderBootstrap;
+import ac.haru.hikaricanvas.variable.provider.RailScheduleProvider;
 import ac.haru.hikaricanvas.variable.provider.VariableProviderDaemon;
-import ac.haru.hikaricanvas.api.HikariCanvasAPI;
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.web.OpPushCallback;
+import ac.haru.hikaricanvas.web.TokenRateLimiter;
 import ac.haru.hikaricanvas.web.WebServer;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import org.bukkit.Bukkit;
-import org.bukkit.Material;
+import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.MapMeta;
-import org.bukkit.map.MapView;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
+import javax.imageio.spi.IIORegistry;
+import javax.imageio.spi.ImageReaderSpi;
 import java.io.IOException;
-import java.time.Duration;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
 
 @SuppressWarnings("UnstableApiUsage") // Paper Lifecycle API 标记为 experimental 但稳定可用
 public final class HikariCanvas extends JavaPlugin {
@@ -101,16 +142,15 @@ public final class HikariCanvas extends JavaPlugin {
     private SessionRateLimiter rateLimiter;
     private FontRegistry fontRegistry;
     /** 矢量图标注册表（FA Free + 用户 SVG）。 */
-    private ac.haru.hikaricanvas.render.IconRegistry iconRegistry;
+    private IconRegistry iconRegistry;
     private PaletteLut paletteLut;
     private TemplateRegistry templateRegistry;
     private TemplatePreviewService templatePreviewService;
     private WallPreviewService wallPreviewService;
     private ImageStorage imageStorage;
     private UploadHandler uploadHandler;
-    // .canvas 工程导入 assets 摄入栈；持 daemon 单线程 decoderPool，onDisable 须 shutdown
-    // （否则热重载累积线程池泄漏）。
-    private ac.haru.hikaricanvas.canvasfile.AssetIngest assetIngest;
+    // .canvas 工程导入 assets 摄入栈；持 daemon 单线程解码器，onDisable 须 shutdown。
+    private AssetIngest assetIngest;
     private TemplateRepo templateRepo;
     private TemplatePublisher templatePublisher;
     // 变量系统底座（VariableStore + user_variables 持久化）。
@@ -119,40 +159,39 @@ public final class HikariCanvas extends JavaPlugin {
     // ProviderBootstrap.initialize 注册（SystemVariableProvider / PapiVariableBridge 等）。
     private VariableProviderDaemon variableProviderDaemon;
     // 兜底列车时刻表 DAO。WebServer schedule.* op + ManualScheduleProvider 共享。
-    private ac.haru.hikaricanvas.storage.ScheduleDao scheduleDao;
+    private ScheduleDao scheduleDao;
     // 变量别名 DAO（per-wall fullName → alias 字符串映射）。WebServer 注入 dispatcher
     // + ready payload；不参与渲染。
-    private ac.haru.hikaricanvas.storage.VariableAliasDao variableAliasDao;
+    private VariableAliasDao variableAliasDao;
     // 全局用户变量 DAO（userglobal/* namespace；name 全服唯一）。装配后注入
     // VariableStore.configureUserGlobal —— EditSession.createGlobalVariable 路径走它持久化。
-    private ac.haru.hikaricanvas.storage.UserGlobalVariableDao userGlobalVariableDao;
-    // 铁路网络 DAO（V016；5 表统一 CRUD）。WebServer + RailScheduleProvider 共享。
-    private ac.haru.hikaricanvas.storage.RailDao railDao;
-    // 墙脚本内存镜像（V017 wall_scripts 持久化）。WebServer script.* op +
+    private UserGlobalVariableDao userGlobalVariableDao;
+    // 铁路网络 DAO（5 表统一 CRUD）。WebServer + RailScheduleProvider 共享。
+    private RailDao railDao;
+    // 墙脚本内存镜像（wall_scripts 持久化）。WebServer script.* op +
     // ready payload 注入；ScriptRunner 引擎也走它。
-    private ac.haru.hikaricanvas.script.ScriptStore scriptStore;
+    private ScriptStore scriptStore;
     // 脚本执行引擎三件（装配在 AnimationTicker 之后——ActionExecutor 依赖 ticker）。
     // budget 留引用供 /canvas reload 热更（applyConfig）；runner / router 是 daemon 类资源，
     // onDisable 须 shutdown（router 先关停 timer 投递，runner 再关执行队列）。
-    private ac.haru.hikaricanvas.script.engine.ScriptBudget scriptBudget;
-    private ac.haru.hikaricanvas.script.engine.ScriptRunner scriptRunner;
-    private ac.haru.hikaricanvas.script.engine.TriggerRouter scriptTriggerRouter;
+    private ScriptBudget scriptBudget;
+    private ScriptRunner scriptRunner;
+    private TriggerRouter scriptTriggerRouter;
     // 留引用供 /canvas reload 热更 headless 克隆元素配额（applyConfig）。
-    private ac.haru.hikaricanvas.script.engine.ElementPropertyApplier scriptPropertyApplier;
+    private ElementPropertyApplier scriptPropertyApplier;
     // 补间动画引擎：独立单线程 SES，渲临时帧（不落 DB）+ 末帧 applyMany 落盘。
     // 须在 scriptRunner.shutdown() 之后、animationTicker.shutdown() 之前关停。
-    private ac.haru.hikaricanvas.script.engine.TweenScheduler tweenScheduler;
+    private TweenScheduler tweenScheduler;
     // playerNear 周期采样器（主线程 task，2 tick 底层周期 +
     // volatile 跳帧计数；applyConfig 热更采样间隔）。
-    private ac.haru.hikaricanvas.script.engine.PlayerNearSampler playerNearSampler;
+    private PlayerNearSampler playerNearSampler;
     private BukkitTask playerNearTask;
     // 世界名 → UUID 快照表。playerNear 原点解析（originSource）可能在
     // 任意线程跑（WS 脚本 op → ScriptStore listener → rebuildWall 在 Jetty 线程），
     // 不能异步调 Bukkit.getWorld（读 CraftServer.worlds 普通 LinkedHashMap，官方不
     // 保证线程安全）。onEnable 用 Bukkit.getWorlds() 全量种子；之后由
     // GameEventListenerHub 的 WorldLoad/WorldUnloadEvent handler（主线程）增量维护。
-    private final java.util.concurrent.ConcurrentHashMap<String, java.util.UUID>
-            scriptWorldUuidByName = new java.util.concurrent.ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, UUID> scriptWorldUuidByName = new ConcurrentHashMap<>();
     // 外部插件 namespace 注册表 + Push API impl。
     // onEnable 实例化 + Bukkit.getServicesManager().register（让外部插件
     // 通过 ServicesManager.load(HikariCanvasAPI.class) 零编译耦合拿到 API）。
@@ -164,12 +203,11 @@ public final class HikariCanvas extends JavaPlugin {
     private BenchmarkSubCommand benchmarkSubCommand;
     private volatile HikariCanvasConfig config;
     // 多语言消息注册表（jar 内置 lang/ + dataFolder/lang/ 外部覆盖）。
-    private ac.haru.hikaricanvas.i18n.Messages messages;
+    private Messages messages;
     // onEnable 从 JVM 全局 IIORegistry 注销的 ImageReaderSpi 实例列表。
     // onDisable 逐个 registerServiceProvider 恢复——避免本插件（热）卸载后别的插件
     // ImageIO.read GIF/BMP/TIFF 永久失败（IIORegistry 是进程级共享单例）。
-    private final java.util.List<javax.imageio.spi.ImageReaderSpi> deregisteredImageReaders =
-            new java.util.ArrayList<>();
+    private final List<ImageReaderSpi> deregisteredImageReaders = new ArrayList<>();
 
     @Override
     public void onEnable() {
@@ -193,16 +231,16 @@ public final class HikariCanvas extends JavaPlugin {
         // 把被注销的 SPI 实例存到字段，onDisable 逐个 registerServiceProvider 恢复，避免本插件
         // （热）卸载后别的依赖 JDK ImageIO 读 GIF/BMP/TIFF 的插件永久失败。
         try {
-            javax.imageio.spi.IIORegistry registry = javax.imageio.spi.IIORegistry.getDefaultInstance();
-            java.util.Iterator<javax.imageio.spi.ImageReaderSpi> readers = registry.getServiceProviders(
-                    javax.imageio.spi.ImageReaderSpi.class, false);
-            java.util.List<javax.imageio.spi.ImageReaderSpi> toRemove = new java.util.ArrayList<>();
+            IIORegistry registry = IIORegistry.getDefaultInstance();
+            Iterator<ImageReaderSpi> readers = registry.getServiceProviders(
+                    ImageReaderSpi.class, false);
+            List<ImageReaderSpi> toRemove = new ArrayList<>();
             while (readers.hasNext()) {
-                javax.imageio.spi.ImageReaderSpi spi = readers.next();
+                ImageReaderSpi spi = readers.next();
                 String[] names = spi.getFormatNames();
                 boolean keep = false;
                 for (String n : names) {
-                    String lc = n.toLowerCase(java.util.Locale.ROOT);
+                    String lc = n.toLowerCase(Locale.ROOT);
                     if (lc.equals("png") || lc.equals("jpeg") || lc.equals("jpg") || lc.equals("webp")) {
                         keep = true;
                         break;
@@ -216,7 +254,7 @@ public final class HikariCanvas extends JavaPlugin {
             getLogger().info("IIORegistry: deregistered " + toRemove.size()
                     + " unused image readers (kept PNG/JPEG)");
         } catch (Exception e) {
-            getLogger().log(java.util.logging.Level.WARNING,
+            getLogger().log(Level.WARNING,
                     "IIORegistry deregistration failed (non-fatal)", e);
         }
 
@@ -256,10 +294,7 @@ public final class HikariCanvas extends JavaPlugin {
         // 旧池行 world 信息缺失时的 fallback。未配置 per-world 的 world 走 on-demand 扩容。
         mapPool.initialize(Bukkit.getWorlds().get(0), config.mapPoolPerWorldInitial);
 
-        // 墙面识别 + 会话管理（Wand / 命令族会注入这两个）
-        // 单面招牌的地图数上限。docs/data-model.md §5 与 security.md 一直把它写成配置项，
-        // 但实现里一直是写死的 16 —— 服主加了这个键完全不生效。现在真的读它（范围 1~64，
-        // 越界只提示并钳回边界，不阻断启动）。plugin 提供 PDC namespace。
+        // 墙面识别 + 会话管理（单面招牌地图数上限 1~64，越界钳位并打 warning；plugin 提供 PDC namespace）
         int canvasMaxMaps = readCanvasMaxMaps();
         wallResolver = new WallResolver(canvasMaxMaps, this);
         wallRepo = new WallRepo(getLogger(), database.jdbi());
@@ -274,13 +309,11 @@ public final class HikariCanvas extends JavaPlugin {
         }
 
         sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog, wallRepo, canvasRenderer);
-        sessionManager.setMaxImagesPerWall(config.images.maxPerWall());  // per-wall 图片配额注入
-        sessionManager.setMaxElementsPerWall(config.scriptsConfig.maxElementsPerWall());  // per-wall 元素配额注入（路径 A）
-        sessionManager.setTimelineFpsLimits(  // 时间轴 fps 配置注入（config 段 timeline）
+        sessionManager.setMaxImagesPerWall(config.images.maxPerWall());
+        sessionManager.setMaxElementsPerWall(config.scriptsConfig.maxElementsPerWall());
+        sessionManager.setTimelineFpsLimits(
                 config.timelineConfig.defaultFps(), config.timelineConfig.maxFps());
 
-        // 自适应渲染：mapPacketSender 在 CanvasProjector 构造前才 new（见下方）。
-        // PlaceholderRenderer 也注入 CanvasProjector，用于"state pristine 回 placeholder"语义
         PlaceholderRenderer placeholderRenderer = new PlaceholderRenderer();
         frameDeployer = new FrameDeployer(this, placeholderRenderer, canvasRenderer);
 
@@ -292,7 +325,7 @@ public final class HikariCanvas extends JavaPlugin {
 
         // 多语言消息注册表。jar 内置 lang/ → 首次启动拷一份到 dataFolder/lang/ 供服主改；
         // 再 loadExternal 按键合并回来（改过的句子用服主的，没改的用内置，见 Messages.loadExternal）。
-        messages = new ac.haru.hikaricanvas.i18n.Messages(getLogger());
+        messages = new Messages(getLogger());
         saveLangIfAbsent("lang/en_us.yml");
         saveLangIfAbsent("lang/zh_cn.yml");
         messages.loadBuiltIn();
@@ -301,7 +334,7 @@ public final class HikariCanvas extends JavaPlugin {
         getLogger().info("Messages: " + messages.size() + " language(s) ready");
 
         // 矢量图标注册表。jar 内置 Font Awesome Free + 用户 plugins/HikariCanvas/icons/*.svg
-        iconRegistry = new ac.haru.hikaricanvas.render.IconRegistry(getLogger());
+        iconRegistry = new IconRegistry(getLogger());
         iconRegistry.loadBuiltIn();
         iconRegistry.loadExternal(getDataFolder().toPath().resolve("icons"));
         getLogger().info("IconRegistry: " + iconRegistry.size() + " icon(s) ready");
@@ -326,26 +359,21 @@ public final class HikariCanvas extends JavaPlugin {
         CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry,
                 iconRegistry, getLogger());
         compositor.setImageLoader(imageStorage::load);
-        // 自适应渲染：构造期传 mapPacketSender + wallRepo，让 projector 渲染完
-        // 主动给 chunk-loaded viewer 推 ClientboundMapItemDataPacket（不再依赖 Paper 默认 MapView
-        // sync 的 250ms-5s 抖动窗口）。mapPacketSender 已在上面 new，wallRepo 已 ready。
+        // 构造期注入 mapPacketSender + wallRepo，让 projector 在 pushPacketsEnabled 开启时主动向
+        // chunk-loaded viewer 推送 ClientboundMapItemDataPacket。
         mapPacketSender = new MapPacketSender();
         canvasProjector = new CanvasProjector(canvasRenderer, compositor, placeholderRenderer,
                 getLogger(), mapPacketSender, wallRepo);
 
-        // 启动末尾把所有 walls 的像素 compose 回对应 MapView。
-        // 保留 restorer 引用，让 wand listener 能查"启动期 restore 失败的 wall"并给玩家 ActionBar 提示。
-        // restore() 调用延迟到 setVariableSupport + ProviderBootstrap.initialize 之后（见下方）——
-        // 之前 restore 时 compositor.interpolator 还是 null + store 内 schedule:wallId/* 变量为空，
-        // wall 像素被画成字面 ${var:...}，后续没人触发重画一直显字面。修法：构造 restorer 在这里完成
-        // （依赖已具备），但 restore() 调用挪到 ProviderDaemon.initialize() 之后，让 interpolator
-        // 注入 + Provider 装入 store。
+        // 在此处实例化 WallRestorer 供后续 wand listener 与 ticker 接线；实际 restore() 调用推迟到
+        // compositor.setVariableSupport 与 ProviderBootstrap.initialize 之后执行，确保启动期重绘时
+        // ${var:...} 占位符已被解析为真实值而非字面字符串。
         WallRestorer wallRestorerInstance = new WallRestorer(getLogger(), wallRepo, mapPool,
                 canvasRenderer, compositor, placeholderRenderer);
         this.wallRestorer = wallRestorerInstance;
 
-        // 模板注册表。jar 内 /templates/*.yml + plugins/HikariCanvas/templates/ +
-        // user-templates/<uuid>/*.yml（创意工坊）
+        // 模板注册表：jar 内 /templates/*.canvas + plugins/HikariCanvas/templates/*.canvas +
+        // user-templates/<uuid>/*.canvas（创意工坊）
         templateRegistry = new TemplateRegistry(
                 getLogger(), HikariCanvas.class,
                 getDataFolder().toPath().resolve("templates"),
@@ -366,67 +394,45 @@ public final class HikariCanvas extends JavaPlugin {
                     if (t != null && t.isWallAnimating(wallId)) return;
                     boolean handled = sessionManager.submitFullCanvasDirtyByWallAndReport(
                             wallId, projectionThrottler);
-                    // 无活跃 editor session 时走 deploy-only refresh，
-                    // 不让动态变量更新被"editor 关着"挡掉。CanvasProjector 内部线程安全（参见
-                    // 该类 javadoc），但 callback 是 VariableStore 后台线程触发——保守 hop 主线程
-                    // 避免与 ItemFrame / MapView 写入竞态。
+                    // 无活跃 editor session 时走 deploy-only refresh（hop 主线程避免与 MapView 写入竞态）。
                     if (!handled && canvasProjector != null) {
-                        org.bukkit.Bukkit.getScheduler().runTask(this,
+                        Bukkit.getScheduler().runTask(this,
                                 () -> canvasProjector.projectByWall(wallId));
                     }
                 });
         variableStore.loadFromDb();
-        // 全局用户变量 DAO + 配额装配。配额段在 config.yml `dynamic.variables.*`，
-        // 加载持久化的 userglobal/* 变量到内存。
-        userGlobalVariableDao = new ac.haru.hikaricanvas.storage.UserGlobalVariableDao(
-                getLogger(), database.jdbi());
+        // 全局用户变量 DAO + 配额装配（config.yml `dynamic.variables.*`）。
+        userGlobalVariableDao = new UserGlobalVariableDao(getLogger(), database.jdbi());
         variableStore.configureUserGlobal(userGlobalVariableDao,
                 config.userGlobalMaxPerOwner, config.userGlobalMaxTotal);
         variableStore.loadGlobalsFromDb();
         getLogger().info("VariableStore: " + variableStore.size()
                 + " variable(s) loaded (user + userglobal)");
-        // Compositor 接入变量替换 + 倒排索引联动。注入在 store 创建之后即生效；
-        // 此时 WallRestorer 已用旧 compositor 完成启动期 restore（restore 时占位符还没机会被注册），
-        // 后续 CanvasProjector / 预览路径走有 interpolator 的渲染。注入幂等，volatile 多线程可见。
-        ac.haru.hikaricanvas.variable.VariableInterpolator variableInterpolator =
-                new ac.haru.hikaricanvas.variable.VariableInterpolator(variableStore);
+        // Compositor 接入变量替换与倒排索引联动（早于下方 wallRestorerInstance.restore()，
+        // 使启动期恢复与后续 CanvasProjector / 预览渲染均能解析占位符）。
+        VariableInterpolator variableInterpolator = new VariableInterpolator(variableStore);
         compositor.setVariableSupport(variableInterpolator, variableStore);
-        // wall 删除时清掉 VariableStore 倒排索引。SessionManager.deleteWall 完成
-        // map 释放 + walls 表删除后触发；user_variables 表通过 FK CASCADE 自动清。
+        // wall 删除时（SessionManager.deleteWall 先删 walls 行、再释放地图后触发）清掉倒排索引。
         final VariableStore variableStoreForHook = variableStore;
         sessionManager.addWallDeleteHook(wid -> variableStoreForHook.clearWallReferences(wid));
-        // 显式 deleteByWall hook 与三张兄弟表（variable_aliases / wall_schedules /
-        // wall_rail_bindings）对齐——user_variables 原本仅靠 FK CASCADE（foreign_keys=true 是
-        // per-connection pragma，单点依赖）。显式删 + CASCADE 双保险，规避 pragma 未兑现时孤儿行累积。
+        // 显式 deleteByWall 与 FK CASCADE 双重保障，防止连接级 foreign_keys pragma 未生效时遗留孤儿行。
         final UserVariableDao userVariableDaoForHook = userVariableDao;
         sessionManager.addWallDeleteHook(wid -> userVariableDaoForHook.deleteByWall(wid));
-        // Provider daemon 框架（守护线程池 + 定时调度）。
-        // ScheduleDao 必须先于 ProviderBootstrap.initialize 构造（V012 migration 已跑）。
-        this.scheduleDao = new ac.haru.hikaricanvas.storage.ScheduleDao(getLogger(), database.jdbi());
-        // 变量别名 DAO（V014 migration 已跑）；WebServer 与 dispatcher 共享。
-        this.variableAliasDao = new ac.haru.hikaricanvas.storage.VariableAliasDao(
-                getLogger(), database.jdbi());
-        // wall 删除时显式清掉别名（FK CASCADE 已配，显式调更稳，与 schedule 同款）
-        final ac.haru.hikaricanvas.storage.VariableAliasDao variableAliasDaoForHook = this.variableAliasDao;
+        // Provider daemon 框架（守护线程池 + 定时调度）。ScheduleDao 先于 ProviderBootstrap.initialize 构造。
+        this.scheduleDao = new ScheduleDao(getLogger(), database.jdbi());
+        this.variableAliasDao = new VariableAliasDao(getLogger(), database.jdbi());
+        final VariableAliasDao variableAliasDaoForHook = this.variableAliasDao;
         sessionManager.addWallDeleteHook(wid -> variableAliasDaoForHook.deleteByWall(wid));
-        // 铁路网络 DAO（V016 5 表）。RailScheduleProvider + WebServer 共享。
-        this.railDao = new ac.haru.hikaricanvas.storage.RailDao(getLogger(), database.jdbi());
-        // 墙脚本 DAO + 内存镜像（V017 migration 已跑）。装配须早于 WebServer 构造
-        // （script.* dispatcher + ready payload scripts 字段都依赖它）。
-        ac.haru.hikaricanvas.storage.ScriptDao scriptDao =
-                new ac.haru.hikaricanvas.storage.ScriptDao(getLogger(), database.jdbi());
-        scriptStore = new ac.haru.hikaricanvas.script.ScriptStore(
+        this.railDao = new RailDao(getLogger(), database.jdbi());
+        ScriptDao scriptDao = new ScriptDao(getLogger(), database.jdbi());
+        scriptStore = new ScriptStore(
                 getLogger(), scriptDao, config.scriptsConfig.maxRulesPerWall());
         scriptStore.loadFromDb();
-        // wall 删除时清掉内存镜像（DB 行由 wall_scripts FK CASCADE 自动清）
         sessionManager.addWallDeleteHook(scriptStore::clearWall);
         this.variableProviderDaemon =
                 ProviderBootstrap.initialize(this.variableStore, this, this.wallRepo,
                         this.scheduleDao, config.scheduleConfig, this.railDao);
-        // 现在所有依赖就位（compositor.interpolator 注入 + Provider 装入
-        // schedule:wallId/* + system:wallId/wall.* 等值），可以安全 restore wall 像素让 wall 上的
-        // ${var:...} placeholder 被正确替换为实际值（or fallback "???"）。若在依赖就位前
-        // 早期 restore，这些都还空，wall 显字面字符串直到下一次手动 dirty 触发。
+        // 所有依赖就位（compositor.interpolator + Provider 已装入 store），执行启动期 wall 像素恢复。
         try {
             int restored = wallRestorerInstance.restore();
             getLogger().info("Wall restore: " + restored + " wall(s) repainted (post-provider init)");
@@ -436,30 +442,25 @@ public final class HikariCanvas extends JavaPlugin {
                         + " (interactions will be blocked until next successful restart)");
             }
         } catch (Exception e) {
-            getLogger().log(java.util.logging.Level.WARNING, "WallRestorer failed (non-fatal)", e);
+            getLogger().log(Level.WARNING, "WallRestorer failed (non-fatal)", e);
         }
-        // wall 删除时清掉 schedule_entries + wall_schedules（FK CASCADE 已配，显式调更稳；
-        // 同时 unregister Provider 内存态 + store 内的 4 个 schedule:<wallId>/* 变量）。
         final ManualScheduleProvider manualScheduleProvider =
                 (ManualScheduleProvider) this.variableProviderDaemon
                         .registeredProviders().stream()
                         .filter(p -> p instanceof ManualScheduleProvider)
                         .findFirst().orElse(null);
-        final ac.haru.hikaricanvas.storage.ScheduleDao scheduleDaoForHook = this.scheduleDao;
+        final ScheduleDao scheduleDaoForHook = this.scheduleDao;
         sessionManager.addWallDeleteHook(wid -> {
             if (manualScheduleProvider != null) manualScheduleProvider.unregisterWall(wid);
             if (scheduleDaoForHook != null) scheduleDaoForHook.deleteByWall(wid);
         });
 
-        // wall 删除时清掉 rail binding + 反注册 RailScheduleProvider 内存态
-        // （wall_rail_bindings FK CASCADE 已配，显式调更稳；store 的 schedule:<wallId>/* 变量
-        // 由 RailScheduleProvider.unregisterWall 走 store.delete 清干净）
-        final ac.haru.hikaricanvas.variable.provider.RailScheduleProvider railProviderRef =
-                (ac.haru.hikaricanvas.variable.provider.RailScheduleProvider) this.variableProviderDaemon
+        final RailScheduleProvider railProviderRef =
+                (RailScheduleProvider) this.variableProviderDaemon
                         .registeredProviders().stream()
-                        .filter(p -> p instanceof ac.haru.hikaricanvas.variable.provider.RailScheduleProvider)
+                        .filter(p -> p instanceof RailScheduleProvider)
                         .findFirst().orElse(null);
-        final ac.haru.hikaricanvas.storage.RailDao railDaoForHook = this.railDao;
+        final RailDao railDaoForHook = this.railDao;
         sessionManager.addWallDeleteHook(wid -> {
             if (railProviderRef != null) railProviderRef.unregisterWall(wid);
             if (railDaoForHook != null) railDaoForHook.deleteBinding(wid);
@@ -499,14 +500,13 @@ public final class HikariCanvas extends JavaPlugin {
         // 存为模板时把图片与积木脚本一起打进 pack。不接的话：原图被 LRU 驱逐后套用出来是空白，
         // 墙上的脚本更是直接丢光（docs/template-pack.md §3 明列 pack 含这两样）。
         templatePublisher.setAssetSource(imageStorage::readPngBytes);
-        final ac.haru.hikaricanvas.script.ScriptStore storeForTemplates = scriptStore;
+        final ScriptStore storeForTemplates = scriptStore;
         templatePublisher.setScriptSource(wallId -> serializeWallScripts(storeForTemplates, wallId));
         wallPreviewService = new WallPreviewService(getLogger(), compositor);
 
-        // 节流：投影 fps + 输入速率（per session）
-        // 默认间隔走 adaptive-fps.default-min-interval-ms（覆盖 throttle.projection-fps
-        // 推算结果），用户在 config 里调 adaptive-fps 即直接控制 throttler 默认底；旧 throttle.projection-fps
-        // 仍保留作"上限提示"语义，但实际节流由 adaptive 段决定。
+        // 节流：投影 fps + 输入速率（per session）。
+        // config.adaptiveFps.defaultMinIntervalMs() 在配置层已把 throttle.projection-fps 作为缺省推算来源
+        // （未显式写 rendering.adaptive-fps.default-min-interval-ms 时按 1000/fps 推算，见 HikariCanvasConfig.resolveAdaptiveFps）。
         long projectionIntervalMs = Math.max(33L, config.adaptiveFps.defaultMinIntervalMs());
         projectionThrottler = new ProjectionThrottler(this, sessionManager, canvasProjector,
                 projectionIntervalMs);
@@ -575,7 +575,7 @@ public final class HikariCanvas extends JavaPlugin {
         // 复用上面已装配的 imageStorage / imageQuota / imageDao / wallRepo / jdbi，注入 WebServer
         // 由其内部 new ProjectImporter（复用 dispatcher 同款 push 广播）。
         this.assetIngest =
-                new ac.haru.hikaricanvas.canvasfile.AssetIngest(getLogger(), imageStorage, imageQuota,
+                new AssetIngest(getLogger(), imageStorage, imageQuota,
                         imageDao, wallRepo, database.jdbi());
 
         // 取出 ManualScheduleProvider 引用让 WebServer 在 entry 增删时通知 refreshWall
@@ -584,14 +584,12 @@ public final class HikariCanvas extends JavaPlugin {
                         .filter(p -> p instanceof ManualScheduleProvider)
                         .findFirst().orElse(null);
         // 取出 RailScheduleProvider 引用让 WebServer 在 rail.wall.bind 后立即 register
-        ac.haru.hikaricanvas.variable.provider.RailScheduleProvider railScheduleProviderRef =
-                (ac.haru.hikaricanvas.variable.provider.RailScheduleProvider)
-                        variableProviderDaemon.registeredProviders().stream()
-                                .filter(p -> p instanceof ac.haru.hikaricanvas.variable.provider.RailScheduleProvider)
-                                .findFirst().orElse(null);
+        RailScheduleProvider railScheduleProviderRef = (RailScheduleProvider)
+                variableProviderDaemon.registeredProviders().stream()
+                        .filter(p -> p instanceof RailScheduleProvider)
+                        .findFirst().orElse(null);
         // TokenRateLimiter：token 校验限流（与 SessionRateLimiter 区分——后者是 op-rate）。
-        ac.haru.hikaricanvas.web.TokenRateLimiter tokenRateLimiter =
-                new ac.haru.hikaricanvas.web.TokenRateLimiter(config.tokenRateLimitPerMinute);
+        TokenRateLimiter tokenRateLimiter = new TokenRateLimiter(config.tokenRateLimitPerMinute);
         webServer = new WebServer(getLogger(), config.host, config.port,
                 tokenService, sessionManager,
                 projectionThrottler, rateLimiter,
@@ -641,20 +639,17 @@ public final class HikariCanvas extends JavaPlugin {
         // releaseToFree，孤悬的播放条目会向可能被复用的 mapId 写像素（跨墙串台）。
         sessionManager.addWallDeleteHook(ticker::stopWall);
         // 启动期全库扫描：activeTimelineId 且 LOOP 的 wall 自动播（timeline.md §5.2）。
-        // 排除 restore 失败墙（其 mapIds 已归还，不得注册播放）。
+        // 排除启动期恢复失败的墙。
         int autoPlayed = ticker.autoRegisterAll(wallRestorer.failedRestoreWallIds());
         if (autoPlayed > 0) {
             getLogger().info("AnimationTicker: " + autoPlayed + " wall(s) auto-playing (LOOP)");
         }
 
-        // 时间轴触发器路由（VARIABLE_CHANGE / SCHEDULE，timeline.md §5.2）。变量变化 →
-        // 播放绑定该变量的 wall 时间轴。player = ticker::play（任意线程安全，自带 entry 锁）；
-        // resolver = VariableInterpolator.resolveFullName（把 trigger 配的 user/X 注入 wallId →
-        // 内部形式 user:<wallId>/X 才能与变化事件 fullName 匹配，§5.2 一致性坑 R）。
+        // 时间轴触发器路由（VARIABLE_CHANGE / SCHEDULE，timeline.md §5.2）。
         final AnimationTicker tickerForTrigger = ticker;
         TimelineTriggerRegistry triggerRegistry = new TimelineTriggerRegistry(
                 AnimationTicker.fromRepo(wallRepo),
-                ac.haru.hikaricanvas.variable.VariableInterpolator::resolveFullName,
+                VariableInterpolator::resolveFullName,
                 tickerForTrigger::play,
                 getLogger());
         triggerRegistry.rebuildAll();
@@ -672,24 +667,15 @@ public final class HikariCanvas extends JavaPlugin {
         });
         getLogger().info("TimelineTriggerRegistry: registered (variable/schedule change → timeline play)");
 
-        // Provider 写值时主动推 state.patch 给前端 mirror。
-        // EditSession op 路径走 OpResult.dirty + dispatcher 调 push.pushPatch；
-        // Provider（ManualScheduleProvider / SystemVariableProvider / PapiVariableBridge）
-        // 直接调 store 不走该路径——必须 listener 钩子兜底，否则前端 mirror 永远拿不到
-        // Provider 自动更新的值（用户报"Schedule Manager 7 项预览全 '—'"的根因）。
-        //
-        // listener 内构造 OpPushCallback wrap webServer 的 pushPatch（webServer 已 start）；
-        // 异步线程安全：webServer.pushPatch / sessionManager.byId 都是线程安全只读。
-        final ac.haru.hikaricanvas.web.OpPushCallback varPushCallback =
-                new ac.haru.hikaricanvas.web.OpPushCallback() {
+        // Provider 写值时主动推 state.patch 给前端 mirror（Provider 直接写 store，不经 EditSession op 路径）。
+        final OpPushCallback varPushCallback =
+                new OpPushCallback() {
                     @Override
-                    public boolean pushSnapshot(
-                            String sid, ac.haru.hikaricanvas.state.ProjectState s) {
+                    public boolean pushSnapshot(String sid, ProjectState s) {
                         return webServer != null && webServer.pushSnapshot(sid, s);
                     }
                     @Override
-                    public boolean pushPatch(
-                            String sid, ac.haru.hikaricanvas.state.StatePatch p) {
+                    public boolean pushPatch(String sid, StatePatch p) {
                         return webServer != null && webServer.pushPatch(sid, p);
                     }
                 };
@@ -713,23 +699,18 @@ public final class HikariCanvas extends JavaPlugin {
 
         // 自适应渲染：第二条 ChangeListener。任意变量 mutation 或 wall 引用集合变化都
         // 重新评估"该 wall 是否含高频变量"→ 给绑定该 wall 的所有 session 在 ProjectionThrottler
-        // 上调 setIntervalForSession（高频 50ms / 默认 200ms）。WALL_REFS_UPDATED 是 markWallReferences
-        // 后专门 fire 的事件（Compositor 渲染期变化也能触发）；其他事件类型只在 referencingWalls
-        // 已有的 wall 上重评，新引用 wall 由 WALL_REFS_UPDATED 兜底。
+        // 上调 setIntervalForSession（高频 50ms / 默认 200ms）。
         final VariableStore variableStoreForAdaptive = this.variableStore;
         final ProjectionThrottler throttlerRef = this.projectionThrottler;
         final SessionManager sessionManagerForAdaptive = this.sessionManager;
         final long defaultIntervalMs = config.adaptiveFps.defaultMinIntervalMs();
         final long highFreqIntervalMs = config.adaptiveFps.highFreqMinIntervalMs();
         variableStore.registerChangeListener(event -> {
-            // 路由 walls 集合：event.referencingWalls 已经是 listener 关心的全部 wall
-            // （WALL_REFS_UPDATED 时仅包含触发 markWallReferences 的那一个 wall）。
-            java.util.Set<String> walls = event.referencingWalls();
+            Set<String> walls = event.referencingWalls();
             if (walls == null || walls.isEmpty()) return;
             for (String wallId : walls) {
                 boolean highFreq = variableStoreForAdaptive.isWallHighFreq(wallId);
                 long interval = highFreq ? highFreqIntervalMs : defaultIntervalMs;
-                // 找该 wall 的所有活跃 session，逐个调 setIntervalForSession
                 for (String sid : sessionManagerForAdaptive.liveSessionIds()) {
                     var s = sessionManagerForAdaptive.byId(sid);
                     if (s == null) continue;
@@ -744,38 +725,33 @@ public final class HikariCanvas extends JavaPlugin {
         // ── 脚本执行引擎全链装配（docs/scripting.md §3） ─────────────
         // ActionExecutor 依赖 AnimationTicker（webServer.start() 之后才建），故整条链装配在
         // ticker / varPushCallback / projectionThrottler 全部就位之后（WebServer 不依赖本链）。
-        this.scriptBudget = new ac.haru.hikaricanvas.script.engine.ScriptBudget(config.scriptsConfig);
-        ac.haru.hikaricanvas.script.engine.ConditionEvaluator scriptConditions =
-                new ac.haru.hikaricanvas.script.engine.ConditionEvaluator(getLogger(), variableStore);
+        this.scriptBudget = new ScriptBudget(config.scriptsConfig);
+        ConditionEvaluator scriptConditions =
+                new ConditionEvaluator(getLogger(), variableStore);
         // setElementProperty 路径 A（墙开着编辑器）：标准 element.update 链 + 前端 patch +
         // 投影节流；路径 B（headless）在 Applier 内部走 WallRepo + ticker。
         final SessionManager smForScript = this.sessionManager;
         final ProjectionThrottler throttlerForScript = this.projectionThrottler;
-        ac.haru.hikaricanvas.script.engine.TickerControl tickerControl =
-                ac.haru.hikaricanvas.script.engine.TickerControl.of(ticker);
-        ac.haru.hikaricanvas.script.engine.ElementPropertyApplier propertyApplier =
-                new ac.haru.hikaricanvas.script.engine.ElementPropertyApplier(
-                        new ac.haru.hikaricanvas.script.engine
-                                .ElementPropertyApplier.SessionPatchApplier() {
+        TickerControl tickerControl = TickerControl.of(ticker);
+        ElementPropertyApplier propertyApplier =
+                new ElementPropertyApplier(
+                        new ElementPropertyApplier.SessionPatchApplier() {
                             @Override
-                            public ac.haru.hikaricanvas.script.engine
-                                    .ElementPropertyApplier.SessionOutcome apply(
-                                    String wid, String eid, java.util.Map<String, Object> patch) {
+                            public ElementPropertyApplier.SessionOutcome apply(
+                                    String wid, String eid, Map<String, Object> patch) {
                                 return smForScript.applyScriptElementPatch(
                                         wid, eid, patch, varPushCallback, throttlerForScript);
                             }
 
                             @Override
-                            public ac.haru.hikaricanvas.script.engine
-                                    .ElementPropertyApplier.SessionOutcome nudge(
+                            public ElementPropertyApplier.SessionOutcome nudge(
                                     String wid, String eid, int dx, int dy) {
                                 return smForScript.applyScriptElementNudge(
                                         wid, eid, dx, dy, varPushCallback, throttlerForScript);
                             }
 
                             @Override
-                            public ac.haru.hikaricanvas.script.engine
-                                    .ElementPropertyApplier.SessionOutcome clone(
+                            public ElementPropertyApplier.SessionOutcome clone(
                                     String wid, String eid, int offsetX, int offsetY) {
                                 return smForScript.applyScriptElementClone(
                                         wid, eid, offsetX, offsetY,
@@ -783,56 +759,43 @@ public final class HikariCanvas extends JavaPlugin {
                             }
 
                             @Override
-                            public ac.haru.hikaricanvas.script.engine
-                                    .ElementPropertyApplier.SessionOutcome delete(
+                            public ElementPropertyApplier.SessionOutcome delete(
                                     String wid, String eid) {
                                 return smForScript.applyScriptElementDelete(
                                         wid, eid, varPushCallback, throttlerForScript);
                             }
 
                             @Override
-                            public ac.haru.hikaricanvas.script.engine
-                                    .ElementPropertyApplier.SessionOutcome reorderToEdge(
+                            public ElementPropertyApplier.SessionOutcome reorderToEdge(
                                     String wid, String eid, String mode) {
                                 return smForScript.applyScriptElementReorder(
                                         wid, eid, mode, varPushCallback, throttlerForScript);
                             }
                         },
                         wallRepo, tickerControl, getLogger());
-        // headless 克隆路径的元素配额（路径 A 配额由 SessionManager 注入到
-        // 活跃 session 的 EditSession；此处只管 headless 临时 EditSession）。
         propertyApplier.setMaxElementsPerWall(config.scriptsConfig.maxElementsPerWall());
-        this.scriptPropertyApplier = propertyApplier;  // 留引用供 reload 热更
-        // 命令模板表惰性读 volatile config 引用——/canvas reload 后下一次
-        // runCommand 即用新模板，无需重新接线。在线玩家名供 online-player 参数校验
-        // （CraftBukkit playerView 是 CopyOnWriteArrayList 视图，runner 线程迭代安全）。
-        ac.haru.hikaricanvas.script.engine.ActionExecutor actionExecutor =
-                new ac.haru.hikaricanvas.script.engine.ActionExecutor(
+        this.scriptPropertyApplier = propertyApplier;
+        ActionExecutor actionExecutor =
+                new ActionExecutor(
                         variableStore, tickerControl, propertyApplier, wallRepo,
                         this,
                         () -> config().scriptsConfig.commandTemplates(),
                         () -> Bukkit.getOnlinePlayers().stream()
-                                .map(org.bukkit.entity.Player::getName)
+                                .map(Player::getName)
                                 .toList(),
                         auditLog, getLogger());
-        this.scriptRunner = new ac.haru.hikaricanvas.script.engine.ScriptRunner(
+        this.scriptRunner = new ScriptRunner(
                 scriptConditions, actionExecutor, scriptBudget, auditLog, getLogger());
-        // 补间动画引擎：独立 SES（hikari-canvas-tween），渲临时帧（不落 DB）+ 末帧落盘。
-        // maxFps = config scripts.tween.max-fps（默 60）；per-wall fps 存 ProjectState.tweenFps。
         final int tweenMaxFps = config.tweenConfig.maxFps();
         final int tweenMaxConcurrent = config.tweenConfig.maxConcurrent();
-        ac.haru.hikaricanvas.script.engine.TweenScheduler ts =
-                new ac.haru.hikaricanvas.script.engine.TweenScheduler(
+        TweenScheduler ts =
+                new TweenScheduler(
                         propertyApplier, tickerControl, wallRepo,
                         System::currentTimeMillis,
                         tweenMaxConcurrent, tweenMaxFps, getLogger());
         this.tweenScheduler = ts;
         this.scriptRunner.setTweenScheduler(ts);
 
-        // DiagnosticsSubCommand（迁出 runStats + 增强）+ CanvasCommand 注册。
-        // 此处装配——animationTicker（上方 ~setAnimationTicker 段）/ tweenScheduler（刚装配）
-        // 均已非 null，DiagnosticsSubCommand.runStats 读两者活跃数安全。COMMANDS lifecycle
-        // 在 onEnable 内注册，位置无关；仅依赖被注入对象就位，故下移到此。
         DiagnosticsSubCommand diagnosticsSubCommand = new DiagnosticsSubCommand(
                 mapPool, sessionManager, wallRepo, variableStore,
                 this.animationTicker, this.tweenScheduler,
@@ -845,75 +808,52 @@ public final class HikariCanvas extends JavaPlugin {
                                 variableSubCommandRef, benchmarkSubCommand,
                                 diagnosticsSubCommand, messages).build()));
 
-        // 墙原点源——WallRepo.loadById 拿 Wall.key
-        // （world 是名字字符串）→ 查 scriptWorldUuidByName 快照表换世界 UUID。
-        // rebuild 触发点并不全在主线程：onEnable 启动 / wall delete hook 是主线程，
-        // 但 WS 脚本 op（script.create/update 等）经 ScriptStore listener →
-        // rebuildWall 跑在 Jetty 线程——异步调 Bukkit.getWorld 不安全（读
-        // CraftServer.worlds 普通 LinkedHashMap）。快照表零 Bukkit 调用，任意线程
-        // 安全；表本身由主线程维护（onEnable 种子 + Hub 的世界事件 handler 增删）。
-        // 墙不存在 / 世界未加载返 null（Router 跳过该 near 规则 + warning；世界
-        // 随后加载时 Hub 的 WorldLoadEvent → rebuildAll 自动补登记）。
-        for (org.bukkit.World w : Bukkit.getWorlds()) {
+        // 墙原点源：用 scriptWorldUuidByName 快照表将世界名映射为世界 UUID，避免在 Jetty 线程异步调用 Bukkit.getWorld。
+        for (World w : Bukkit.getWorlds()) {
             scriptWorldUuidByName.put(w.getName(), w.getUID());
         }
-        final ac.haru.hikaricanvas.storage.WallRepo wallRepoForNear = wallRepo;
-        final java.util.Map<String, java.util.UUID> worldUuidSnapshot = scriptWorldUuidByName;
-        ac.haru.hikaricanvas.script.engine.TriggerRouter.WallOriginSource wallOriginSource =
+        final WallRepo wallRepoForNear = wallRepo;
+        final Map<String, UUID> worldUuidSnapshot = scriptWorldUuidByName;
+        TriggerRouter.WallOriginSource wallOriginSource =
                 wallId -> {
                     var wall = wallRepoForNear.loadById(wallId).orElse(null);
                     if (wall == null) return null;
-                    java.util.UUID worldUid = worldUuidSnapshot.get(wall.key().world());
+                    UUID worldUid = worldUuidSnapshot.get(wall.key().world());
                     if (worldUid == null) return null;
-                    return new ac.haru.hikaricanvas.script.engine.TriggerRouter.WallOrigin(
+                    return new TriggerRouter.WallOrigin(
                             worldUid, wall.key().originX(),
                             wall.key().originY(), wall.key().originZ());
                 };
-        ac.haru.hikaricanvas.script.engine.TriggerRouter routerForScript =
-                new ac.haru.hikaricanvas.script.engine.TriggerRouter(
+        TriggerRouter routerForScript =
+                new TriggerRouter(
                         scriptStore, scriptRunner,
-                        ac.haru.hikaricanvas.variable.VariableInterpolator::resolveFullName,
+                        VariableInterpolator::resolveFullName,
                         wallOriginSource, getLogger());
         this.scriptTriggerRouter = routerForScript;
-        // 监听接线：变量变化（链深在 Router 内读 runner ThreadLocal）/ 脚本增删改
-        // （墙级 rebuild）/ 墙删除（清索引 + cancel timer）/ 部署完成（wallReady）。
         variableStore.registerChangeListener(routerForScript::onVariableChange);
         scriptStore.addListener(routerForScript::rebuildWall);
         sessionManager.addWallDeleteHook(routerForScript::removeWall);
         sessionManager.addWallReadyHook(routerForScript::fireWallReady);
-        // 启动期——restore + autoRegisterAll 已完成（上方），全量建索引后对全部
-        // 恢复成功的墙（全墙 − failedRestoreWallIds）各发一次 wallReady。
         routerForScript.rebuildAll();
-        final java.util.Set<String> failedRestoreForScript =
-                wallRestorerInstance.failedRestoreWallIds();
-        java.util.List<String> scriptReadyWalls = wallRepo.loadAll().stream()
-                .map(w -> w.wallId())
+        final Set<String> failedRestoreForScript = wallRestorerInstance.failedRestoreWallIds();
+        List<String> scriptReadyWalls = wallRepo.loadAll().stream()
+                .map(WallRepo.Wall::wallId)
                 .filter(id -> !failedRestoreForScript.contains(id))
                 .toList();
         routerForScript.fireWallReadyAll(scriptReadyWalls);
-        // 进服 / 击杀 / 世界增删事件入口——Hub 只转发，
-        // 索引遍历 + 最新规则判定全在 Router（可单测）。MONITOR 优先级观察语义，
-        // 不改事件结果。世界事件维护 scriptWorldUuidByName 快照表；WorldLoadEvent
-        // 额外 rebuildAll 让后加载世界的 playerNear 规则自动补登记。
         getServer().getPluginManager().registerEvents(
-                new ac.haru.hikaricanvas.script.engine.GameEventListenerHub(
+                new GameEventListenerHub(
                         routerForScript, scriptWorldUuidByName,
                         routerForScript::rebuildAll, frameDeployer::wallIdOf), this);
-        // playerNear 周期采样——主线程 task 固定 2 tick 周期（启动后
-        // 1s 首跑），Sampler 内部按 scripts.player-near-sample-ticks（默 10）跳帧计数；
-        // 热更走 applyConfig → setSampleTicks（volatile，无需重 schedule）。Sampler 本体
-        // 零 Bukkit：玩家位置 / near 条目 / 触发投递全 lambda 注入。
-        ac.haru.hikaricanvas.script.engine.PlayerNearSampler nearSampler =
-                new ac.haru.hikaricanvas.script.engine.PlayerNearSampler(
+        PlayerNearSampler nearSampler =
+                new PlayerNearSampler(
                         () -> {
                             var online = Bukkit.getOnlinePlayers();
-                            if (online.isEmpty()) return java.util.List.of();
-                            java.util.List<ac.haru.hikaricanvas.script.engine.PlayerNearSampler.PlayerPos>
-                                    list = new java.util.ArrayList<>(online.size());
+                            if (online.isEmpty()) return List.of();
+                            List<PlayerNearSampler.PlayerPos> list = new ArrayList<>(online.size());
                             for (Player p : online) {
-                                org.bukkit.Location loc = p.getLocation();
-                                list.add(new ac.haru.hikaricanvas.script.engine
-                                        .PlayerNearSampler.PlayerPos(
+                                Location loc = p.getLocation();
+                                list.add(new PlayerNearSampler.PlayerPos(
                                         p.getName(), p.getWorld().getUID(),
                                         loc.getX(), loc.getY(), loc.getZ()));
                             }
@@ -926,48 +866,31 @@ public final class HikariCanvas extends JavaPlugin {
         this.playerNearSampler = nearSampler;
         this.playerNearTask = Bukkit.getScheduler().runTaskTimer(
                 this, nearSampler::tick, 20L, 2L);
-        // script.test 异步试跑入口——dispatcher ack 立即返，轨迹经
-        // callback 推 script.trace。TEST 不豁免 Budget（submit 投递侧统一过闸）。
-        // find 与 launch 之间规则被并发删 → 回 error step（callback 契约恰一次）。
-        final ac.haru.hikaricanvas.script.ScriptStore storeForTest = scriptStore;
-        final ac.haru.hikaricanvas.script.engine.ScriptRunner runnerForTest = scriptRunner;
+        final ScriptStore storeForTest = scriptStore;
+        final ScriptRunner runnerForTest = scriptRunner;
         webServer.setScriptTestLauncher((wallId, ruleId, traceCallback) -> {
-            java.util.Optional<ac.haru.hikaricanvas.script.ScriptRule> r =
-                    storeForTest.find(wallId, ruleId);
+            Optional<ScriptRule> r = storeForTest.find(wallId, ruleId);
             if (r.isEmpty()) {
-                traceCallback.accept(java.util.List.of(
-                        ac.haru.hikaricanvas.script.engine.TraceStep.error(
-                                "trigger", "rule not found: " + ruleId)));
+                traceCallback.accept(List.of(
+                        TraceStep.error("trigger", "rule not found: " + ruleId)));
                 return;
             }
             runnerForTest.submit(wallId, r.get(),
-                    new ac.haru.hikaricanvas.script.engine.TriggerContext(
-                            ac.haru.hikaricanvas.script.engine.TriggerContext.Source.TEST,
-                            0, "test"),
+                    new TriggerContext(TriggerContext.Source.TEST, 0, "test"),
                     traceCallback);
         });
         getLogger().info("Script engine: runner + trigger router registered ("
                 + scriptReadyWalls.size() + " wall(s) wallReady fired)");
 
-        // MapPool 泄漏检测周期任务（5 分钟）。idcounts.dat 防膨胀的最后防线。
-        // 同 tokenPurgeTask 模式：异步周期跑；扫所有 RESERVED 找 owner 已不在 walls 表的强制 FREE。
+        // MapPool 泄漏检测周期任务（5 分钟）。
         mapPoolLeakTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
                 this,
                 () -> {
-                    // onDisable 已置 shuttingDown 时 short-circuit——避免本 run 在
-                    // database.close() 之后才读 walls 表 / mapPool.detectLeaks（走 DB）
-                    // 触发 use-after-close。Bukkit cancel() 不等 in-flight run，这是唯一稳的兜底。
                     if (shuttingDown || database == null) return;
-                    // 只读 wall_id 列（不碰 project_json 反序列化 / BlockFace 解析），且读失败
-                    // 显式返回 empty。原先用 loadAll()，任一行 project_json 损坏或 facing 非法
-                    // 就毒化整查询 → 返回空表 → detectLeaks 把全服在用地图判为泄漏强制释放，
-                    // 被新墙复用后跨墙串台。读不到就跳过本轮，5 分钟后自然重试。
-                    // 时刻必须在读表**之前**取：detectLeaks 用它豁免"快照之后才借出去"的
-                    // 地图。confirm 走 reserve→INSERT walls→bind，快照拍在 INSERT 之前、
-                    // 检测又跑在 bind 之后时，新墙会被误判成泄漏（见 MapPool.detectLeaks）。
+                    // 只读 wall_id 列（不碰 project_json 反序列化），且读失败显式返回 empty 跳过本轮。
+                    // 快照时间戳必须在读表前取，供 detectLeaks 豁免快照之后才借出的地图。
                     long liveSnapshotAt = System.currentTimeMillis();
-                    java.util.Optional<java.util.Set<String>> liveWallIds =
-                            wallRepo.loadAllWallIds();
+                    Optional<Set<String>> liveWallIds = wallRepo.loadAllWallIds();
                     if (liveWallIds.isEmpty()) {
                         getLogger().severe("[mapPool] leak scan skipped: could not read walls table"
                                 + " (refusing to treat an unreadable table as 'no live walls')");
@@ -978,23 +901,19 @@ public final class HikariCanvas extends JavaPlugin {
                         getLogger().warning("[mapPool] detected " + leaked + " leaked map(s); released");
                     }
                 },
-                20L * 60 * 5,    // 启动后 5 分钟首次跑
-                20L * 60 * 5);   // 每 5 分钟一次
+                20L * 60 * 5,
+                20L * 60 * 5);
 
         getLogger().info("HikariCanvas enabled");
         } catch (Throwable t) {
-            // 装配中途失败——逆序清理已就位资源后 rethrow。Bukkit 在 onEnable 抛异常
-            // 时只 catch+log 并把插件留在 disabled 态（不调 onDisable），故必须在此主动释放
-            // HikariDataSource / daemon 线程池 / Jetty / executor 等非 Bukkit 托管资源。
-            getLogger().log(java.util.logging.Level.SEVERE,
+            getLogger().log(Level.SEVERE,
                     "onEnable failed mid-assembly; cleaning up partially-initialized resources", t);
             try {
                 cleanupResources();
             } catch (Throwable cleanupErr) {
-                getLogger().log(java.util.logging.Level.SEVERE,
+                getLogger().log(Level.SEVERE,
                         "cleanup after onEnable failure also threw", cleanupErr);
             }
-            // rethrow 让 Bukkit 标记插件 disabled（IllegalStateException 包装受检异常）。
             if (t instanceof RuntimeException re) throw re;
             if (t instanceof Error err) throw err;
             throw new IllegalStateException("HikariCanvas onEnable failed", t);
@@ -1064,15 +983,14 @@ public final class HikariCanvas extends JavaPlugin {
      * 供"存为模板"把脚本一起打进 pack。该墙没有脚本、或序列化失败 → 返 null（模板照常存，
      * 只是不带脚本）。
      */
-    private byte[] serializeWallScripts(ac.haru.hikaricanvas.script.ScriptStore store, String wallId) {
+    private byte[] serializeWallScripts(ScriptStore store, String wallId) {
         if (store == null || wallId == null) return null;
-        java.util.List<ac.haru.hikaricanvas.script.ScriptRule> rules = store.listByWall(wallId);
+        List<ScriptRule> rules = store.listByWall(wallId);
         if (rules == null || rules.isEmpty()) return null;
         try {
-            // Trigger / Action 的多态判别符靠各自类型注解写出，普通 ObjectMapper 即可
-            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(rules);
+            return new ObjectMapper().writeValueAsBytes(rules);
         } catch (Exception e) {
-            getLogger().log(java.util.logging.Level.WARNING,
+            getLogger().log(Level.WARNING,
                     "serializing scripts of wall " + wallId + " failed; template saved without them", e);
             return null;
         }
@@ -1082,7 +1000,7 @@ public final class HikariCanvas extends JavaPlugin {
     public HikariCanvasConfig config() { return config; }
 
     /** 多语言消息注册表；onEnable 完成前可能返 null。 */
-    public ac.haru.hikaricanvas.i18n.Messages messages() { return messages; }
+    public Messages messages() { return messages; }
 
     /** 取 VariableStore 单例。 */
     public VariableStore getVariableStore() { return variableStore; }
@@ -1195,32 +1113,28 @@ public final class HikariCanvas extends JavaPlugin {
         if (fontRegistry != null) {
             closeQuietly("fontRegistry.shutdownMetricsWorker", fontRegistry::shutdownMetricsWorker);
         }
-        closeQuietly("FontMetricsTable.clear", ac.haru.hikaricanvas.render.FontMetricsTable::clear);
+        closeQuietly("FontMetricsTable.clear", FontMetricsTable::clear);
         // database.close() 必须在异步任务 cancel + daemon shutdown 之后（它们可能引用 DB）。
         if (database != null) {
             closeQuietly("database.close", database::close);
             database = null;
         }
-        // 恢复 onEnable 从进程级 IIORegistry 注销的 ImageReaderSpi——否则同 JVM
-        // 别的插件读 GIF/BMP/TIFF 在本插件（热）卸载后永久失败。registerServiceProvider 即重新
-        // 可用（ordering 不还原无妨）。逐个 try/catch 防一个失败拖垮后续。
         if (!deregisteredImageReaders.isEmpty()) {
             try {
-                javax.imageio.spi.IIORegistry registry =
-                        javax.imageio.spi.IIORegistry.getDefaultInstance();
+                IIORegistry registry = IIORegistry.getDefaultInstance();
                 int restored = 0;
-                for (javax.imageio.spi.ImageReaderSpi spi : deregisteredImageReaders) {
+                for (ImageReaderSpi spi : deregisteredImageReaders) {
                     try {
                         registry.registerServiceProvider(spi);
                         restored++;
                     } catch (Exception e) {
-                        getLogger().log(java.util.logging.Level.WARNING,
+                        getLogger().log(Level.WARNING,
                                 "IIORegistry: failed to restore reader " + spi.getClass().getName(), e);
                     }
                 }
                 getLogger().info("IIORegistry: restored " + restored + " image reader(s)");
             } catch (Exception e) {
-                getLogger().log(java.util.logging.Level.WARNING,
+                getLogger().log(Level.WARNING,
                         "IIORegistry restore failed (non-fatal)", e);
             }
             deregisteredImageReaders.clear();
@@ -1238,25 +1152,22 @@ public final class HikariCanvas extends JavaPlugin {
         try {
             action.run();
         } catch (Throwable t) {
-            getLogger().log(java.util.logging.Level.WARNING,
+            getLogger().log(Level.WARNING,
                     "cleanup: " + name + " failed (continuing)", t);
         }
     }
 
     /**
-     * 首次启动时把 jar 内的语言文件拷到 {@code plugins/HikariCanvas/lang/}；已经有了就不动。
-     *
-     * <p>直接调 {@code saveResource(path, false)} 会在文件已存在时打一条 WARNING——服主每次重启
-     * 都看到两行"already exists"告警，实际什么问题也没有。这里先判存在，把噪音去掉。
-     * 不覆盖是有意的：服主的改动要保留，缺的键由 {@code Messages.loadExternal} 按键合并回内置值。</p>
+     * 首次启动时把 jar 内的语言文件拷到 {@code plugins/HikariCanvas/lang/}；已存在则保留服主修改，
+     * 缺失键由 {@link Messages#loadExternal} 按键合并回内置值。
      */
     private void saveLangIfAbsent(String resourcePath) {
-        java.nio.file.Path target = getDataFolder().toPath().resolve(resourcePath);
-        if (java.nio.file.Files.exists(target)) return;
+        Path target = getDataFolder().toPath().resolve(resourcePath);
+        if (Files.exists(target)) return;
         try {
             saveResource(resourcePath, false);
         } catch (Exception e) {
-            getLogger().log(java.util.logging.Level.WARNING,
+            getLogger().log(Level.WARNING,
                     "failed to write default lang file " + resourcePath, e);
         }
     }

@@ -1,6 +1,6 @@
 package ac.haru.hikaricanvas.script.engine;
 
-import ac.haru.hikaricanvas.storage.UserVariableDao;
+import ac.haru.hikaricanvas.variable.NoopUserVariableDao;
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.VariableStore;
 import org.junit.jupiter.api.Test;
@@ -18,13 +18,13 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.7.0-P2(T2)：{@link ConditionEvaluator} 单测——parse 缓存（含负缓存）/ 坏条件
+ * {@link ConditionEvaluator} 单测——parse 缓存（含负缓存）/ 坏条件
  * false + 单次 WARN / wallId 注入（{@code user/X} → {@code user:<wallId>/X}）/
  * VariableStore 装配路径（cached fresh → default → null fallback 链）。
  */
 class ConditionEvaluatorTest {
 
-    /** 捕获 WARNING 的 logger（每实例独立命名,防跨测试串扰）。 */
+    /** 捕获 WARNING 的 logger（每实例独立命名，防跨测试串扰）。 */
     private static final class CapturingLogger {
         final Logger logger;
         final List<LogRecord> warnings = new ArrayList<>();
@@ -91,8 +91,8 @@ class ConditionEvaluatorTest {
         assertFalse(noStore.eval("var(\"user/x\") > 0", "w-1"));
         assertEquals(1, cap.warnings.size());
 
-        // lookup 注入但变量 miss(返 null)→ truthy false / 比较侧强转 0.0,不 WARN
-        // (注意 == 保持旧语义:null == 0 是 false,不做 K2 强转——回归红线)
+        // lookup 注入但变量 miss（返 null）→ truthy false / 比较侧强转 0.0，不 WARN
+        // （注意 == 语义：null == 0 是 false）
         CapturingLogger cap2 = new CapturingLogger("miss");
         ConditionEvaluator missing = new ConditionEvaluator(cap2.logger, fullName -> null);
         assertFalse(missing.eval("var(\"user/x\")", "w-1"));
@@ -150,15 +150,15 @@ class ConditionEvaluatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  VariableStore 装配路径（fallback 链:cached fresh → default → null）
+    //  VariableStore 装配路径（fallback 链：cached fresh → default → null）
     // ──────────────────────────────────────────────────────────
 
     @Test
     void storeLookupFollowsFallbackChain() {
-        VariableStore store = new VariableStore(new FakeUserVariableDao(), w -> {});
+        VariableStore store = new VariableStore(new NoopUserVariableDao(), w -> {});
         ConditionEvaluator ce = new ConditionEvaluator(Logger.getLogger("test"), store);
 
-        // cached 值(== 旧语义是 toString 等值:变量值是字符串,等值要么引号要么走比较)
+        // cached 值（变量值是字符串，等值要么引号要么走数值比较）
         store.create("bedwars", "score", VarType.NUMBER, null, null);
         store.setValue("bedwars/score", "42", null);
         assertTrue(ce.eval("var(\"bedwars/score\") == \"42\"", "w-1"));
@@ -175,13 +175,13 @@ class ConditionEvaluatorTest {
 
     @Test
     void storeLookupTriggersDynamicLookupOnMiss() {
-        VariableStore store = new VariableStore(new FakeUserVariableDao(), w -> {});
+        VariableStore store = new VariableStore(new NoopUserVariableDao(), w -> {});
         List<String> dynamicLookups = new ArrayList<>();
         store.registerDynamicLookupHook((fullName, namespace) -> dynamicLookups.add(fullName));
         ConditionEvaluator ce = new ConditionEvaluator(Logger.getLogger("test"), store);
 
         assertFalse(ce.eval("var(\"scoreboard.kills.Steve\") > 0", "w-1"));
-        // scoreboard.<obj>.<player> alias → scoreboard/<obj>.<player>;miss 应触发动态注册 hook
+        // scoreboard.<obj>.<player> alias → scoreboard/<obj>.<player>；miss 应触发动态注册 hook
         assertEquals(List.of("scoreboard/kills.Steve"), dynamicLookups);
     }
 
@@ -189,7 +189,7 @@ class ConditionEvaluatorTest {
     void cacheClearsWhenOverCapacity() {
         ConditionEvaluator ce = new ConditionEvaluator(
                 Logger.getLogger("test"), (VariableStore) null);
-        // 直接灌到上限再 eval 新条件:不抛、结果正确(整体 clear 重建)
+        // 直接灌到上限再 eval 新条件：不抛、结果正确（整体 clear 重建）
         for (int i = 0; i < ConditionEvaluator.CACHE_MAX; i++) {
             ce.eval("1 == " + i, "w-1");
         }
@@ -197,7 +197,7 @@ class ConditionEvaluatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.7.0-P3 A2（K16）：checkSyntax 保存期预 parse
+    //  checkSyntax 保存期预 parse
     // ──────────────────────────────────────────────────────────
 
     @Test
@@ -222,33 +222,5 @@ class ConditionEvaluatorTest {
         // 非空校验是 ScriptRuleValidator 的职责——这里不重复拒
         assertTrue(ConditionEvaluator.checkSyntax(null).isEmpty());
         assertTrue(ConditionEvaluator.checkSyntax("   ").isEmpty());
-    }
-
-    // ──────────────────────────────────────────────────────────
-    //  fakes
-    // ──────────────────────────────────────────────────────────
-
-    /** 纯内存 dao（照 ResolveAsNumberTest 同款）。 */
-    private static final class FakeUserVariableDao extends UserVariableDao {
-        FakeUserVariableDao() {
-            super(Logger.getLogger("test"), null);
-        }
-
-        @Override
-        public void upsert(String wallId, String name, VarType type,
-                           String defaultValue, String currentValue, String boundTo,
-                           long createdAt, long updatedAt) {
-            // no-op
-        }
-
-        @Override
-        public void delete(String wallId, String name) {
-            // no-op
-        }
-
-        @Override
-        public List<Row> loadAll() {
-            return new ArrayList<>();
-        }
     }
 }

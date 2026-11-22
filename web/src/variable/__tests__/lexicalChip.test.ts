@@ -1,5 +1,5 @@
 /**
- * 0.4.1 chip 编辑器：lexicalChip 序列化 / DecoratorNode 单测。
+ * lexicalChip 序列化 / DecoratorNode 单测。
  *
  * <p>核心保证：text → lexical EditorState → text 字符级 roundtrip 等。任何 chip 插入 /
  * 普通文字编辑 / 序列化 / 反序列化必须等于原 string。否则用户保存 wall 后内容会变。</p>
@@ -270,7 +270,7 @@ describe('roundtrip 字符级精确（保护后端 .canvas / DB 不被 chip edit
     });
 });
 
-// ---------- P3.6 paste transform：plain text → chip 升级 ----------
+// ---------- paste transform：plain text → chip 升级 ----------
 
 /**
  * 模拟 paste / 手打 plain text 场景：直接把字面 ${var:X} TextNode 塞进 root，
@@ -307,7 +307,7 @@ function pasteThenRoundtrip(plainText: string): string {
     }
 }
 
-describe('P3.6 registerVariablePasteTransform：plain text → chip', () => {
+describe('registerVariablePasteTransform：plain text → chip', () => {
     it('粘贴单 chip 字面 → 升级为 chip 且 roundtrip 保字面', () => {
         // transform 把 TextNode 拆为 chip；lexicalRootToText 还原相同字面
         expect(pasteThenRoundtrip('${var:user/x}')).toBe('${var:user/x}');

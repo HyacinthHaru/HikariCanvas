@@ -7,6 +7,9 @@ import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.IOException;
+import java.util.Iterator;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * {@link IconElement} 的 Jackson 反序列化。
@@ -21,18 +24,10 @@ import java.io.IOException;
  *   <li>两者都没 —— {@code fill = null}（即 pack 默认色）</li>
  * </ul>
  *
- * <p><b>未知字段：</b> 严格模式下（FAIL_ON_UNKNOWN_PROPERTIES）我们必须显式 ack 已知字段，
- * 这里手工解析所有字段而不靠 Jackson 自动 binding，因为 IconElement record 已挂自定义
- * deserializer（@JsonDeserialize）就走不到默认 record binding 了。</p>
- *
- * <p><b>未知字段跟随调用方 mapper 的 {@code FAIL_ON_UNKNOWN_PROPERTIES}</b>：交给
- * {@code ctxt.handleUnknownProperty} 决定 —— 协议入口的严格 mapper（{@code WebServer} /
- * {@code ElementValidator}）下抛 {@code UnrecognizedPropertyException}，持久化 blob 的宽容
- * mapper 下静默忽略。</p>
- *
- * <p>这里以前是「手工逐个 {@code node.path(...)} 取完就 return，从不检查剩余字段」，
- * 而类注释白纸黑字写着未知字段会抛错。于是 icon 成了严格校验网上唯一一个洞
- * （{@code @JsonDeserialize} 让 IconElement 绕开了那张网），注释还告诉读代码的人洞不存在。</p>
+ * <p><b>未知字段策略：</b> {@link IconElement} 挂载自定义 {@code @JsonDeserialize} 后不再走默认
+ * record 绑定，故显式维护 {@link #KNOWN_FIELDS} 并将未知字段转交 {@code ctxt.handleUnknownProperty}：
+ * 协议入口的严格 mapper（{@code WebServer} / {@link ElementValidator}）下抛异常拒绝，
+ * 持久化存储的宽容 mapper 下静默忽略；字段值范围校验统一由 {@link ElementValidator} 负责。</p>
  */
 public final class IconElementDeserializer extends JsonDeserializer<IconElement> {
 
@@ -40,7 +35,7 @@ public final class IconElementDeserializer extends JsonDeserializer<IconElement>
      * 本 deserializer 认识的字段。{@code type} 是 {@code @JsonTypeInfo} 的多态判别符——
      * 视 Jackson 是否把它留在转发过来的 tree 里而定，一律放行。
      */
-    private static final java.util.Set<String> KNOWN_FIELDS = java.util.Set.of(
+    private static final Set<String> KNOWN_FIELDS = Set.of(
             "type", "id", "x", "y", "w", "h", "rotation", "locked", "visible",
             "source", "tint", "opacity", "blendMode", "renderMode", "fill");
 
@@ -54,7 +49,7 @@ public final class IconElementDeserializer extends JsonDeserializer<IconElement>
         }
         ObjectCodec codec = p.getCodec();
 
-        java.util.Iterator<String> names = node.fieldNames();
+        Iterator<String> names = node.fieldNames();
         while (names.hasNext()) {
             String field = names.next();
             if (KNOWN_FIELDS.contains(field)) continue;
@@ -83,7 +78,7 @@ public final class IconElementDeserializer extends JsonDeserializer<IconElement>
             JsonNode bm = node.get("blendMode");
             String s = bm.isTextual() ? bm.asText() : null;
             if (s != null) {
-                blendMode = switch (s.toLowerCase(java.util.Locale.ROOT)) {
+                blendMode = switch (s.toLowerCase(Locale.ROOT)) {
                     case "normal" -> BlendMode.NORMAL;
                     case "multiply" -> BlendMode.MULTIPLY;
                     case "screen" -> BlendMode.SCREEN;
@@ -97,7 +92,7 @@ public final class IconElementDeserializer extends JsonDeserializer<IconElement>
             JsonNode rm = node.get("renderMode");
             String s = rm.isTextual() ? rm.asText() : null;
             if (s != null) {
-                renderMode = switch (s.toLowerCase(java.util.Locale.ROOT)) {
+                renderMode = switch (s.toLowerCase(Locale.ROOT)) {
                     case "clean" -> RenderMode.CLEAN;
                     case "dither" -> RenderMode.DITHER;
                     default -> null;

@@ -23,14 +23,13 @@ import ac.haru.hikaricanvas.storage.WallRepo;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.http.HttpRequest;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Function;
@@ -43,20 +42,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.8-A2 Task 13：{@link ProjectImportHandler} 端点 e2e（JavalinTest，仿
- * {@code CommandTemplateHandlerTest}）。
- *
- * <p>鉴权 / 权限经注入 seam（无须 MockBukkit）；importer 用真 {@link ProjectImporter}（temp DB
- * 全装配），故覆盖的是<b>端点 ↔ 编排 ↔ 错误码映射</b>的全链，而非 mock。multipart 经
- * {@code java.net.http} 手搓 {@code multipart/form-data} body（Javalin 7 testtools 基于
- * native HttpClient，无 OkHttp）。</p>
+ * {@link ProjectImportHandler} 端点端到端单测（鉴权、权限门禁、编排与错误码映射）。
  */
 class ProjectImportHandlerTest {
 
     private static final Logger LOG = Logger.getLogger("project-import-handler-test");
     private final ObjectMapper mapper = new ObjectMapper();
 
-    private Path tmpDir;
+    @TempDir
+    Path tmpDir;
+
     private Database database;
     private WallRepo wallRepo;
     private AssetIngest assetIngest;
@@ -64,8 +59,7 @@ class ProjectImportHandlerTest {
     private CapturingPush push;
 
     @BeforeEach
-    void setUp() throws Exception {
-        tmpDir = Files.createTempDirectory("hc-import-handler-");
+    void setUp() {
         database = new Database(LOG, tmpDir.resolve("d.db"));
         new MigrationRunner(database.jdbi(), LOG).run();
         ImageUploadDao dao = new ImageUploadDao(LOG, database.jdbi());
@@ -78,19 +72,8 @@ class ProjectImportHandlerTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         if (database != null) database.close();
-        if (tmpDir != null && Files.exists(tmpDir)) {
-            try (var paths = Files.walk(tmpDir)) {
-                paths.sorted(Comparator.reverseOrder()).forEach(p -> {
-                    try {
-                        Files.deleteIfExists(p);
-                    } catch (IOException ignored) {
-                        // best-effort
-                    }
-                });
-            }
-        }
     }
 
     private ProjectImporter importer(HikariCanvasConfig.ImportConfig cfg) {

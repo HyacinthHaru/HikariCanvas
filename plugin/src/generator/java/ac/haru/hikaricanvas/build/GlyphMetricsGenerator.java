@@ -12,11 +12,10 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * M20-T1：构建期从给定 TTF / OTF 字体导出 BMP 范围（U+0020 ~ U+FFFF）的 glyph advance 表。
+ * 构建期从给定 TTF / OTF 字体导出 BMP 范围（U+0020 ~ U+FFFF）的 glyph advance 表。
  *
- * <p>替代 M5-D2 的 canonicalCharWidth 简化算法（ASCII=0.5×fontSize, CJK=1×fontSize）。
- * 简化算法对非等宽字体（思源黑体）严重不匹配：'M'/'W' 真实 ~0.7-0.8 × fontSize → 重叠；
- * 'i'/'l' ~0.2-0.3 × → 大空隙。本表给运行时真实 per-glyph advance。</p>
+ * <p>为非等宽字体（如思源黑体）提供真实 per-glyph advance，避免固定比例近似（ASCII=0.5×fontSize,
+ * CJK=1×fontSize）在宽窄字形（'M'/'W' vs 'i'/'l'）上的重叠或空隙；缺字时运行时再回退近似算法。</p>
  *
  * <p>由 Gradle 任务 {@code generateGlyphMetrics} 调用；只读 AWT Font API，
  * 不依赖 Bukkit / Paper。</p>
@@ -37,7 +36,7 @@ public final class GlyphMetricsGenerator {
     /** 与 PaletteLut 同基准；运行期按 fontSize/BASE_SIZE 等比缩放 advance。 */
     private static final int BASE_SIZE = 12;
 
-    /** BMP 上限：U+0000 ~ U+FFFF。U+10000+ 涉及 surrogate pair，留 M20.x。 */
+    /** BMP 上限：U+0000 ~ U+FFFF（补充平面 surrogate pair 暂未纳入）。 */
     private static final int BMP_END = 0xFFFF;
 
     private GlyphMetricsGenerator() {}

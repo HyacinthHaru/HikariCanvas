@@ -11,10 +11,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * M4-T1：构建期从 Paper {@link MapPalette} 导出 256 色 palette 到 JSON。
+ * 构建期从 Paper {@link MapPalette} 导出调色板到 JSON。
  *
- * <p>由 Gradle 任务 {@code generatePalette} 调用；运行时仅依赖 Paper API 的
- * {@link MapPalette#getColor(byte)}，不需要启动 Bukkit Server。</p>
+ * <p>由 Gradle 任务 {@code generatePalette} 调用（独立 {@code generator} sourceSet，不进入运行期
+ * shadow jar）；仅依赖 Paper API 的 {@link MapPalette#getColor(byte)}，无需启动 Bukkit Server。</p>
  *
  * <p>输出格式（一行一个索引，便于 git diff 审查）：</p>
  * <pre>
@@ -24,9 +24,6 @@ import java.util.List;
  *   ...
  * ]
  * </pre>
- *
- * <p>这不是运行时渲染类；它只在构建期跑一次。shadow jar 里会多一份 class 文件
- * （约 600 字节），可忽略。</p>
  *
  * <p>用法：{@code java -cp ... ac.haru.hikaricanvas.build.PaletteGenerator <outfile>}</p>
  */

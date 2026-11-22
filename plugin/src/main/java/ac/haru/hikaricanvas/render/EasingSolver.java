@@ -11,7 +11,7 @@ import java.util.List;
  * 算法（WebKit UnitBezier 系数形式 + 固定步数牛顿迭代 + 二分兜底）、常量
  * （{@link #NEWTON_ITER} / {@link #BISECT_MAX} / {@link #EPS}）、边界捷径与预设控制点
  * 两端写死相同，由共享测试向量 {@code rendering-test/easing-vectors.json}（容差 1e-6）
- * 在两端 CI 各自校验。<b>禁引第三方 easing 库</b>（D8）。
+ * 在两端 CI 各自校验。<b>禁引第三方 easing 库</b>。
  *
  * <p>{@code EASE_IN / EASE_OUT / EASE_IN_OUT} 取 CSS 同名关键字标准控制点（§9.3 表）。</p>
  */

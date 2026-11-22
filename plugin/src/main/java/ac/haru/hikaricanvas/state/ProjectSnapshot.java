@@ -17,14 +17,12 @@ import java.util.List;
  * 这一步是 undo 正确性的关键 —— 缺了它，后续对 live state 的 mutation 会污染历史栈。</p>
  *
  * <p>Element 自身是 record，不可变，无需深拷贝。{@link Timeline} 同理（tracks 在其
- * canonical 构造器里深冻结），timelines 只需复制外层列表引用（{@link List#copyOf}）。</p>
+ * canonical 构造器里深冻结），timelines 只需复制外层列表引用（{@link List#copyOf}）。
+ * {@code tweenFps} 一并纳入快照，使 {@code replaceProject}（工程导入 / 模板套用）后的撤销可完整还原补间帧率。</p>
  *
  * @param canvas           快照时刻的 canvas（含 gridSize / guides；record 本身不可变）
  * @param layers           深拷贝后的层树；外层 {@link List#copyOf} 锁住引用
  * @param activeLayerId    快照时刻的活动层 id
- * <p>{@code tweenFps} 同理：{@code replaceProject}（工程导入 / 模板套用）会改它并压一份快照，
- * 快照里不带就成了「导入之后按撤销，元素全回去了、补间帧率还留在导入文件那一档」的半回滚。</p>
- *
  * @param timelines        快照时刻的时间轴列表（Timeline record 不可变，浅拷外层）
  * @param activeTimelineId 快照时刻的激活时间轴 id（null = 无）
  * @param tweenFps         快照时刻的 per-wall 补间帧率（null = 用默认 30）

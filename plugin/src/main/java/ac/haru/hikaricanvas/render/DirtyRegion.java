@@ -40,10 +40,11 @@ public record DirtyRegion(int x, int y, int w, int h) {
      *       {@code glow} 按 radius 四向外扩</li>
      *   <li>圆 / 多边形 / path 的描边四向外扩 {@code ceil(width/2)}；path 带箭头或圆点
      *       marker 时再按 marker 尺寸外扩</li>
-     *   <li>{@code rotation ∈ {90, 270}} → 外接 = 边长 {@code max(w, h)} 方形中心对齐</li>
+     *   <li>{@code rotation} 非 0° / 180° 时，绕中心旋转后的轴对齐外接盒宽为
+     *       {@code ceil(|w·cosθ| + |h·sinθ|)}、高为 {@code ceil(|w·sinθ| + |h·cosθ|)}</li>
      * </ol>
      *
-     * <p>其他 rotation（0 / 180）bbox 不变。</p>
+     * <p>{@code rotation ∈ {0, 180}} 时外接盒尺寸与位置不变。</p>
      *
      * <p><b>为什么矩形不扩而圆 / 多边形 / path 要扩：</b>RectRenderer 用 4 条 fillRect 画边框，
      * 边框完全在 bbox 内部；CircleRenderer / ShapeRenderer / PathRenderer 用 {@code BasicStroke}，

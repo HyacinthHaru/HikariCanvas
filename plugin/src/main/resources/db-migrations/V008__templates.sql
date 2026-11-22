@@ -1,13 +1,7 @@
--- 创意工坊：模板元数据表。
--- YAML spec 真相仍在 user-templates/<uuid>/<slug>.yml；本表只存元数据（owner / featured /
--- 排序用），让 registry 扫起来快 + curation/统计简单。
---
--- builtin=1 时 owner_uuid/owner_name 为 NULL；yaml_path 是 jar 内 classpath 路径
--- (templates/<id>.yml)。builtin 行启动期同步写入；运行期不可改 featured。
---
--- 详见 docs/architecture.md 3.8（待补）、docs/data-model.md 2.6.6（待补）。
---
--- 注意：MigrationRunner 按行 split 注释；只支持整行 -- 注释，不能行内 --。
+-- 模板元数据表（详见 docs/template-pack.md 与 docs/data-model.md §2.6）。
+-- 模板包归档存于磁盘 / jar 资源（历史列名 yaml_path 现保存 .canvas 模板包路径）；
+-- 本表保存元数据（owner / featured / 排序）供注册表索引与筛选。
+-- builtin=1 时 owner_uuid / owner_name 为 NULL，启动期同步写入。
 
 CREATE TABLE templates (
     template_id     TEXT    PRIMARY KEY,

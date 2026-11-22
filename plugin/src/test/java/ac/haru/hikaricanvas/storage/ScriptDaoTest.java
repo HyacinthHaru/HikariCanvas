@@ -6,12 +6,12 @@ import ac.haru.hikaricanvas.script.Trigger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -20,20 +20,18 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.7.0-P1-4：{@link ScriptDao} CRUD + 坏 blob 跳过 + enabled 列权威 测试。
- *
- * <p>真实 SQLite + MigrationRunner 跑 V001..V017；FK CASCADE 由 schema 触发。每个测试
- * 新建临时 dir + data.db，互相隔离（照 {@link ScheduleDaoTest} 装配）。</p>
+ * {@link ScriptDao} CRUD、损坏 blob 隔离跳过与 {@code enabled} 列权威性单测。
  */
 class ScriptDaoTest {
 
-    private Path tmpDir;
+    @TempDir
+    Path tmpDir;
+
     private Database database;
     private ScriptDao dao;
 
     @BeforeEach
-    void setUp() throws Exception {
-        tmpDir = Files.createTempDirectory("hikari-script-test-");
+    void setUp() {
         Logger log = Logger.getLogger("test");
         database = new Database(log, tmpDir.resolve("data.db"));
         new MigrationRunner(database.jdbi(), log).run();
@@ -42,18 +40,12 @@ class ScriptDaoTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         if (database != null) database.close();
-        if (tmpDir != null && Files.exists(tmpDir)) {
-            try (var s = Files.walk(tmpDir)) {
-                s.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(java.io.File::delete);
-            }
-        }
     }
 
-    /** AtomicInteger 给每次 insertWall 唯一 origin_x，绕开 walls UNIQUE 约束。 */
-    private static final java.util.concurrent.atomic.AtomicInteger ORIGIN_COUNTER =
-            new java.util.concurrent.atomic.AtomicInteger();
+    private static final AtomicInteger ORIGIN_COUNTER =
+            new AtomicInteger();
 
     private void insertWall(String wallId) {
         int ox = ORIGIN_COUNTER.incrementAndGet();

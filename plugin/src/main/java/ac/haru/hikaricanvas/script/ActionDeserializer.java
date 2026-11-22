@@ -13,12 +13,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * {@link Action} 反序列化：按 {@code type} 判别字段分流到九个子类 record。
+ * {@link Action} 反序列化：按 {@code type} 判别字段分流到 29 个子类 record。
  * 范式同 {@link TriggerDeserializer}；畸形输入一律 {@code reportInputMismatch}
  * （不抛 NPE、不给默认值）。
  *
- * <p>特殊点：{@code playTimeline.seekMs} 可选（缺失 = null）；{@code if} 的
- * {@code then} / {@code else} 数组逐元素直接递归 {@code fromNode}，
+ * <p>特殊点：{@code playTimeline.seekMs} 可选（缺失 = null）；分支与循环容器字段
+ * （{@code then} / {@code else} / {@code body}）数组逐元素直接递归 {@code fromNode}，
  * 缺分支按空 list，分支元素为 null 一律拒绝。</p>
  */
 public final class ActionDeserializer extends JsonDeserializer<Action> {
@@ -68,7 +68,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     requireLong(ctxt, node, "ms", type));
             case "runCommand" -> new Action.RunCommand(
                     requireText(ctxt, node, "templateId", type),
-                    readParams(ctxt, node, type));
+                    readStringMap(ctxt, node, "params", type));
             case "log" -> new Action.Log(
                     requireText(ctxt, node, "message", type));
             case "if" -> new Action.If(
@@ -129,7 +129,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     requireText(ctxt, node, "condition", type),
                     requireInt(ctxt, node, "maxIterations", type),
                     readBranch(ctxt, node, "body", type));   // 复用 if/repeat 分支递归读取
-            // tween：补间动画包裹（docs/scripting-tween.md）
+            // tween：补间动画包裹（docs/scripting.md）
             case "tweenBlock" -> new Action.TweenBlock(
                     requireLong(ctxt, node, "durationMs", type),
                     readEasing(ctxt, node, "easing", type),
@@ -239,7 +239,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
 
     /**
      * 通用 string map object → {@code Map<String,String>}（缺失当空 map；
-     * 值必须全是 string）。范式同 {@link #readParams}，参数化字段名供 setElementProperties.patch 用。
+     * 值必须全是 string；供 {@code runCommand.params} 与 {@code setElementProperties.patch} 共用）。
      */
     private static Map<String, String> readStringMap(DeserializationContext ctxt, JsonNode node,
                                                      String field, String type) throws IOException {
@@ -265,35 +265,11 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
         return out;
     }
 
-    /** runCommand 的 params object → Map（缺失当空 map；值必须全是 string）。 */
-    private static Map<String, String> readParams(DeserializationContext ctxt, JsonNode node,
-                                                  String type) throws IOException {
-        JsonNode v = node.get("params");
-        if (v == null || v.isNull()) {
-            return Map.of();
-        }
-        if (!v.isObject()) {
-            return ctxt.reportInputMismatch(Action.class,
-                    "action '" + type + "' field 'params' must be an object");
-        }
-        Map<String, String> out = new LinkedHashMap<>();
-        var it = v.fields();
-        while (it.hasNext()) {
-            var e = it.next();
-            if (!e.getValue().isTextual()) {
-                return ctxt.reportInputMismatch(Action.class,
-                        "action '" + type + "' params value '" + e.getKey() + "' must be string");
-            }
-            out.put(e.getKey(), e.getValue().asText());
-        }
-        return out;
-    }
-
     /**
      * 从 JSON 对象的字段读取 {@link Easing}，缺失 / null → {@link Easing#LINEAR}，
-     * 存在但格式错误 → reportInputMismatch。复用 {@link ac.haru.hikaricanvas.state.Easing}
-     * 的 Jackson 注解（{@code @JsonProperty type + bezier}）通过 {@code ctxt.readTreeAsValue}
-     * 反序列化——与 0.6 timeline 路径同款 serde（保证双端 Easing 一致）。
+     * 存在但格式错误 → reportInputMismatch。复用 {@link Easing} 的 Jackson 注解
+     * （{@code @JsonProperty type + bezier}）通过 {@code ctxt.readTreeAsValue}
+     * 反序列化——与 timeline 路径同款 serde（保证双端 Easing 一致）。
      */
     private static Easing readEasing(DeserializationContext ctxt, JsonNode node,
                                      String field, String type) throws IOException {
@@ -309,7 +285,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
         return ctxt.readTreeAsValue(v, Easing.class);
     }
 
-    /** if 分支数组逐元素递归（直接走 {@link #fromNode}）；缺分支按空 list；元素为 null 拒绝。 */
+    /** 分支数组逐元素递归（直接走 {@link #fromNode}）；缺分支按空 list；元素为 null 拒绝。 */
     private List<Action> readBranch(DeserializationContext ctxt, JsonNode node,
                                     String field, String type) throws IOException {
         JsonNode v = node.get(field);
@@ -324,7 +300,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
         for (JsonNode elem : v) {
             if (elem == null || elem.isNull()) {
                 return ctxt.reportInputMismatch(Action.class,
-                        "action '" + type + "' field '" + field + "' 分支元素不能为 null");
+                        "action '" + type + "' field '" + field + "' must not contain null elements");
             }
             out.add(fromNode(elem, ctxt));
         }

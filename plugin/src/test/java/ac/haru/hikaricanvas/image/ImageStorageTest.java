@@ -7,13 +7,16 @@ import ac.haru.hikaricanvas.storage.WallRepo;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import javax.imageio.ImageIO;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
 import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Logger;
@@ -25,20 +28,19 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link ImageStorage} 文件层 + DAO + LRU 行为校验。
- *
- * <p>不 mock：用临时目录 + SQLite 真跑迁移 + 真磁盘 IO。</p>
+ * {@link ImageStorage} 文件层、尺寸解码守卫、DAO 与 LRU 行为测试。
  */
 class ImageStorageTest {
 
-    private Path tmpDir;
+    @TempDir
+    Path tmpDir;
+
     private Database database;
     private ImageUploadDao dao;
     private ImageStorage storage;
 
     @BeforeEach
-    void setUp() throws Exception {
-        tmpDir = Files.createTempDirectory("hikari-image-test-");
+    void setUp() {
         Path dbFile = tmpDir.resolve("data.db");
         Logger log = Logger.getLogger("test");
         database = new Database(log, dbFile);
@@ -48,13 +50,9 @@ class ImageStorageTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
+        if (storage != null) storage.shutdown();
         if (database != null) database.close();
-        if (tmpDir != null && Files.exists(tmpDir)) {
-            try (var s = Files.walk(tmpDir)) {
-                s.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(java.io.File::delete);
-            }
-        }
     }
 
     private static BufferedImage sampleImage(int w, int h, int rgb) {
@@ -67,6 +65,34 @@ class ImageStorageTest {
             g.dispose();
         }
         return img;
+    }
+
+    private static byte[] encodePng(int w, int h, Color fill) throws IOException {
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        try {
+            g.setColor(fill);
+            g.fillRect(0, 0, w, h);
+        } finally {
+            g.dispose();
+        }
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ImageIO.write(img, "png", baos);
+        return baos.toByteArray();
+    }
+
+    private static byte[] makeMinimalPngWithDimensions(int width, int height) throws IOException {
+        byte[] result = encodePng(1, 1, Color.GREEN).clone();
+        writeInt32BE(result, 16, width);
+        writeInt32BE(result, 20, height);
+        return result;
+    }
+
+    private static void writeInt32BE(byte[] buf, int offset, int value) {
+        buf[offset]     = (byte) (value >>> 24);
+        buf[offset + 1] = (byte) (value >>> 16);
+        buf[offset + 2] = (byte) (value >>> 8);
+        buf[offset + 3] = (byte)  value;
     }
 
     // ---------- putIfAbsent / load ----------
@@ -117,6 +143,29 @@ class ImageStorageTest {
     }
 
     @Test
+    void loadNormalSizePngWrittenAtomicallyLoadsSuccessfully() throws Exception {
+        byte[] pngBytes = encodePng(8, 8, Color.BLUE);
+        String hash = ImageStorage.sha256Hex16(pngBytes);
+        storage.writeFileAtomic(hash, pngBytes);
+
+        BufferedImage result = storage.load(hash);
+        assertNotNull(result);
+        assertEquals(8, result.getWidth());
+        assertEquals(8, result.getHeight());
+    }
+
+    @Test
+    void loadOversizedDeclaredDimensionsReturnsNullWithoutOom() throws Exception {
+        byte[] bigDeclaredPng = makeMinimalPngWithDimensions(9000, 9000);
+        String fakeHash = "abcdef1234567890";
+        Files.createDirectories(storage.uploadsDir());
+        Files.write(storage.uploadsDir().resolve(fakeHash + ".png"), bigDeclaredPng);
+
+        BufferedImage result = storage.load(fakeHash);
+        assertNull(result, "PNG declaring dimensions > BBOX_MAX_EDGE(8192) must fail-soft to null");
+    }
+
+    @Test
     void loadReturnsNullForMissingHash() {
         assertNull(storage.load("0123456789abcdef"));
     }
@@ -126,7 +175,7 @@ class ImageStorageTest {
         assertNull(storage.load("not-a-real-hash"));
         assertNull(storage.load(null));
         assertNull(storage.load(""));
-        assertNull(storage.load("UPPERCASE0123456"));  // 大写非法
+        assertNull(storage.load("UPPERCASE0123456"));
     }
 
     @Test
@@ -136,7 +185,6 @@ class ImageStorageTest {
         byte[] bytes = storage.readPngBytes(r.hash());
         assertNotNull(bytes);
         assertTrue(bytes.length > 8);
-        // PNG magic
         assertEquals((byte) 0x89, bytes[0]);
         assertEquals((byte) 0x50, bytes[1]);
     }
@@ -153,35 +201,29 @@ class ImageStorageTest {
         assertTrue(dao.findByHash(r.hash()).isEmpty());
     }
 
-    // ---------- LRU evict（v1: sweep walls 模式） ----------
+    // ---------- LRU evict ----------
 
     @Test
     void evictLruDeletesOrphanWhenOverCapacity() throws Exception {
-        // 3 张图都不被 walls 引用 → 全是 orphan
         ImageStorage.StoreResult a = storage.putIfAbsent(sampleImage(8, 8, 0xAA0000), UUID.randomUUID());
         Thread.sleep(2);
-        ImageStorage.StoreResult b = storage.putIfAbsent(sampleImage(8, 8, 0x00BB00), UUID.randomUUID());
+        storage.putIfAbsent(sampleImage(8, 8, 0x00BB00), UUID.randomUUID());
         Thread.sleep(2);
-        ImageStorage.StoreResult c = storage.putIfAbsent(sampleImage(8, 8, 0x0000CC), UUID.randomUUID());
+        storage.putIfAbsent(sampleImage(8, 8, 0x0000CC), UUID.randomUUID());
 
         long total = dao.sumBytes();
-        // 配额刚好少于现有 → 触发 evict
         WallRepo emptyRepo = new WallRepo(Logger.getLogger("test"), database.jdbi());
         int evicted = storage.evictLruUntilUnder(0, total - a.bytes() - 1, emptyRepo);
 
         assertTrue(evicted >= 1, "should evict at least the oldest orphan");
-        // 最老（a）应被删
         assertTrue(dao.findByHash(a.hash()).isEmpty());
     }
 
     @Test
     void evictLruRespectsReferencedHashes() throws Exception {
-        // 假设 b 被某 wall 引用——我们传入的 wallRepo 是空的，所以走 collectReferencedHashes
-        // 直接返回空集合。这个测试只确认 referenced 排除逻辑在 dao.pickLruCandidates 中生效。
         ImageStorage.StoreResult a = storage.putIfAbsent(sampleImage(8, 8, 0xAA0000), UUID.randomUUID());
         ImageStorage.StoreResult b = storage.putIfAbsent(sampleImage(8, 8, 0x00BB00), UUID.randomUUID());
 
-        // 直接调 pickLruCandidates 传 excludeHashes 验证逻辑
         var candidates = dao.pickLruCandidates(10, Set.of(b.hash()));
         assertEquals(1, candidates.size());
         assertEquals(a.hash(), candidates.get(0).hash());
@@ -190,7 +232,6 @@ class ImageStorageTest {
     @Test
     void evictLruNoopWhenUnderQuota() {
         WallRepo emptyRepo = new WallRepo(Logger.getLogger("test"), database.jdbi());
-        // dao 是空的；任意 maxTotalBytes > 0 都应无操作
         int evicted = storage.evictLruUntilUnder(0, 1024 * 1024, emptyRepo);
         assertEquals(0, evicted);
     }
@@ -198,7 +239,6 @@ class ImageStorageTest {
     @Test
     void evictLruNoopWhenMaxIsZero() {
         WallRepo emptyRepo = new WallRepo(Logger.getLogger("test"), database.jdbi());
-        // maxTotalBytes = 0 → 不限磁盘，直接返回
         int evicted = storage.evictLruUntilUnder(999_999_999L, 0, emptyRepo);
         assertEquals(0, evicted);
     }

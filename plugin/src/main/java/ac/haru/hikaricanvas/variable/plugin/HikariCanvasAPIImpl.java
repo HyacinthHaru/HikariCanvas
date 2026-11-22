@@ -1,5 +1,6 @@
 package ac.haru.hikaricanvas.variable.plugin;
 
+import ac.haru.hikaricanvas.HikariCanvas;
 import ac.haru.hikaricanvas.api.HikariCanvasAPI;
 import ac.haru.hikaricanvas.api.NamespaceInfo;
 import ac.haru.hikaricanvas.api.PluginNamespaceException;
@@ -14,6 +15,7 @@ import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -21,6 +23,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 
 /**
  * {@link HikariCanvasAPI} 默认实现。
@@ -59,8 +62,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     private static final long DEFAULT_TTL_MS = 30_000L;
 
     /** declared key 校验正则，镜像 {@code VariableStore.KEY_RE}。 */
-    private static final java.util.regex.Pattern KEY_RE =
-            java.util.regex.Pattern.compile("[a-zA-Z0-9_.\\-]+");
+    private static final Pattern KEY_RE = Pattern.compile("[a-zA-Z0-9_.\\-]+");
 
     private final PluginNamespaceRegistry registry;
     private final VariableStore store;
@@ -105,8 +107,8 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
      * 替换瞬间到下个 1s 边界之间最坏出现一次窗口"重置"，但 1s 窗口本就是 lossy 抽样，
      * 这一次重置不破坏整体限流语义。多次调用幂等。</p>
      *
-     * <p>package-private：只允许 {@link ac.haru.hikaricanvas.HikariCanvas} 主类（同 plugin
-     * package 链路）触发。外部不应有任何理由热替换 limiter——这是配置 reload 专用 hook。</p>
+     * <p>内部装配方法（未暴露在 {@link HikariCanvasAPI} 公开接口上）：仅由 {@link HikariCanvas}
+     * 主类在配置 reload 时调用。</p>
      */
     public void setRateLimiter(PushRateLimiter newLimiter) {
         this.limiter = Objects.requireNonNull(newLimiter, "newLimiter");
@@ -334,7 +336,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
      */
     private void recordNamespaceDenied(Plugin plugin, String namespace,
                                        PluginNamespaceException.Code code, @Nullable String actualOwner) {
-        java.util.Map<String, Object> details = new java.util.LinkedHashMap<>();
+        Map<String, Object> details = new LinkedHashMap<>();
         details.put("sourcePlugin", plugin.getName());
         details.put("targetNamespace", namespace);
         details.put("denyCode", code.name());

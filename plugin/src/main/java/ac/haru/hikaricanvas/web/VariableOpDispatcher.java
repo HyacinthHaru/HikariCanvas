@@ -1,13 +1,16 @@
 package ac.haru.hikaricanvas.web;
 
-import io.javalin.websocket.WsMessageContext;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
 import ac.haru.hikaricanvas.session.SessionRateLimiter;
 import ac.haru.hikaricanvas.state.EditSession;
+import ac.haru.hikaricanvas.storage.AuditLog;
+import ac.haru.hikaricanvas.storage.WallRepo;
 import ac.haru.hikaricanvas.variable.VarType;
 import ac.haru.hikaricanvas.variable.VariablePatch;
 import ac.haru.hikaricanvas.variable.VariableStore;
+import io.javalin.websocket.WsMessageContext;
+import org.bukkit.plugin.Plugin;
 
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -43,18 +46,18 @@ final class VariableOpDispatcher {
     private final SessionRateLimiter rateLimiter;
     private final VariableStore variableStore;
     private final OpPushCallback push;
-    private final ac.haru.hikaricanvas.storage.AuditLog auditLog;
-    private final ac.haru.hikaricanvas.storage.WallRepo wallRepo;
+    private final AuditLog auditLog;
+    private final WallRepo wallRepo;
     /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
-    private final org.bukkit.plugin.Plugin plugin;
+    private final Plugin plugin;
 
     VariableOpDispatcher(SessionManager sessionManager,
                          SessionRateLimiter rateLimiter,
                          VariableStore variableStore,
-                         ac.haru.hikaricanvas.storage.WallRepo wallRepo,
+                         WallRepo wallRepo,
                          OpPushCallback push,
-                         ac.haru.hikaricanvas.storage.AuditLog auditLog,
-                         org.bukkit.plugin.Plugin plugin) {
+                         AuditLog auditLog,
+                         Plugin plugin) {
         this.sessionManager = sessionManager;
         this.rateLimiter = rateLimiter;
         this.variableStore = variableStore;
@@ -344,8 +347,8 @@ final class VariableOpDispatcher {
         if (isGlobal) {
             requiredNode = pickGlobalPermissionNode(op, callerUuid, payload);
         } else {
-            // 原有 per-wall user 变量逻辑（不变）
-            ac.haru.hikaricanvas.storage.WallRepo.Wall wall =
+            // per-wall user 变量逻辑
+            WallRepo.Wall wall =
                     wallRepo.loadById(s.wallId()).orElse(null);
             if (wall == null) {
                 ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
@@ -464,8 +467,7 @@ final class VariableOpDispatcher {
         String path = first.path();
         if (path == null || !path.startsWith("/variables/")) return null;
         String encoded = path.substring("/variables/".length());
-        // JSON Pointer 反解：~1 → /，~0 → ~（按 RFC 6901 顺序）
-        return encoded.replace("~1", "/").replace("~0", "~");
+        return WebHelpers.decodeJsonPointerSegment(encoded);
     }
 
     private void recordAuditSuccess(String op, String sessionId, Session s,
