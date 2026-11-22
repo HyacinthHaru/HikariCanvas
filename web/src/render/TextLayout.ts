@@ -184,7 +184,7 @@ function applyLineStartForbidden(lines: { text: string; srcStart: number }[]): v
         if (line.text.length === 0) continue;
         const first = line.text[0];
         if (LINE_START_FORBIDDEN.indexOf(first) >= 0) {
-            // \u628a\u9996\u5b57\u7b26\u56de\u632a\u5230\u4e0a\u4e00\u884c\u672b\u5c3e\u2014\u2014\u4e0a\u4e00\u884c\u4e0d\u52a8 srcStart\uff0c\u672c\u884c srcStart +1
+            // 把首字符回挪到上一行末尾——上一行不动 srcStart，本行 srcStart +1
             lines[i - 1] = { text: lines[i - 1].text + first, srcStart: lines[i - 1].srcStart };
             lines[i] = { text: line.text.substring(1), srcStart: line.srcStart + 1 };
         }
@@ -295,6 +295,3 @@ function isCjk(c: string): boolean {
         || (cp >= 0xFF00 && cp <= 0xFFEF) // Halfwidth/Fullwidth
         || (cp >= 0x3000 && cp <= 0x303F); // CJK Punct
 }
-
-// ---------- CanvasMeasurer 已废弃（切到 canonicalCharWidth） ----------
-// 原文件导出的 CanvasMeasurer 类与 CharMeasurer 接口此轮移除，调用方已不再传 measurer。

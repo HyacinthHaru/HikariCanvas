@@ -14,7 +14,7 @@
  *   <li>{@code text}：{@code <input type=text>} → emit <b>string</b>；</li>
  *   <li>{@code select} / {@code op} / {@code scope}：下拉 over {@code options} → emit <b>string</b>；</li>
  *   <li>{@code variable}：「选变量」按钮显当前 fullName → 点开 {@link VariablePicker}
- *       （Teleport 到 body + fixed 浮层，绕开 world transform/overflow 裁切，遵 memory 约束）→
+ *       （由显式按钮触发，避免 click-outside 竞态；Teleport 到 body + fixed 浮层，绕开 world transform/overflow 裁切）→
  *       select 回填 emit <b>string</b>；可清空（emit {@code ''}）；</li>
  *   <li>{@code timeline}：下拉 over {@code project.state.timelines} → emit <b>string</b>（timeline id）；</li>
  *   <li>{@code element}：下拉 over {@code project.allElements} → emit <b>string</b>（element id）；</li>
@@ -138,8 +138,7 @@ const varBtnRef = ref<HTMLElement | null>(null);
 const pickerStyle = ref<Record<string, string>>({});
 
 /**
- * 打开变量 picker。memory 约束：① 必须按钮 click 打开（不能 select-change，否则 picker
- * 的 onClickOutside 会被同一次点击立即触发关闭）；② picker 向下展开 + 在 overlay 里要确保
+ * 打开变量 picker：① 由显式按钮触发，避免 click-outside 竞态；② picker 向下展开 + 在 overlay 里要确保
  * 浮层不被裁切——这里 Teleport 到 body + 用按钮屏幕坐标 fixed 定位 picker 容器。
  *
  * <p>{@code stopPropagation} 阻止这次"打开"click 继续冒泡到
@@ -366,7 +365,7 @@ onMounted(() => {
       >×</button>
     </div>
 
-    <!-- picker：Teleport 到 body + fixed 浮层，绕 world transform / overflow 裁切（memory 约束）。 -->
+    <!-- picker：由显式按钮触发，Teleport 到 body + fixed 浮层，绕开 world transform / overflow 裁切。 -->
     <Teleport to="body">
       <div v-if="pickerOpen" class="hc-pf-picker-host" :style="pickerStyle">
         <VariablePicker
@@ -550,7 +549,7 @@ onMounted(() => {
     border: 1px dashed var(--border);
 }
 
-/* variable —— 显眼"选变量"胶囊（症状 3b：原 11px 灰小字极不显眼） */
+/* variable —— 显眼"选变量"胶囊 */
 .hc-pf-var-row {
     display: inline-flex;
     align-items: center;

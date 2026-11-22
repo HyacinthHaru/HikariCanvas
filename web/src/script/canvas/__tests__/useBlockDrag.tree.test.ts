@@ -12,7 +12,7 @@
  */
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { effectScope, nextTick } from 'vue';
+import { effectScope, nextTick, ref } from 'vue';
 
 import { useBlockDrag } from '../useBlockDrag';
 import { useScriptEditStore } from '@/stores/scriptEdit';
@@ -91,12 +91,12 @@ afterEach(() => {
 
 /** 在 effectScope 内造 drag 实例（canvasRef 指 canvasEl；screenToWorld 用恒等——测里坐标即 world）。 */
 function makeDrag() {
-    const ref = { value: canvasEl };
+    const canvasRef = ref<HTMLElement | null>(canvasEl);
     let drag!: ReturnType<typeof useBlockDrag>;
     scope = effectScope();
     scope.run(() => {
         drag = useBlockDrag({
-            canvasRef: ref as unknown as { value: HTMLElement | null },
+            canvasRef,
             screenToWorld: (x, y) => ({ x, y }),
         });
     });

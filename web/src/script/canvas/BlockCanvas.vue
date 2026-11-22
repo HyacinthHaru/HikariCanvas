@@ -34,7 +34,7 @@ import DeleteDropZone from './DeleteDropZone.vue';
 
 const props = defineProps<{
     /**
-     * H：试跑高亮（result + detail map ref）。由 overlay 持有 stepper 更新后传入；本组件
+     * 试跑高亮（result + detail map ref）。由 overlay 持有 stepper 更新后传入；本组件
      * provide 给递归子组件。缺省（其它挂载点 / smoke 不传）时不 provide，子组件走空 map 兜底。
      */
     highlight?: HighlightInject;
@@ -65,7 +65,7 @@ provide(BLOCK_DRAG_KEY, {
     startStackDrag: drag.startStackDrag,
 });
 
-// H：把试跑高亮 map provide 给递归子组件（缺省时不传，子组件走 inject 默认空 map）。
+// 把试跑高亮 map provide 给递归子组件（缺省时不传，子组件走 inject 默认空 map）。
 if (props.highlight) {
     provide(BLOCK_HIGHLIGHT_KEY, props.highlight);
 }
@@ -243,7 +243,7 @@ async function onWheel(e: WheelEvent): Promise<void> {
   >
     <div class="hc-block-world" :style="canvas.worldStyle.value">
       <!-- 每条 ScriptRule → 一个积木堆。基坐标稳定（不依赖拖动），:x/:y 经 liveStackPos
-           只对被拖堆做实时覆盖 → 拖动时仅被拖堆 patch，其余堆静止（根因 4）。 -->
+           只对被拖堆做实时覆盖 → 拖动时仅被拖堆 patch，其余堆静止。 -->
       <BlockStack
         v-for="entry in basePositionedStacks"
         :key="entry.rule.id"
@@ -286,7 +286,7 @@ async function onWheel(e: WheelEvent): Promise<void> {
       }"
     />
     <!-- 跟手浮层（palette / block 源拖动中）。用 transform 定位（GPU 合成，拖动中不触发 layout
-         reflow）；left/top 固定 0，每帧只改 transform（根因 4：让浮层跟手不卡）。
+         reflow）；left/top 固定 0，每帧只改 transform，让浮层跟手不卡。
          实色块语言：background 填 ghostColor（分类色），文字用 --hc-block-fg（白系）。 -->
     <div
       v-if="drag.ghost.value"

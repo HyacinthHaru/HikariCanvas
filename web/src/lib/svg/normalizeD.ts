@@ -2,14 +2,14 @@
  * normalizeD.ts
  *
  * 把任意 SVG path `d` 字符串归一化为仅含 M/L/Q/C/Z 的绝对命令子集。
- * 展开的命令：H/V → L，S → C，T → Q，A → cubic bezier (逐段)。
+ * 展开的命令：H/V → L，S → C，T → Q，A → cubic bezier（逐段）。
  *
- * 中间表示（Cmd）签名固定，供后续 Task 消费。
+ * 中间表示（Cmd）统一输出绝对坐标，供矩阵烘焙与序列化复用。
  */
 
 export interface Cmd {
     type: 'M' | 'L' | 'Q' | 'C' | 'Z';
-    pts: number[];   // 绝对坐标；M/L=2个, Q=4, C=6, Z=0
+    pts: number[];   // 绝对坐标；M/L=2个，Q=4，C=6，Z=0
 }
 
 // ── 工具函数 ────────────────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ export function commandsToD(cmds: Cmd[], precision = 6): string {
 // ── Tokenizer ────────────────────────────────────────────────────────────────
 //
 // SVG path token 类型：
-//   - 命令字母 (M/m/L/l/H/h/V/v/Q/q/C/c/S/s/T/t/A/a/Z/z)
+//   - 命令字母（M/m/L/l/H/h/V/v/Q/q/C/c/S/s/T/t/A/a/Z/z）
 //   - 数字（含负号、小数点、科学计数法）
 //
 // A 命令特殊处理：第 4、5 参（largeArc/sweep flag）只取单个 0/1 字符，

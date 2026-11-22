@@ -11,7 +11,6 @@
 import { describe, it, expect } from 'vitest';
 import {
     computeAlignDistributePatches,
-    countLockedSkipped,
 } from '../useAlignDistribute';
 import type { Element, RectElement } from '@/types/protocol';
 
@@ -169,21 +168,5 @@ describe('computeAlignDistributePatches - 边界', () => {
         // 仅 a, c 参与；min x = 0；c -> x=0
         expect(patches).toContainEqual({ id: 'c', x: 0 });
         expect(patches.find(p => p.id === 'b')).toBeUndefined();
-    });
-});
-
-describe('countLockedSkipped', () => {
-    it('返回 locked 元素数量', () => {
-        const els: Element[] = [
-            rect('a', 0, 0, 10, 10),
-            rect('b', 0, 0, 10, 10, true),
-            rect('c', 0, 0, 10, 10, true),
-        ];
-        expect(countLockedSkipped(els)).toBe(2);
-    });
-
-    it('全 unlocked 返 0', () => {
-        const els: Element[] = [rect('a', 0, 0, 10, 10)];
-        expect(countLockedSkipped(els)).toBe(0);
     });
 });

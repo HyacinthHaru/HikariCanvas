@@ -67,7 +67,6 @@ async function doImport(file: File) {
     } catch (err) {
         if (err instanceof SvgImportError) {
             errorCode.value = err.code;
-            errorMessage.value = err.message;
         } else {
             errorCode.value = 'UNKNOWN';
             errorMessage.value = (err as Error).message ?? String(err);

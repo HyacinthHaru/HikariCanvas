@@ -14,9 +14,13 @@ import { nextTick } from 'vue';
 // renderProjectState mock —— 断言被调（以及调用入参）。
 // vi.hoisted：mock 工厂会被提升到文件顶，普通顶层 const 在工厂里访问会 TDZ；用 hoisted 让
 // fn 与工厂同被提升。PreviewRenderer 还被 LayerThumbnailRenderer 引用，必须整体 mock 掉。
-const { renderProjectState } = vi.hoisted(() => ({ renderProjectState: vi.fn() }));
+const { renderProjectState, drawElement } = vi.hoisted(() => ({
+    renderProjectState: vi.fn(),
+    drawElement: vi.fn(),
+}));
 vi.mock('@/render/PreviewRenderer', () => ({
     renderProjectState,
+    drawElement,
     // project store reset() 会调 resetImageCaches；保留为 noop 避免 import 崩。
     resetImageCaches: () => {},
 }));
@@ -42,8 +46,25 @@ import type { ProjectState, ScriptRule, ScriptAction, Element } from '@/types/pr
 // RAF 同步化：让 requestPaint 当帧执行 paint。
 const realRaf = globalThis.requestAnimationFrame;
 const realCaf = globalThis.cancelAnimationFrame;
-// 假 2D ctx：getContext 命中即记一次，断言用。
-const fakeCtx = {} as CanvasRenderingContext2D;
+// 假 2D ctx：提供 PreviewPane 绘制高亮与虚影所需的 no-op 绘图方法。
+const fakeCtx = {
+    save: () => {},
+    restore: () => {},
+    beginPath: () => {},
+    closePath: () => {},
+    moveTo: () => {},
+    lineTo: () => {},
+    arc: () => {},
+    rect: () => {},
+    stroke: () => {},
+    fill: () => {},
+    strokeRect: () => {},
+    fillRect: () => {},
+    clearRect: () => {},
+    setLineDash: () => {},
+    translate: () => {},
+    rotate: () => {},
+} as unknown as CanvasRenderingContext2D;
 let getContextSpy: ReturnType<typeof vi.spyOn>;
 
 function fakeState(): ProjectState {

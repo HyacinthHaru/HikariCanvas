@@ -156,8 +156,3 @@ export function advance(fontId: string, ch: string, fontSize: number): number {
     if (base <= 0) return -1;
     return Math.round(base * fontSize / t.baseSize);
 }
-
-// 删除 getAscent/getDescent 两个导出——它们零调用方（死代码导出且误导）。
-// 当前双端基线固定 0.8 倍 fontSize（见 rendering.md §3.2），不按逐字体 ascent/descent 计算。
-// RawTable / Table 仍保留 ascent/descent 字段以记录 .metrics.json 的实际形态（后端
-// serializeToJson 仍输出），但前端不提供读法，避免被误用于基线计算。

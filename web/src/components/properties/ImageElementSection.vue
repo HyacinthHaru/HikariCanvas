@@ -162,7 +162,7 @@ function onMaskInvertedToggle(ev: Event) {
     emit('update', { mask: { d: im.mask.d, inverted, featherPx: im.mask.featherPx ?? null } });
 }
 
-/** 2026-05-25 项 2：羽化滑块。0 = 无羽化（featherPx=null）；1..32 = 渐变像素数。 */
+/** 羽化滑块。0 = 无羽化（featherPx=null）；1..32 = 渐变像素数。 */
 function onMaskFeatherChange(ev: Event) {
     const im = props.element;
     if (!im.mask) return;
@@ -177,7 +177,7 @@ function onMaskFeatherChange(ev: Event) {
     });
 }
 
-/** 2026-05-25 项 1：清除蒙版 — emit mask=null 让后端落 ImageElement.mask=null。 */
+/** 清除蒙版 — emit mask=null 让后端落 ImageElement.mask=null。 */
 function onMaskClear() {
     emit('update', { mask: null });
 }
@@ -390,28 +390,3 @@ async function onReplaceFileChange(e: Event) {
     </div>
   </details>
 </template>
-
-<style scoped>
-.hc-field-label {
-    font-size: 10px;
-    color: var(--muted-foreground);
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-}
-.hc-input {
-    width: 100%;
-    padding: 0.25rem 0.375rem;
-    font-size: 0.75rem;
-    line-height: 1rem;
-    border-radius: 4px;
-    background: var(--background);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-}
-.hc-input:focus {
-    outline: none;
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
-}
-</style>

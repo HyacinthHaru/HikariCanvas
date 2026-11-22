@@ -7,7 +7,7 @@ import { fillToCanvasStyle } from './fill';
 import { applyBayerDither } from './BayerDither';
 import { getPaletteLut, type PaletteLut } from './PaletteLut';
 import { ensureLoaded, isLoaded, clearFailedFontCache } from './FontLoader';
-import { ensureLoaded as ensureIconLoaded, getCached as getCachedIcon, onIconLoaded, clearFailedIconCache } from './IconLoader';
+import { ensureLoaded as ensureIconLoaded, getCached as getCachedIcon, clearFailedIconCache } from './IconLoader';
 import { clearFailedMetricsCache } from './GlyphMetricsLut';
 import { interpolate, type PlaceholderSegment } from '@/variable/interpolator';
 import type { useVariableStore } from '@/stores/variables';
@@ -40,7 +40,6 @@ export function renderProjectState(
     if (!state) return;
 
     ctx.imageSmoothingEnabled = false;
-    // @ts-expect-error non-standard but supported in Chromium
     ctx.textRendering = 'geometricPrecision';
 
     for (const layer of state.layers) {
@@ -88,7 +87,6 @@ function renderLayerSlowPath(
     const og = off.getContext('2d');
     if (!og) return;
     og.imageSmoothingEnabled = false;
-    // @ts-expect-error non-standard
     og.textRendering = 'geometricPrecision';
     // 透明背景；不 fillRect
     for (const e of elements) drawElement(og, e, widthPx, heightPx);
@@ -854,8 +852,8 @@ export const FONT_META: Record<string, FontMeta> = {
  *
  * <p>原实现要求 {@code targetSize} 是 {@code nativeSize}(12) 的 ≥2 整数倍，否则 fallback
  * 到 {@code ctx.fillText} —— 浏览器在非整数倍下会对 TTF 嵌入位图插值放大得到灰阶像素，
- * 看起来就像系统黑体而非点阵（Bug 3），且 ascent/descent 视觉上溢出 lineHeight 造成叠字
- * 视觉（Bug 4）。放宽后任何 {@code fontSize} 都用 {@code nativeSize=12} 画 mask → NEAREST
+ * 看起来就像系统黑体而非点阵，且 ascent/descent 视觉上溢出 lineHeight 造成叠字视觉。
+ * 放宽后任何 {@code fontSize} 都用 {@code nativeSize=12} 画 mask → NEAREST
  * {@code drawImage} 到 target，保持纯黑白方块。Java 侧同步放宽。</p>
  */
 function shouldUseNearestNeighbor(family: string): boolean {
@@ -918,7 +916,6 @@ function resolveTextForRender(t: TextElement): { rendered: string; segments: Pla
         // 行尾缺 `}` 的 `${var:foo` 若要求必须闭合，后端出 ??? 而前端把字面串原样画出来。
         rendered = rendered.replace(/\$\{var:[^}]*\}?/g, '???');
         if (import.meta.env.DEV) {
-            // eslint-disable-next-line no-console
             console.warn('[PreviewRenderer] residual ${var:} after interpolate; replaced with ???');
         }
     }
@@ -1117,7 +1114,6 @@ function drawPixelatedGlyph(ctx: CanvasRenderingContext2D, g: PositionedGlyph,
     const sg = sub.getContext('2d');
     if (!sg) return;
     sg.imageSmoothingEnabled = false;
-    // @ts-expect-error non-standard
     sg.textRendering = 'geometricPrecision';
     sg.font = nativeSpec;
     sg.textBaseline = 'alphabetic';
@@ -1242,7 +1238,6 @@ function renderGlow(ctx: CanvasRenderingContext2D, glyphs: PositionedGlyph[],
     const lg = local.getContext('2d');
     if (!lg) return;
     lg.imageSmoothingEnabled = false;
-    // @ts-expect-error non-standard
     lg.textRendering = 'geometricPrecision';
     lg.font = fontSpec;
     lg.fillStyle = '#ffffff';

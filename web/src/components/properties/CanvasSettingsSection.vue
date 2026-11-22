@@ -84,7 +84,7 @@ const hasAlpha = computed(() => {
 </template>
 
 <style scoped>
-/* M17 F5：半透明 background 时给 FillInput 包一层 CSS 棋盘格背景，
+/* 半透明 background 时给 FillInput 包一层 CSS 棋盘格背景，
    提示用户「画板是半透明的」。FillInput 自身的 color swatch 已经画 alpha；
    此处只是给整段容器一个语义化的视觉指示。 */
 .hc-canvas-bg-wrap.hc-has-alpha {

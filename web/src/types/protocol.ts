@@ -1,10 +1,8 @@
 // WebSocket 协议类型（对齐 docs/protocol.md §2 / §7）。
 // 后端 ac.haru.hikaricanvas.state.* records 的 TypeScript 镜像。
-//
-// v2 形态：ProjectState.layers + activeLayerId + canvas.gridSize + canvas.guides；
-// element 加可选 opacity / blendMode / renderMode。
 
-import type { VarType, VariablePatch } from './variable';
+import type { TemplateSpec } from './template';
+import type { Variable, VariablePatch, VarType } from './variable';
 
 export interface Envelope<P = unknown> {
     v: number;
@@ -46,20 +44,13 @@ export interface Canvas {
     widthMaps: number;
     heightMaps: number;
     /**
-     * 升级为 Fill 联合类型（solid / linear / radial），与 element fill 一致。
-     * 后端 {@code FillDeserializer} 兼容旧字符串形态（自动 wrap 为 SolidFill）；
-     * 前端通过 {@code normalizeFill} 在 store 入口归一化为 object 形态。
+     * 画布背景填充（solid / linear / radial），与元素 fill 一致。
+     * 后端 `FillDeserializer` 兼容旧字符串形态（自动包装为 SolidFill）；
+     * 前端通过 `normalizeFill` 在 store 入口归一化为对象形态。
      */
     background: FillCompat;
     /** 网格像素间距；0 / 缺省 = 不显示（仅前端预览，不入 MC） */
     gridSize?: number;
-    /** 用户从标尺拖出的参考线（仅前端预览） */
-    guides?: Guide[];
-}
-
-export interface Guide {
-    axis: 'x' | 'y';
-    position: number; // 像素坐标
 }
 
 /**
@@ -345,9 +336,9 @@ export interface ReadyPayload {
      */
     canManageWall?: boolean;
     // 全量 TemplateSpec 列表（builtin + server-side templates）
-    templates?: import('./template').TemplateSpec[];
+    templates?: TemplateSpec[];
     // 该 wall 当前所有变量快照（VariableDto 形式，referencedByWalls 已剔除）
-    variables?: import('./variable').Variable[];
+    variables?: Variable[];
     // 该 wall 的变量别名映射（fullName → alias）；前端 VariableAliasStore 初始化用。
     aliases?: Record<string, string>;
     // 该 wall 当前所有脚本规则快照（服务端顺序）；前端 ScriptStore 初始化用。
@@ -500,10 +491,9 @@ export interface Timeline {
 // ScriptRuleValidator；前端镜像层（store）不做语义校验。
 
 /**
- * 脚本触发器多态联合（docs/scripting.md §2.2 + scripting-0.7.1.md §6）。
- * {@code playerJoin / playerKill / playerQuit / rightClickWall} 是全局事件面
- * （需 {@code canvas.script.trigger.global}）；{@code playerNear / playerLeaveRange} 是墙级
- * （仅基础编辑权限，同 PlayerNearSampler）。
+ * 脚本触发器多态联合（`docs/scripting.md §2.2`）。
+ * `playerJoin / playerKill / playerQuit / rightClickWall` 为全局事件面
+ *（需 `canvas.script.trigger.global`）；`playerNear / playerLeaveRange` 为墙级。
  */
 export type ScriptTrigger =
     | { type: 'variableChange'; fullName: string }
@@ -517,10 +507,11 @@ export type ScriptTrigger =
     | { type: 'playerQuit' };
 
 /**
- * 脚本动作多态联合（docs/scripting.md §2.2，8 种动作 + {@code if} 条件分支可递归嵌套）。
- * {@code if} 的两个分支 wire 字段名为 {@code then} / {@code else}（后端 Java 侧
- * {@code elseActions} 仅为避开关键字，wire 上仍是 {@code else}）；空分支 = 空数组（非 null）。
- * {@code playTimeline.seekMs} 仅 {@code op = 'seek'} 时携带，其余省略不上 wire。
+ * 脚本动作多态联合（`docs/scripting.md §2.2`）。
+ * - `if` / `randomBranch` 分支 wire 字段名为 `then` / `else`，空分支为空数组（非 null）。
+ * - `playTimeline.seekMs` 仅 `op === 'seek'` 时携带。
+ * - `repeat` / `repeatUntil` 的 `body` 路径使用 `${path}/body/${i}`（与后端 `ScriptRunner` 同构）。
+ * - `tweenBlock.body` 仅允许可补间的 `setElementProperties` 动作。
  */
 export type ScriptAction =
     | { type: 'setVariable'; fullName: string; value: string }
@@ -532,58 +523,30 @@ export type ScriptAction =
     | { type: 'runCommand'; templateId: string; params: Record<string, string> }
     | { type: 'log'; message: string }
     | { type: 'if'; condition: string; then: ScriptAction[]; else: ScriptAction[] }
-    // 友好元素积木的序列化目标 + 低风险新动作。
-    // setElementProperties = 批量设元素属性（友好积木皮肤 kind 透传，后端执行忽略）；
-    // nudgeElement = 相对移动；sendMessage = 给触发玩家发消息；setRandomVariable = 设随机数；
-    // scaleVariable = 变量乘/除；playTimelineAwait = 播时间轴并等播完（Runner 挂起续接）。
     | { type: 'setElementProperties'; elementId: string; patch: Record<string, string>; kind: string }
     | { type: 'nudgeElement'; elementId: string; dx: number; dy: number }
-    // sendMessage 加 target（'trigger' 给触发玩家 / 'all' 全服广播）。后端 Deserializer
-    // optionalText 默 'trigger'（向后兼容旧 payload 无 target）；executor doSendMessage 按 target 分流。
     | { type: 'sendMessage'; text: string; channel: 'chat' | 'actionbar' | 'title'; target: 'trigger' | 'all' }
     | { type: 'setRandomVariable'; fullName: string; min: number; max: number }
     | { type: 'scaleVariable'; fullName: string; op: 'multiply' | 'divide'; factor: number }
     | { type: 'playTimelineAwait'; timelineId: string }
-    // 有界循环「重复 N 次」。count ∈ [1,100]；body 为每轮执行的动作（由后端
-    // ScriptRunner 展开 count 轮，blockId 用 `${path}/body/${i}` 不带 round——前后端同构）。
     | { type: 'repeat'; count: number; body: ScriptAction[] }
-    // 动态循环「重复直到条件」（while 语义：每轮先查 condition，满足/达 maxIterations
-    // 上限/Budget 熔断才停）。maxIterations ∈ [1,100] 默 10；body 为每轮执行的动作（后端 ScriptRunner
-    // 动态压栈，不预展开，blockId 用 `${path}/body/${i}` 不带轮数——前后端同构，照 repeat 范式）。
     | { type: 'repeatUntil'; condition: string; maxIterations: number; body: ScriptAction[] }
-    // 剩余动作（停止脚本 / 播放粒子 / 等待直到条件满足或超时）。
-    // stopScript = 清帧栈中止本次 run（ScriptRunner 处理）；playParticle 在墙世界坐标喷粒子
-    // （particle 为白名单 minecraft:xxx，wire 字段名是 particle，与后端 record 同名）；
-    // waitUntil 轮询 condition（复用 if 条件文法），满足或 timeoutMs 超时才续接（ScriptRunner pollWaitUntil）。
     | { type: 'stopScript' }
     | { type: 'playParticle'; particle: string; count: number; offsetX: number; offsetY: number; offsetZ: number }
     | { type: 'waitUntil'; condition: string; timeoutMs: number }
-    // 变量积木（复制 / 拼接）+ 元素积木（克隆 / 删除）。
-    // copyVariable = 把 source 变量当前值复制进 target（{target,source} 与后端 record 同序）；
-    // appendVariable = 把 text（可含 ${var:X}）插值后追加到 fullName 变量末尾；
-    // cloneElement = 克隆元素到同 layer（新 id + 位置偏移 offsetX/offsetY）；deleteElement = 删除元素。
     | { type: 'copyVariable'; target: string; source: string }
     | { type: 'appendVariable'; fullName: string; text: string }
     | { type: 'cloneElement'; elementId: string; offsetX: number; offsetY: number }
     | { type: 'deleteElement'; elementId: string }
-    // 挂起式补间包裹积木（"在 X 秒内"）。durationMs ∈ [1, 60000]；
-    // easing 复用 timeline Easing（同 Keyframe.easing）；
-    // body 只放属性动作（setElementProperties，kind ∈ tweenable 集合）。
     | { type: 'tweenBlock'; durationMs: number; easing: Easing; body: ScriptAction[] }
-    // 4 个新积木（随机分支 / 元素置顶置底 / 变量取整 / 标题弹窗）。
-    // randomBranch = 控制流（C 形双臂，照 if）；probability ∈ [0,100] 百分比；then/else 可递归。
     | { type: 'randomBranch'; probability: number; then: ScriptAction[]; else: ScriptAction[] }
-    // setElementLayer = 结构性改 state（把元素移到所属 layer 最前/最后）；mode ∈ {front, back}。
     | { type: 'setElementLayer'; elementId: string; mode: 'front' | 'back' }
-    // roundVariable = 变量取整（读→Math.round/floor/ceil→setValue）；mode ∈ {round, floor, ceil}。
     | { type: 'roundVariable'; fullName: string; mode: 'round' | 'floor' | 'ceil' }
-    // showTitle = 标题弹窗（主线程 hop + target 分流）；time fields in ms；target ∈ {trigger, all}。
     | { type: 'showTitle'; title: string; subtitle: string; fadeInMs: number; stayMs: number; fadeOutMs: number; target: 'trigger' | 'all' };
 
 /**
- * 脚本规则（docs/scripting.md §2.1）。{@code id / wallId} 服务端权威（create 时不带）。
- * {@code blockLayout} 是前端积木 UI 的坐标 JSON 字符串——镜像层与后端都不解析，
- * 仅积木编辑器读写。
+ * 脚本规则（`docs/scripting.md §2.1`）。`id` / `wallId` 由服务端权威生成；
+ * `blockLayout` 为前端积木画布坐标 JSON 字符串，后端原样存储不解析。
  */
 export interface ScriptRule {
     id: string; // "sr-<8hex>"
@@ -596,10 +559,9 @@ export interface ScriptRule {
 }
 
 /**
- * 试跑单步轨迹（S→C 推送 op {@code script.trace} 的 steps 项）。
- * {@code blockId} 是动作树路径（{@code trigger} / {@code actions/0} /
- * {@code actions/2/then/1}，与积木树同构——P5 积木高亮按此定位）；
- * {@code detail} 为 null 时后端省略不上 wire。
+ * 试跑单步轨迹（服务端推送 op `script.trace` 的 `steps` 项）。
+ * `blockId` 为动作树路径（`trigger` / `actions/0` / `actions/2/then/1`），供积木画布定位高亮；
+ * `detail` 为空时省略。
  */
 export interface ScriptTraceStep {
     blockId: string;

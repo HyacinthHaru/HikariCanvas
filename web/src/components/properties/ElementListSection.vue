@@ -52,7 +52,9 @@ function onElementDrop(ev: DragEvent, idx: number) {
     dragOverIdx.value = -1;
     if (from < 0 || from === idx) return;
     if (!project.state) return;
-    const el = project.state.elements[from];
+    const list = project.state.elements;
+    if (!list) return;
+    const el = list[from];
     if (!el) return;
     // 只发 op，不做本地乐观重排——后端 element.reorder 产出的是位置型 patch
     // （remove /layers/i/elements/from + add .../to），且 EditOpDispatcher 对发起

@@ -183,7 +183,7 @@ export function buildSlots(
         const idx = lastIndexOf(segs);
         if (idx === null) continue;
         const parentPath = segs.slice(0, segs.length - 1);
-        const key = `${m.ruleId} ${pathToString(parentPath)}`;
+        const key = `${m.ruleId}\u0000${pathToString(parentPath)}`;
         let g = bySeq.get(key);
         if (!g) {
             g = { parentPath, ruleId: m.ruleId, entries: [] };
@@ -393,7 +393,7 @@ export function useBlockDrag(opts: {
 
     /** 跟手浮层（palette / block 源拖动中显示）；null = 不显示。 */
     const ghost = ref<DragGhost | null>(null);
-    /** 当前命中的吸附插槽（high­light 指示线用）；null = 无命中。 */
+    /** 当前命中的吸附插槽（highlight 指示线用）；null = 无命中。 */
     const activeSlot = ref<SlotRect | null>(null);
     /** 移堆拖动中的实时坐标（让被拖堆即时跟随；松手提交 setStackPos）。 */
     const stackDragPos = ref<{ ruleId: string; x: number; y: number } | null>(null);

@@ -6,15 +6,14 @@
  *   <li>复用 {@link renderProjectState} 单 layer 模式 —— 把目标 layer 包成"伪 ProjectState"
  *       渲染到全分辨率 off-canvas（透明背景：把 canvas.background 强制设为透明），
  *       再按 canvas aspect ratio 缩到长边 = {@link THUMBNAIL_MAX_SIDE} 的 dataURL。</li>
- *   <li>缓存 key = layerId；hash = elements 简单序列化签名（元素数量 + 各 id + 各
- *       x/y/w/h/rotation/visible 简化值）。任意元素增删改都会改 hash → 重 render。</li>
+ *   <li>缓存 key = layerId；hash = 图层属性与完整元素列表的序列化签名。任意元素增删改都会改 hash → 重 render。</li>
  *   <li>背景棋盘格交给 CSS（缩略图本身始终透明），节约一次重画。</li>
  * </ul>
  *
  * <p><b>不与后端镜像：</b>缩略图只在前端 UI 显示，无任何协议涉及。</p>
  */
 
-import type { Element, Layer, ProjectState } from '@/types/protocol';
+import type { Layer, ProjectState } from '@/types/protocol';
 import { renderProjectState } from './PreviewRenderer';
 
 /**
@@ -53,8 +52,7 @@ function computeLayerHash(layer: Layer): string {
         `vis=${layer.visible ? 1 : 0}`,
     ];
     for (const e of layer.elements) {
-        // 用 JSON.stringify 整 element 太重；只签关键字段；改 fill/text 内容也应触发重画
-        // → 简单兜底：把整 element 序列化（thumbnail 不会被很高频调用，元素数也不大）
+        // 序列化完整 element，使几何、可见性及填充 / 文本内容变化均触发缩略图重绘。
         parts.push(JSON.stringify(e));
     }
     return parts.join('|');
@@ -137,7 +135,6 @@ export function renderLayerThumbnail(
 
     if (import.meta.env.DEV) {
         const dt = performance.now() - t0;
-        // eslint-disable-next-line no-console
         console.debug(
             `[LayerThumbnail] rendered layer ${layer.id} (${layer.elements.length} el) `
             + `in ${dt.toFixed(1)}ms`);
@@ -157,6 +154,3 @@ export function invalidateLayerThumbnail(layerId: string): void {
 export function clearLayerThumbnailCache(): void {
     cache.clear();
 }
-
-// 让 ESLint 不抱怨未使用的 Element 类型导入（仅类型提示用）。
-export type _ = Element;

@@ -155,21 +155,3 @@ function onNumberChange(field: string, ev: Event) {
     </div>
   </details>
 </template>
-
-<style scoped>
-.hc-input {
-    width: 100%;
-    padding: 0.25rem 0.375rem;
-    font-size: 0.75rem;
-    line-height: 1rem;
-    border-radius: 4px;
-    background: var(--background);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-}
-.hc-input:focus {
-    outline: none;
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
-}
-</style>

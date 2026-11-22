@@ -14,16 +14,16 @@
  *      用户拖动 text 元素时坐标变了但 cache key 一致——只需平移即可，但 cache 命中后
  *      调用方拿到的是 element-local 偏移 + 已 baked global 坐标的 polygon，所以这里
  *      cache 存"以 (0,0) 为原点的 layout polygon"，调用方加偏移。
- *   4. **v1 限制**：仅单行 / 多行（按 `\n` 拆）水平 layout；不支持 wrap by box-width、
- *      不支持 vertical 模式、不支持 letterSpacing 完整复刻 TextLayout.ts。无法处理时
- *      返回 null 让上层 fallback bbox。
+ *   4. **排版覆盖**：水平方向复用 {@link layoutText} 同源摆位（支持 softWrap、align、
+ *      letterSpacing、lineHeight 与 italic 倾斜变换）；竖排（vertical）暂不支持，返回 null
+ *      让上层回落 bbox。
  *   5. **退化兜底**：fontkit 加载失败 / 字体 fetch 失败 / glyph path 为空 → 返回 null。
  *
  * 性能：
  *   - 短文本 (≤20 字符) 全流程 ~5-15ms（worker 内隔离）
  *   - 长 / CJK 文本：glyph 路径采样 + union 可能 50-100ms；缓存后第二次 < 1ms
  *
- * 双端镜像：不需要后端镜像（CLAUDE.md M18 §1 — Live Paint 是前端独占功能）。
+ * 双端镜像：不需要后端镜像（{@code docs/rendering.md §1 / §8} — Live Paint 是前端独占功能）。
  */
 
 import polygonClipping from 'polygon-clipping';
@@ -170,7 +170,7 @@ function loadFont(fontId: string): Promise<FontkitFont | null> {
             const font = fk.create(new Uint8Array(buf));
             return font ?? null;
         } catch (e) {
-            if (typeof console !== 'undefined' && import.meta.env && import.meta.env.DEV) {
+            if (import.meta.env.DEV) {
                 console.warn(`[TextGlyphExtractor] loadFont ${fontId} failed:`, e);
             }
             return null;
@@ -390,7 +390,7 @@ async function computeLayoutMultiPolygon(
         try {
             glyph = font.glyphForCodePoint(cp);
         } catch (e) {
-            if (typeof console !== 'undefined' && import.meta.env && import.meta.env.DEV) {
+            if (import.meta.env.DEV) {
                 console.warn('[TextGlyphExtractor] glyphForCodePoint failed:', e);
             }
             continue;
@@ -433,7 +433,7 @@ async function computeLayoutMultiPolygon(
     try {
         merged = polygonClipping.union(subPolygons[0], ...subPolygons.slice(1));
     } catch (e) {
-        if (typeof console !== 'undefined' && import.meta.env && import.meta.env.DEV) {
+        if (import.meta.env.DEV) {
             console.warn('[TextGlyphExtractor] union failed:', e);
         }
         return { multi: null, fontMissing: false };

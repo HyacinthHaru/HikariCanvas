@@ -1,50 +1,30 @@
 /**
- * 0.6 P2（B3）：timelineLogic 纯函数单测。
- *
- * 无 Vue / DOM / pinia（task 要求：纯函数测试，pinia 不进测试）。node 环境直接跑。
- *
- * 覆盖：
- * - groupKeyframesByElement：分组 + 排序 + 孤儿轨 type=null + 空输入
- * - formatKeyframeValue：number / string / Fill 对象 / 小数去尾
- * - defaultValueFor：opacity 缺省 → 1、其余缺省 → 0、显式值原样
- * - validateCreateForm：合法 + durationMs / fps / loopMode 各错误分支
- * - isValidKeyframeTime：边界
- * - shortElementId
+ * `timelineLogic` 纯函数单元测试（无 Vue / DOM / Pinia 依赖）。
  */
 import { describe, expect, it } from 'vitest';
 import {
-    CREATE_FORM_DEFAULTS,
-    EASING_TYPES,
     clampTimeMs,
     computeRulerTicks,
     defaultValueFor,
-    defaultValueForExtended,
-    formatKeyframeValue,
     formatTimeLabel,
     formatClock,
     frameMs,
-    groupKeyframesByElement,
-    isValidKeyframeTime,
     keyframeablePropertiesFor,
     msToPx,
     pxToMs,
-    shortElementId,
     snapToFrame,
-    splitTracksByProperty,
     aggregateTransformKeyframes,
     transformKeyframeKey,
     applyDragOverride,
     planTransformUpsert,
     groupsInMarquee,
-    validateCreateForm,
     TRIGGER_TYPES,
     buildTrigger,
     triggerNeedsVariable,
-    type CreateFormInput,
     type TransformSnapshot,
     type MarqueeRowView,
 } from '../timelineLogic';
-import type { Element, Fill, Keyframe, ProjectState, Timeline } from '@/types/protocol';
+import type { Element, Keyframe, ProjectState, Timeline } from '@/types/protocol';
 
 function mkKf(property: string, timeMs: number, value: number = 0): Keyframe {
     return {
@@ -83,73 +63,6 @@ function mkRect(over: Partial<Element> = {}): Element {
     } as Element;
 }
 
-describe('groupKeyframesByElement', () => {
-    it('returns [] for null timeline', () => {
-        expect(groupKeyframesByElement(null, () => null)).toEqual([]);
-    });
-
-    it('returns [] for timeline without tracks', () => {
-        const tl = mkTimeline({});
-        expect(groupKeyframesByElement(tl, () => 'rect')).toEqual([]);
-    });
-
-    it('groups by elementId ascending and sorts keyframes by (property, timeMs)', () => {
-        const tl = mkTimeline({
-            'e-bbb': [mkKf('x', 500), mkKf('opacity', 0), mkKf('x', 0)],
-            'e-aaa': [mkKf('y', 100)],
-        });
-        const groups = groupKeyframesByElement(tl, (id) => (id === 'e-aaa' ? 'text' : 'circle'));
-        // elementId 升序：e-aaa 在前
-        expect(groups.map((g) => g.elementId)).toEqual(['e-aaa', 'e-bbb']);
-        expect(groups[0].elementType).toBe('text');
-        // e-bbb：opacity 先（字典序 o < x），x 内部按 timeMs 升序
-        const bbb = groups[1];
-        expect(bbb.keyframes.map((k) => `${k.property}@${k.timeMs}`)).toEqual([
-            'opacity@0', 'x@0', 'x@500',
-        ]);
-    });
-
-    it('marks orphan track type as null when element resolver returns null', () => {
-        const tl = mkTimeline({ 'e-gone': [mkKf('x', 0)] });
-        const groups = groupKeyframesByElement(tl, () => null);
-        expect(groups[0].elementType).toBeNull();
-    });
-
-    it('does not mutate the source track array', () => {
-        const original = [mkKf('x', 500), mkKf('x', 0)];
-        const tl = mkTimeline({ 'e-a': original });
-        groupKeyframesByElement(tl, () => 'rect');
-        // 原数组顺序未被排序改动
-        expect(original.map((k) => k.timeMs)).toEqual([500, 0]);
-    });
-});
-
-describe('formatKeyframeValue', () => {
-    it('formats integers as-is', () => {
-        expect(formatKeyframeValue(42)).toBe('42');
-        expect(formatKeyframeValue(0)).toBe('0');
-    });
-
-    it('trims trailing zeros on decimals', () => {
-        expect(formatKeyframeValue(1.5)).toBe('1.5');
-        expect(formatKeyframeValue(0.10000001)).toBe('0.1');
-    });
-
-    it('returns strings (incl. variable templates) as-is', () => {
-        expect(formatKeyframeValue('hello')).toBe('hello');
-        expect(formatKeyframeValue('${var:user/x}')).toBe('${var:user/x}');
-    });
-
-    it('returns object type for Fill values', () => {
-        expect(formatKeyframeValue({ type: 'solid', color: '#fff' })).toBe('solid');
-        expect(formatKeyframeValue({ type: 'linear', stops: [], angle: 0 })).toBe('linear');
-    });
-
-    it('falls back to "fill" for typeless objects', () => {
-        expect(formatKeyframeValue({ foo: 1 })).toBe('fill');
-    });
-});
-
 describe('defaultValueFor', () => {
     it('reads explicit numeric props', () => {
         const el = mkRect({ x: 10, y: 20, w: 30, h: 40, rotation: 15 });
@@ -175,76 +88,6 @@ describe('defaultValueFor', () => {
         expect(defaultValueFor(null, 'opacity')).toBe(1);
     });
 });
-
-describe('validateCreateForm', () => {
-    const base: CreateFormInput = { ...CREATE_FORM_DEFAULTS };
-
-    it('accepts the defaults', () => {
-        expect(validateCreateForm(base)).toEqual({ ok: true });
-    });
-
-    it('rejects non-positive durationMs', () => {
-        const r = validateCreateForm({ ...base, durationMs: 0 });
-        expect(r.ok).toBe(false);
-        if (!r.ok) expect(r.field).toBe('durationMs');
-    });
-
-    it('rejects non-integer durationMs', () => {
-        const r = validateCreateForm({ ...base, durationMs: 1.5 });
-        expect(r.ok).toBe(false);
-        if (!r.ok) expect(r.field).toBe('durationMs');
-    });
-
-    it('rejects absurdly long durationMs', () => {
-        const r = validateCreateForm({ ...base, durationMs: 9_999_999 });
-        expect(r.ok).toBe(false);
-        if (!r.ok) expect(r.reason).toBe('errDurationTooLong');
-    });
-
-    it('rejects non-positive fps', () => {
-        const r = validateCreateForm({ ...base, fps: 0 });
-        expect(r.ok).toBe(false);
-        if (!r.ok) expect(r.field).toBe('fps');
-    });
-
-    it('rejects fps above 240', () => {
-        const r = validateCreateForm({ ...base, fps: 999 });
-        expect(r.ok).toBe(false);
-        if (!r.ok) expect(r.field).toBe('fps');
-    });
-
-    it('rejects unknown loopMode', () => {
-        // 强制非法值绕过类型检查模拟 UI 漂移
-        const r = validateCreateForm({ ...base, loopMode: 'bogus' as never });
-        expect(r.ok).toBe(false);
-        if (!r.ok) expect(r.field).toBe('loopMode');
-    });
-});
-
-describe('isValidKeyframeTime', () => {
-    it('accepts boundaries 0 and durationMs', () => {
-        expect(isValidKeyframeTime(0, 5000)).toBe(true);
-        expect(isValidKeyframeTime(5000, 5000)).toBe(true);
-        expect(isValidKeyframeTime(2500, 5000)).toBe(true);
-    });
-
-    it('rejects negative / overflow / non-integer', () => {
-        expect(isValidKeyframeTime(-1, 5000)).toBe(false);
-        expect(isValidKeyframeTime(5001, 5000)).toBe(false);
-        expect(isValidKeyframeTime(1.5, 5000)).toBe(false);
-    });
-});
-
-describe('shortElementId', () => {
-    it('strips the e- prefix', () => {
-        expect(shortElementId('e-1a2b3c4d')).toBe('1a2b3c4d');
-    });
-    it('returns id without prefix unchanged', () => {
-        expect(shortElementId('abcdef')).toBe('abcdef');
-    });
-});
-
-// ---------- P3 扩展：keyframeablePropertiesFor ----------
 
 /** 给定 type 造一个最简元素（只需 type + base 字段够分类）。 */
 function mkEl(type: string, over: Partial<Element> = {}): Element {
@@ -285,7 +128,7 @@ describe('keyframeablePropertiesFor', () => {
         },
     );
 
-    it('P3 审查 #9：元素当前 fill 为 null/缺失时不放行 fill 轨（空心框不能加填充关键帧）', () => {
+    it('元素当前 fill 为 null/缺失时不放行 fill 轨（空心框不能加填充关键帧）', () => {
         expect(keyframeablePropertiesFor(mkEl('rect'))).toEqual(NUMERIC_SIX);
         expect(keyframeablePropertiesFor(mkEl('circle', { fill: null } as unknown as Partial<Element>)))
             .toEqual(NUMERIC_SIX);
@@ -305,93 +148,7 @@ describe('keyframeablePropertiesFor', () => {
     });
 });
 
-// ---------- P3 扩展：defaultValueForExtended ----------
-
-describe('defaultValueForExtended', () => {
-    it('numeric props delegate to defaultValueFor (number)', () => {
-        const el = mkEl('rect', { x: 12, opacity: 0.4 } as Partial<Element>);
-        expect(defaultValueForExtended(el, 'x')).toBe(12);
-        expect(defaultValueForExtended(el, 'opacity')).toBe(0.4);
-        expect(defaultValueForExtended(mkEl('rect'), 'opacity')).toBe(1);
-    });
-
-    it('color reads element.color, defaulting to #000000', () => {
-        expect(defaultValueForExtended(mkEl('text', { color: '#FF8800' } as Partial<Element>), 'color'))
-            .toBe('#FF8800');
-        expect(defaultValueForExtended(mkEl('text'), 'color')).toBe('#000000');
-        // 非 text 元素无 color → 默认黑
-        expect(defaultValueForExtended(mkEl('rect'), 'color')).toBe('#000000');
-    });
-
-    it('text reads element.text, defaulting to empty string', () => {
-        expect(defaultValueForExtended(mkEl('text', { text: 'hi' } as Partial<Element>), 'text'))
-            .toBe('hi');
-        expect(defaultValueForExtended(mkEl('text'), 'text')).toBe('');
-        // 空字符串元素 text 原样返回（不退默认）
-        expect(defaultValueForExtended(mkEl('text', { text: '' } as Partial<Element>), 'text')).toBe('');
-    });
-
-    it('fill reads element.fill object, defaulting to white solid', () => {
-        const el = mkEl('rect', { fill: { type: 'solid', color: '#123456' } } as Partial<Element>);
-        expect(defaultValueForExtended(el, 'fill')).toEqual({ type: 'solid', color: '#123456' });
-        expect(defaultValueForExtended(mkEl('rect'), 'fill')).toEqual({ type: 'solid', color: '#FFFFFF' });
-    });
-
-    it('fill wraps a legacy string fill into a SolidFill', () => {
-        const el = mkEl('rect', { fill: '#abcdef' as unknown as Fill } as Partial<Element>);
-        expect(defaultValueForExtended(el, 'fill')).toEqual({ type: 'solid', color: '#abcdef' });
-    });
-
-    it('fill preserves a linear gradient object', () => {
-        const grad: Fill = {
-            type: 'linear', angle: 45,
-            stops: [{ position: 0, color: '#000' }, { position: 1, color: '#fff' }],
-        };
-        const el = mkEl('rect', { fill: grad } as Partial<Element>);
-        expect(defaultValueForExtended(el, 'fill')).toBe(grad);
-    });
-});
-
-// ---------- P3：EASING_TYPES 常量完整性 ----------
-
-describe('EASING_TYPES', () => {
-    it('lists the four MVP presets in order (no cubicBezier in the dropdown)', () => {
-        expect(EASING_TYPES).toEqual(['linear', 'easeIn', 'easeOut', 'easeInOut']);
-    });
-
-    it('starts with linear (default)', () => {
-        expect(EASING_TYPES[0]).toBe('linear');
-    });
-});
-
-// ──────────────────────────────────────────────────────────
-//  P4：AE dock 时间↔像素映射 + 二级属性子轨拆分
-// ──────────────────────────────────────────────────────────
-
-describe('splitTracksByProperty (P4 二级拆分)', () => {
-    it('returns [] for null timeline', () => {
-        expect(splitTracksByProperty(null, () => null)).toEqual([]);
-    });
-
-    it('groups by elementId asc → property asc → timeMs asc', () => {
-        const timeline = {
-            id: 'tl-1', name: 't', durationMs: 1000, fps: 20, loopMode: 'loop',
-            trigger: { type: 'manual', params: {} },
-            tracks: {
-                'e-b': [mkKf('y', 500), mkKf('x', 300), mkKf('x', 100)],
-                'e-a': [mkKf('opacity', 0)],
-            },
-        } as unknown as Timeline;
-        const groups = splitTracksByProperty(timeline, (id) => (id === 'e-a' ? 'rect' : 'text'));
-        expect(groups.map(g => g.elementId)).toEqual(['e-a', 'e-b']);   // elementId 升序
-        expect(groups[0].elementType).toBe('rect');
-        const eb = groups[1];
-        expect(eb.properties.map(p => p.property)).toEqual(['x', 'y']);   // property 字典序
-        expect(eb.properties[0].keyframes.map(k => k.timeMs)).toEqual([100, 300]);   // timeMs 升序
-    });
-});
-
-describe('time <-> pixel mapping (P4)', () => {
+describe('time <-> pixel mapping', () => {
     it('msToPx / pxToMs round-trip with scroll offset', () => {
         expect(msToPx(500, 0.1, 0)).toBe(50);
         expect(msToPx(500, 0.1, 100)).toBeCloseTo(40, 6);

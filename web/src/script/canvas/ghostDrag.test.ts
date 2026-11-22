@@ -88,11 +88,11 @@ describe('hitGhostHandle — moveTo', () => {
 describe('applyGhostDrag — move', () => {
     const g = buildGhostElement(baseEl(), 'moveTo', { x: '10', y: '20' });
     it('平移 delta 写回 x/y(round)', () => {
-        const p = applyGhostDrag('moveTo', 'move', g, 30, 50, 130, 250); // 指针从中心移 (+100,+200)
+        const p = applyGhostDrag('move', g, 30, 50, 130, 250); // 指针从中心移 (+100,+200)
         expect(p).toEqual({ x: '110', y: '220' });
     });
     it('负向平移', () => {
-        const p = applyGhostDrag('moveTo', 'move', g, 30, 50, 20, 40);
+        const p = applyGhostDrag('move', g, 30, 50, 20, 40);
         expect(p).toEqual({ x: '0', y: '10' });
     });
 });
@@ -119,11 +119,11 @@ describe('hitGhostHandle — resize', () => {
 describe('applyGhostDrag — resizeSE', () => {
     const g = buildGhostElement(baseEl(), 'resize', { w: '40', h: '60' }); // 左上 (10,20)
     it('拖右下角到 (110,220) → w=100 h=200(左上锚定)', () => {
-        const p = applyGhostDrag('resize', 'resizeSE', g, 50, 80, 110, 220);
+        const p = applyGhostDrag('resizeSE', g, 50, 80, 110, 220);
         expect(p).toEqual({ w: '100', h: '200' });
     });
     it('拖到左上内侧 → w/h 钳 ≥1', () => {
-        const p = applyGhostDrag('resize', 'resizeSE', g, 50, 80, 5, 5);
+        const p = applyGhostDrag('resizeSE', g, 50, 80, 5, 5);
         expect(p).toEqual({ w: '1', h: '1' });
     });
 });
@@ -142,19 +142,19 @@ describe('ghostHandlePos — rotateTo', () => {
 describe('applyGhostDrag — rotate', () => {
     const g = buildGhostElement(baseEl(), 'rotateTo', { rotation: '0' }); // 中心 (30,50)
     it('指针在正上方 → rotation 0', () => {
-        const p = applyGhostDrag('rotateTo', 'rotate', g, 30, 0, 30, -10);
+        const p = applyGhostDrag('rotate', g, 30, 0, 30, -10);
         expect(p).toEqual({ rotation: '0' });
     });
     it('指针在正右方 → rotation 90', () => {
-        const p = applyGhostDrag('rotateTo', 'rotate', g, 30, 0, 60, 50);
+        const p = applyGhostDrag('rotate', g, 30, 0, 60, 50);
         expect(p).toEqual({ rotation: '90' });
     });
     it('指针在正下方 → rotation 180', () => {
-        const p = applyGhostDrag('rotateTo', 'rotate', g, 30, 0, 30, 100);
+        const p = applyGhostDrag('rotate', g, 30, 0, 30, 100);
         expect(p).toEqual({ rotation: '180' });
     });
     it('指针在正左方 → rotation 270', () => {
-        const p = applyGhostDrag('rotateTo', 'rotate', g, 30, 0, 0, 50);
+        const p = applyGhostDrag('rotate', g, 30, 0, 0, 50);
         expect(p).toEqual({ rotation: '270' });
     });
 });

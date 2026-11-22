@@ -1,17 +1,17 @@
 /**
  * 轻量级 i18n 字串表（中 / 英）。
- * 为避免引入 vue-i18n 的体积 + 运行时插件机制，这里只做最简单的嵌套对象查表。
- * Vue 组件里用法：
+ * Vue 组件用法：
  *   const { t } = useI18n();
- *   t.topbar.toggleLeft
+ *   // template: {{ t.topbar.toggleLeft }}
+ *   // script:   t.value.topbar.toggleLeft
  *
  * 切换：ui store 的 locale toggle；localStorage 持久化。
  *
  * 文案风格（用户友好化）：
- * - 面向 MC 服主 / 玩家，避免开发术语（fontId / blendMode / canonicalCharWidth 等）
- * - 错误提示要"说人话"：什么出错 + 接下来怎么办
- * - 空状态主动引导（"点击..."、"试试..."），不要冷冰冰只说"无数据"
- * - 中英风格对齐：中文亲切则英文 also friendly
+ * - 面向 MC 服主 / 玩家，避免开发术语
+ * - 错误提示直白说明问题与处理方式
+ * - 空状态提供下一步操作引导
+ * - 中英语气与粒度对齐
  */
 
 export const messages = {
@@ -61,9 +61,6 @@ export const messages = {
                 if (code === 'SVG_TOO_COMPLEX') return 'SVG 太复杂（形状太多或节点太密），超过了处理上限';
                 return `导入失败（${code}）`;
             },
-            skippedExternalImages: '外链图片已跳过（只支持内嵌图片）',
-            animationFlattened: '动画 SVG 已按初始样子导入',
-            tooComplex: 'SVG 太复杂，部分内容可能没导进来',
         },
         // .canvas 工程导入对话框
         project: {
@@ -109,7 +106,6 @@ export const messages = {
             lockedReaderHint: '画板已锁定（仅作者可解锁）· 只读模式',
             refresh: '刷新画板',
             refreshTip: '补回缺失的支撑方块、重新挂回画框、强制重画一次',
-            refreshed: '已刷新',
             refreshedDetail: (frames: number, blocks: number) => {
                 if (frames === 0 && blocks === 0) return '已刷新（这块画板没有需要修的地方）';
                 if (blocks === 0) return `已重新挂回 ${frames} 个画框`;
@@ -211,13 +207,13 @@ export const messages = {
             empty: '还没有选中元素。点击画布或图层面板里的元素来开始编辑。',
             multiSelected: (n: number) => `已选中 ${n} 个元素`,
             multiHint: '多选时只能批量删除；想编辑详细字段请单选。按 Esc 取消选中',
-            deleteMulti: '批量删除',
             deleteMultiTip: (n: number) => `删除选中的 ${n} 个元素`,
             id: 'ID',
             type: '类型',
             transformHeader: '位置与变换',
             rectHeader: '矩形',
             textHeader: '文本',
+            textContent: '文本内容',
             effectsHeader: '效果',
             circleHeader: '椭圆',
             shapeHeader: '多边形 / 星形',
@@ -229,7 +225,13 @@ export const messages = {
             stroke: '描边',
             strokeWidth: '描边粗细',
             strokeColor: '描边颜色',
-            fitContent: '自适应',
+            shadow: '阴影',
+            shadowDx: '横向偏移',
+            shadowDy: '纵向偏移',
+            shadowColor: '阴影颜色',
+            glow: '发光',
+            glowRadius: '发光半径',
+            glowColor: '发光颜色',
             fitHeight: '按内容调高',
             fitHeightTip: '按当前文字内容自动撑高（高度 = 行数 × 字号 × 行高）',
             fitWidth: '按内容调宽',
@@ -256,7 +258,6 @@ export const messages = {
             fontGroupUser: '用户字体',
             fontSizeLabel: '字号',
             fontSizeTip: '文字大小（像素）；像素体字体建议用 12 的倍数',
-            positionLabel: '位置',
             positionTip: '元素左上角相对画布的坐标（像素）',
             sizeLabel: '尺寸',
             sizeTip: '元素的宽 × 高（像素）',
@@ -284,7 +285,6 @@ export const messages = {
             defaultHeader: '默认色板',
             copyTip: '点击复制颜色 hex 到剪贴板',
             copied: '已复制',
-            alphaLabel: 'α',
         },
         clipboard: {
             copySuccess: (n: number) => `已复制 ${n} 个元素`,
@@ -378,10 +378,10 @@ export const messages = {
             dragHint: '拖到画布或点击直接添加',
             lockedDenied: '画板已锁定，没法添加图标',
             layerLocked: '当前图层已锁定',
+            closeAria: '关闭图标库',
         },
         workshop: {
             saveTitle: '保存为模板',
-            saveTip: '把当前画板发布到创意工坊',
             save: '发布',
             saving: '发布中…',
             cancel: '取消',
@@ -422,7 +422,6 @@ export const messages = {
             replace: '替换图片',
             replaceTip: '点击选新文件，或者直接拖拽 / 按 Ctrl+V 粘贴到画布',
             maskHeader: '形状蒙版',
-            maskPreset: '蒙版形状',
             maskPresetTip: '当前支持 4 种预设几何形状；自由画 / 套索蒙版会在后续版本加入',
             maskInverted: '反相（显示蒙版外）',
             maskInvertedTip: '勾选后显示形状外的像素（蒙版反相）',
@@ -443,7 +442,6 @@ export const messages = {
             maskLassoSimplified: '套索画得太复杂，边缘已自动简化（蒙版最多 64 个转折点）',
             uploading: '上传中…',
             uploadTip: '上传图片（点击 / 拖到画布 / Ctrl+V 粘贴 / 粘贴 URL）',
-            uploadUrlPasting: '已识别为图片 URL，正在下载…',
             uploadUrlFailed: '从 URL 下载图片失败',
             uploadFailed: (status: number, msg: string) =>
                 status > 0 ? `上传失败（${status}）${msg ? '：' + msg : ''}` : `上传失败${msg ? '：' + msg : ''}`,
@@ -462,10 +460,7 @@ export const messages = {
             renameTitle: '双击重命名',
             toggleVisible: (on: boolean) => (on ? '隐藏图层' : '显示图层'),
             toggleLock: (on: boolean) => (on ? '解锁图层' : '锁定图层'),
-            lockedNotice: '图层已锁定，先解锁才能编辑里面的元素',
             renameSave: '保存（Enter）',
-            renameCancel: '取消（Esc）',
-            defaultName: '图层',
             opacityLabel: '不透明度',
             opacityHint: 'MC 调色板下，半透明 = 与背景叠加后颜色变浅，不是真透明',
             blendModeLabel: '混合方式',
@@ -503,7 +498,6 @@ export const messages = {
             distributeH: '水平等间距分布（需 ≥ 3 个）',
             distributeV: '垂直等间距分布（需 ≥ 3 个）',
             distributeDisabled: '至少要选 3 个元素才能等间距分布',
-            lockedSkipped: (n: number) => `跳过了 ${n} 个锁定元素`,
         },
         elements: {
             header: '图层内元素',
@@ -536,6 +530,14 @@ export const messages = {
             // 状态栏当前工具短标签（区别于 tools.* 的长 tooltip 描述）。
             toolSelect: '选择',
             toolMove: '移动',
+            toolHand: '抓手',
+            toolLine: '直线',
+            toolArrow: '箭头',
+            toolCircle: '椭圆',
+            toolStar: '星形',
+            toolBrush: '笔刷',
+            toolPaintBucket: '油漆桶',
+            reconnectingIn: (sec: number, attempt: number) => `连接断开，${sec}s 后重试（第 ${attempt} 次）`,
         },
         // lock readonly 多入口 guard 提示。
         // 通过 useLockGuard.guardMutation 在 mutation 函数入口拦截时显示。
@@ -544,7 +546,6 @@ export const messages = {
             blockedWithAction: (action: string) => `画板已锁定 — ${action}不可用（请让作者先解锁）`,
         },
         // 变量管理面板 / 对话框 / 错误文案。
-        // H 任务会另加 picker / livePreview / hints 子段，最终合并为完整 variables section。
         variables: {
             // 面板
             panelTitle: '变量管理',
@@ -574,15 +575,12 @@ export const messages = {
             // 值显示
             currentLabel: '当前',
             defaultLabel: '默认',
-            sourceLabel: '来源',
-            boundToLabel: '绑定到',
             // 操作
             actionInc: '+1（长按累加）',
             actionDec: '-1（长按累加）',
             actionEdit: '改值',
             actionDelete: '删除',
             actionBind: '让插件接管',
-            actionUnbind: '取消绑定',
             // 新建对话框
             dialogNewTitle: '新建变量',
             dialogNewNameLabel: '名称',
@@ -610,7 +608,6 @@ export const messages = {
             // VariablePanel 行内别名 chip + 编辑入口
             aliasChipPrefix: '别名:',
             actionEditAlias: '改别名',
-            aliasEditTitle: '编辑别名',
             aliasEmpty: '（无别名）',
             // 改值对话框
             dialogValueTitle: '修改当前值',
@@ -659,14 +656,12 @@ export const messages = {
                 deletedWarning: '变量 {names} 已被删除，引用此变量的文本将显示 "???"',
                 referencedHint: '此文本引用变量 {names}',
             },
-            // chip 编辑器：hover tooltip / aria
+            // chip 编辑器：hover tooltip
             chipEditor: {
                 tooltipRaw: '原始',
                 tooltipCurrent: '当前值',
                 tooltipSource: '来源',
                 tooltipDeleted: '变量已删除，最终渲染为 "???"',
-                tooltipHint: '双击改绑定',
-                ariaLabel: '文本编辑器（变量以芯片显示，双击芯片可改绑定）',
             },
             // chip 错误态：点击红 chip 触发补创对话框
             chipError: {
@@ -691,7 +686,6 @@ export const messages = {
             sortDown: '下移',
             runs: '车次',
             newRun: '新建车次',
-            runNumberPrompt: '车次号（例如 A01）：',
             // 新车次内嵌对话框（替换原生 prompt）
             newRunDialogTitle: '新建车次',
             runNumberPlaceholder: '例如 A01 / B02',
@@ -753,12 +747,10 @@ export const messages = {
             tipStep4: '车次详情里点「自动生成时刻表」一键生成',
             // 自动生成参数非法（空 / NaN）时的提示
             autoInvalidInput: '请填写有效的首站发车时间、站间时长和停靠时长（不能留空）',
+            autoStartAfterEnd: '区间起点站不能排在终点站之后',
         },
         // 列车 / 公交时刻表管理（兜底功能，零外部依赖）
         schedule: {
-            // TopBar / 入口
-            topbarButton: '列车时刻表',
-            topbarTooltip: '管理 wall 的列车 / 公交时刻表，自动暴露 schedule.* 变量',
             // Modal 主体
             modalTitle: '列车时刻表管理',
             stationName: '站名',
@@ -811,9 +803,7 @@ export const messages = {
             close: '关闭',
             // 错误
             errorBadTimeFormat: '出发时间格式无效（应为 HH:mm 或 HH:mm:ss 24 小时制）',
-            errorEmptyDestination: '终点不能为空',
         },
-        // 时间轴最简面板（关键帧动画）。
         // 积木脚本编辑器（按条件做事）。
         script: {
             editorTitle: '积木脚本',
@@ -823,7 +813,6 @@ export const messages = {
             resetView: '回到原始视图',
             zoom: '缩放',
             paletteTitle: '积木库',
-            palettePlaceholder: '积木库',
             // palette 分组标题 + 无选中规则提示
             paletteNeedRule: '先在上面选一条规则，再把积木拖到画布上',
             paletteGroup: {
@@ -835,10 +824,7 @@ export const messages = {
                 // 友好元素积木分组（移到 / 改大小 / 显示 / 隐藏 等）。
                 friendly: '元素动作',
             },
-            // 拖块入 if 槽的空槽占位（任务 C）
             emptySlot: '把积木拖到这里',
-            // tweenBlock body 只允许属性动作（拖动时防呆提示，暂未渲染在 UI 上，留作工具提示用）。
-            tweenBodyOnlyHint: '这里只能放移动、缩放、转动、透明度或变色',
             // 未知积木类型兜底（数据里出现没有定义的 kind 时）
             unknownBlock: '未知积木',
             // ---- 编辑会话 ----
@@ -859,7 +845,6 @@ export const messages = {
             deleteConfirmYes: '删除',
             deleteConfirmNo: '取消',
             test: '试跑',
-            testPlaceholder: '点这里试跑这条规则',
             // ---- 试跑高亮 + 校验 ----
             testing: '试跑中…',
             testBlockedByErrors: '规则有问题，先修好下面的错误再试跑',
@@ -875,6 +860,10 @@ export const messages = {
             autoSaveFailedOther: '「{name}」的改动没能保存：{err}。改动先给你留着了，回到这条规则可以接着改、会自动重试。',
             autoSaveRestored: '已经把「{name}」上次没保存成功的改动放回来了。',
             createRuleFailed: '新建规则失败：没收到服务器回执',
+            createRuleError: (err: string) => `新建规则失败：${err}`,
+            deleteRuleError: (err: string) => `删除规则失败：${err}`,
+            toggleRuleError: (err: string) => `切换开关失败：${err}`,
+            autoSaveError: (err: string) => `自动保存失败：${err}`,
             // 试跑高亮图例（每种执行结果对应一种边框色）
             legendOk: '执行了',
             legendSkipped: '跳过了',
@@ -893,13 +882,14 @@ export const messages = {
                 title: '本脚本用到的变量',
                 noRule: '先选一条规则，这里会列出它用到的变量',
                 noVars: '这条规则还没用到变量',
+                setFailed: (err: string) => `改变量失败：${err}`,
             },
             // 拖积木到「删除区」删单个积木。
             deleteZone: {
                 hint: '拖到这里删除',
                 release: '松手删除这块',
             },
-            // 积木标题文案（每种触发器 / 动作）。多为"动宾"短句，读起来像在描述这块做什么。
+            // 积木标题文案（每种触发器 / 动作）。
             blocks: {
                 variableChange: '当 变量变化',
                 timer: '每隔一段时间',
@@ -907,7 +897,6 @@ export const messages = {
                 playerKill: '当 玩家击杀',
                 playerNear: '当 玩家靠近',
                 wallReady: '当 画板就绪',
-                // 3 个新触发器。
                 rightClickWall: '当 右键画板',
                 playerLeaveRange: '当 玩家离开范围',
                 playerQuit: '当 玩家退出游戏',
@@ -920,28 +909,21 @@ export const messages = {
                 runCommand: '执行命令',
                 log: '记录日志',
                 if: '如果',
-                // 4 个低风险新动作 + 相对移动。
                 nudgeElement: '移动一点',
                 sendMessage: '发消息',
                 setRandomVariable: '设随机数',
                 scaleVariable: '变量乘除',
                 playTimelineAwait: '播放并等待',
-                // 有界循环。
                 repeat: '重复',
-                // 重复直到条件。
                 repeatUntil: '重复直到',
-                // 3 个剩余动作。
                 stopScript: '停止脚本',
                 playParticle: '播放粒子',
                 waitUntil: '等待条件',
-                // 元素 / 变量积木。
                 copyVariable: '变量复制',
                 appendVariable: '文本拼接',
                 cloneElement: '克隆元素',
                 deleteElement: '删除元素',
-                // 补间包裹积木。
                 tweenBlock: '在 X 秒内',
-                // 4 个新积木。
                 randomBranch: '随机分支',
                 setElementLayer: '元素置顶/置底',
                 roundVariable: '变量取整',
@@ -1142,59 +1124,113 @@ export const messages = {
                 noWall: '未选择墙',
                 ghostHint: '拖虚影设目标：移到拖中心、改大小拖角、旋转转手柄',
             },
+            validation: {
+                ruleNull: '规则不能为空',
+                nameBlank: '规则名称不能为空',
+                nameTooLong: (max: number) => `规则名称超长（最多 ${max} 字符）`,
+                missingTrigger: '缺少触发器',
+                actionsEmpty: '动作列表不能为空',
+                layoutTooLong: (max: number) => `积木布局数据超长（最多 ${max} 字符）`,
+                tooManyBlocks: (total: number, max: number) => `积木总数 ${total} 超过上限 ${max}`,
+                varChangeBlank: '变量变化触发器的变量名不能为空',
+                timerRange: (min: number, max: number) => `定时器间隔需在 ${min}..${max} 秒之间`,
+                nearRange: (min: number, max: number) => `玩家靠近半径需在 ${min}..${max} 方块之间`,
+                leaveRange: (min: number, max: number) => `玩家离开半径需在 ${min}..${max} 方块之间`,
+                setVarNameBlank: '设置变量的变量名不能为空',
+                setVarValueNull: '设置变量的值不能为 null（空串合法）',
+                setVarValueTooLong: (max: number) => `设置变量的值超长（最多 ${max} 字符）`,
+                incVarNameBlank: '累加变量的变量名不能为空',
+                incDeltaFinite: '累加步长必须是有限数值',
+                setPropMissingEl: '设置元素属性缺少元素 ID',
+                setPropInvalid: (p: unknown) => `元素属性不在允许范围：${p}`,
+                setPropValueBlank: '设置元素属性的值不能为空',
+                timelineMissingId: '时间轴控制缺少时间轴 ID',
+                timelineInvalidOp: (op: unknown) => `时间轴操作不在允许范围：${op}`,
+                seekMissingMs: 'seek 操作必须提供 seekMs',
+                seekNegative: 'seekMs 不能为负数',
+                soundIdInvalid: (max: number) => `声音 ID 不能为空且最多 ${max} 字符`,
+                soundVolumeRange: (min: string, max: string) => `音量需在 ${min}..${max} 之间`,
+                soundPitchRange: (min: string, max: string) => `音调需在 ${min}..${max} 之间`,
+                soundInvalidScope: (scope: unknown) => `声音范围不在允许范围：${scope}`,
+                waitRange: (min: number, max: number) => `等待时长需在 ${min}..${max} 毫秒之间`,
+                cmdMissingTemplate: '执行命令缺少模板 ID',
+                cmdParamTooLong: (key: string, max: number) => `命令参数 '${key}' 超长（最多 ${max} 字符）`,
+                logNull: '日志内容不能为 null',
+                logTooLong: (max: number) => `日志内容超长（最多 ${max} 字符）`,
+                ifDepthExceeded: (max: number, depth: number) => `if 嵌套超过 ${max} 层（depth=${depth}）`,
+                ifConditionBlank: 'if 条件不能为空',
+                ifConditionTooLong: (max: number) => `if 条件超长（最多 ${max} 字符）`,
+                patchEmpty: '批量设属性的 patch 不能为空',
+                patchTooManyKeys: (max: number) => `patch 属性数超过 ${max}`,
+                kindTooLong: 'kind 超长',
+                patchPropBlank: (k: string) => `属性 ${k} 的值不能为空`,
+                nudgeMissingEl: '相对移动缺少元素 ID',
+                nudgeFinite: '相对移动的 dx/dy 必须是有限数值',
+                msgNull: '发消息内容不能为 null',
+                msgTooLong: (max: number) => `发消息内容超长（最多 ${max}）`,
+                msgInvalidChannel: (ch: unknown) => `消息渠道不在允许范围：${ch}`,
+                msgInvalidTarget: (target: unknown) => `发送对象不在允许范围：${target}`,
+                randVarNameBlank: '随机数变量名不能为空',
+                randBoundsFinite: '随机区间必须是有限数值',
+                randMinGtMax: '随机区间 min 不能大于 max',
+                scaleVarNameBlank: '乘除变量名不能为空',
+                scaleInvalidOp: (op: unknown) => `运算不在允许范围：${op}`,
+                scaleFactorFinite: '乘除系数必须是有限数值',
+                scaleDivZero: '除数不能为 0',
+                awaitTimelineMissingId: '播时间轴缺少时间轴 ID',
+                repeatCountRange: (min: number, max: number) => `重复次数需在 ${min}..${max} 之间`,
+                repeatBodyEmpty: '重复循环体不能为空',
+                repeatUntilConditionInvalid: (max: number) => `重复条件不能为空且最多 ${max} 字符`,
+                repeatUntilMaxRange: (min: number, max: number) => `重复次数上限需在 ${min}..${max} 之间`,
+                particleInvalid: (p: unknown) => `粒子种类不在允许范围: ${p}`,
+                particleCountRange: (min: number, max: number) => `粒子数量需在 ${min}..${max} 之间`,
+                particleOffsetFinite: '粒子偏移必须是有限数值',
+                waitUntilConditionInvalid: (max: number) => `等待条件不能为空且最多 ${max} 字符`,
+                waitUntilTimeoutRange: (min: number, max: number) => `超时时长需在 ${min}..${max} 毫秒之间`,
+                copyVarBlank: '变量复制的目标 / 来源不能为空',
+                appendVarBlank: '文本拼接的目标变量不能为空',
+                appendTextTooLong: (max: number) => `拼接文本超长（最多 ${max} 字符）`,
+                cloneMissingEl: '克隆元素的目标不能为空',
+                cloneOffsetFinite: '克隆偏移必须是有限数值',
+                deleteMissingEl: '删除元素的目标不能为空',
+                probRange: (min: number, max: number) => `随机概率需在 ${min}..${max} 之间`,
+                branchDepthExceeded: (max: number, depth: number) => `分支嵌套超过 ${max} 层（depth=${depth}）`,
+                layerMissingEl: '元素置层缺少元素 ID',
+                layerInvalidMode: (mode: unknown) => `置层方向不在允许范围：${mode}`,
+                roundVarBlank: '取整变量名不能为空',
+                roundInvalidMode: (mode: unknown) => `取整方式不在允许范围：${mode}`,
+                titleBothBlank: '标题和副标题不能同时为空',
+                titleTooLong: (max: number) => `标题超长（最多 ${max} 字符）`,
+                subtitleTooLong: (max: number) => `副标题超长（最多 ${max} 字符）`,
+                fadeInRange: (max: number) => `淡入时长需在 0..${max} 毫秒之间`,
+                stayRange: (max: number) => `停留时长需在 0..${max} 毫秒之间`,
+                fadeOutRange: (max: number) => `淡出时长需在 0..${max} 毫秒之间`,
+                titleInvalidTarget: (target: unknown) => `弹窗发送对象不在允许范围：${target}`,
+                tweenDurationRange: (min: number, max: number) => `补间时长需在 ${min}..${max} 毫秒之间`,
+                tweenInvalidEasing: '补间缓动类型不合法',
+                tweenInvalidBezier: '自定义缓动的控制点不合法（x1,x2 需在 0..1 之间）',
+                tweenUnexpectedBezier: 'bezier 参数仅允许 cubicBezier 缓动',
+                tweenBodyEmpty: '补间里至少要放一个动作',
+                tweenBodyInvalidAction: '补间里只能放移动/缩放/转动/透明度/变色',
+                tweenBodyInvalidKind: (kind: string) => `补间里只能放移动/缩放/转动/透明度/变色（不支持 kind=${kind}）`,
+                fieldMustBeInteger: (label: string) => `${label}必须是整数（不能带小数）`,
+            },
         },
         timeline: {
-            // Modal / 入口
-            manager: '时间轴（关键帧动画）',
-            modalTitle: '时间轴管理',
-            close: '关闭',
-            // 区块 1：时间轴列表
-            listHeader: '时间轴',
-            emptyList: '还没有时间轴。下面新建一条，就能给画板上的元素做动画了。',
-            durationLabel: '时长',
-            fpsLabel: '每秒帧数',
-            loopLabel: '播放方式',
-            selectAria: '选中这条时间轴',
-            deleteAria: '删除这条时间轴',
-            deleteConfirm: (name: string) => `删除时间轴「${name}」？它的所有关键帧都会一起没掉。`,
-            deleteConfirmYes: '删除',
-            deleteConfirmNo: '取消',
-            // 区块 2：新建表单
-            newHeader: '新建时间轴',
             newName: '名称',
-            newNamePlaceholder: '留空自动起名',
             newDuration: '时长（毫秒）',
             newFps: '每秒帧数',
             newLoop: '播放方式',
-            newSubmit: '新建',
-            // 播放方式选项（大白话）
             loopOnce: '播放一次',
             loopLoop: '循环播放',
             loopPingPong: '来回播',
-            // 触发方式：这段动画什么时候在游戏里播
             triggerLabel: '什么时候播',
             triggerManual: '手动 / 循环（墙加载就播）',
             triggerVariableChange: '变量变了就播',
             triggerSchedule: '到点就播（时刻表）',
             triggerPickHint: '点这里选要监听的变量',
             triggerVarHint: '绑定的变量一变化，这段动画就在游戏里播一遍。',
-            // 区块 3：关键帧列表
-            keyframesHeader: '关键帧',
-            emptyKeyframes: '这条时间轴还没有关键帧。在画布上选一个元素，用下面的表单加第一个关键帧。',
-            elementMissing: '（元素已删除）',
-            kfPropertyHeader: '属性',
-            kfTimeHeader: '时刻（毫秒）',
-            kfValueHeader: '数值',
             kfDeleteAria: '删除这个关键帧',
-            // 区块 4：给选中元素加关键帧
-            addHeader: '给选中元素加关键帧',
-            addNoSelection: '先在画布上选中一个元素',
-            addMultiSelection: '一次只能给一个元素加关键帧（请单选）',
-            addProperty: '属性',
-            addTime: '时刻（毫秒）',
-            addValue: '数值',
-            addSubmit: '加关键帧',
-            // 属性大白话名
             propX: '横坐标 X',
             propY: '纵坐标 Y',
             propW: '宽度',
@@ -1204,23 +1240,12 @@ export const messages = {
             propColor: '文字颜色',
             propText: '文字内容',
             propFill: '填充',
-            // 区块 5：播放控制
-            playbackHeader: '播放控制',
             play: '播放',
             pause: '暂停',
             rewind: '回到开头',
-            playbackHint: '播放控制会驱动游戏里真实画板的动画；编辑器内预览随后做。',
-            // 校验 / 错误（reason key 与 timelineLogic.validateCreateForm 对齐）
-            errDurationPositive: '时长必须是大于 0 的整数（毫秒）',
-            errDurationTooLong: '时长太长了（上限 600000 毫秒 = 10 分钟）',
             errDurationRange: '时长要在 100 到 3600000 毫秒之间',
             errDurationBelowKeyframe: '时长不能短于最后一个关键帧（{t}）。先把它往前拖或删掉，再缩短时长。',
-            errFpsPositive: '每秒帧数必须是大于 0 的整数',
-            errFpsTooHigh: '每秒帧数太高了（上限 240）',
-            errLoopMode: '播放方式无效',
-            errKeyframeTime: (max: number) => `时刻要落在 0 到 ${max} 毫秒之间`,
             opFailed: '这次改动没能发到服务器，画面已恢复原样；检查连接后再试一次',
-            // 区块 4：缓动方式（大白话，不暴露贝塞尔术语）
             addEasing: '缓动方式',
             easingLinear: '匀速',
             easingEaseIn: '由慢到快',
@@ -1239,7 +1264,6 @@ export const messages = {
             dockSettings: '时间轴设置',
             dockDelete: '删除时间轴',
             dockDeleteConfirm: '确认删除？',
-            fillHint: '关键帧会记下元素当前的填充；想换填充先在右侧面板改好元素，再加关键帧。',
         },
         // 错误码 → 用户友好提示。
         errors: {
@@ -1259,6 +1283,8 @@ export const messages = {
             SESSION_CLOSED: '编辑会话已关闭，请刷新页面重新打开',
             CONNECTION_CLOSED: '与服务器的连接断开了，正在尝试重连…',
             PROTOCOL_VERSION_UNSUPPORTED: '编辑器版本与服务器不匹配，请刷新页面更新',
+            PROTOCOL_MISMATCH_DETAIL: (acceptedV: number, clientV: number) =>
+                `协议版本不兼容 (server accepted_v=${acceptedV}, client=${clientV})；请升级`,
             TIMEOUT: '服务器响应超时，请稍后再试',
             // 锁定 / 协作
             WALL_LOCKED: '画板已锁定，请先解锁再编辑',
@@ -1300,13 +1326,8 @@ export const messages = {
         // 工具栏 menu / 顶栏按钮的悬停说明（部分已在 topbar / tools 里，这里集中放新增的）
         tooltips: {
             saveTemplate: '把当前画板发布到模板库，方便复用',
-            openLayerPanel: '打开图层面板',
-            openElementList: '打开元素列表',
             colorPicker: '点击挑选颜色',
-            sliderHint: '可以拖动滑块，或直接在输入框输数字',
-            keyboardShortcutHint: (key: string) => `快捷键：${key}`,
             disabledWhenLocked: '画板锁定时该操作不可用',
-            disabledWhenLayerLocked: '图层锁定时该操作不可用',
         },
         help: {
             header: '快捷键速查',
@@ -1392,9 +1413,6 @@ export const messages = {
                 if (code === 'SVG_TOO_COMPLEX') return 'SVG is too complex (too many shapes or vertices)';
                 return `Import failed (${code})`;
             },
-            skippedExternalImages: 'External images were skipped (only embedded images are supported)',
-            animationFlattened: 'Animated SVG was imported in its starting state',
-            tooComplex: 'SVG is very complex; some content may not have been imported',
         },
         // .canvas project import dialog
         project: {
@@ -1440,7 +1458,6 @@ export const messages = {
             lockedReaderHint: 'Wall is locked (owner-only unlock) · read-only',
             refresh: 'Refresh wall',
             refreshTip: 'Replace missing support blocks, re-spawn item frames, and force a full redraw',
-            refreshed: 'Refreshed',
             refreshedDetail: (frames: number, blocks: number) => {
                 if (frames === 0 && blocks === 0) return 'Refreshed (nothing needed fixing)';
                 if (blocks === 0) return `Re-spawned ${frames} frame${frames === 1 ? '' : 's'}`;
@@ -1541,13 +1558,13 @@ export const messages = {
             empty: 'Nothing selected yet. Click an element on the canvas or in the Layers panel to start editing.',
             multiSelected: (n: number) => `${n} elements selected`,
             multiHint: 'Multi-select only supports batch delete; pick a single element to edit its fields. Esc to clear',
-            deleteMulti: 'Delete all',
             deleteMultiTip: (n: number) => `Delete the ${n} selected elements`,
             id: 'ID',
             type: 'Type',
             transformHeader: 'Position & Transform',
             rectHeader: 'Rectangle',
             textHeader: 'Text',
+            textContent: 'Content',
             effectsHeader: 'Effects',
             circleHeader: 'Ellipse',
             shapeHeader: 'Polygon / Star',
@@ -1559,7 +1576,13 @@ export const messages = {
             stroke: 'Stroke',
             strokeWidth: 'Stroke thickness',
             strokeColor: 'Stroke color',
-            fitContent: 'Fit to content',
+            shadow: 'Shadow',
+            shadowDx: 'Offset X',
+            shadowDy: 'Offset Y',
+            shadowColor: 'Shadow color',
+            glow: 'Glow',
+            glowRadius: 'Radius',
+            glowColor: 'Glow color',
             fitHeight: 'Fit height',
             fitHeightTip: 'Auto-grow height to fit the text (lines × font size × line height)',
             fitWidth: 'Fit width',
@@ -1586,7 +1609,6 @@ export const messages = {
             fontGroupUser: 'User fonts',
             fontSizeLabel: 'Font size',
             fontSizeTip: 'Text size in pixels. For pixel fonts, multiples of 12 look best',
-            positionLabel: 'Position',
             positionTip: 'Top-left corner of the element relative to the canvas (in pixels)',
             sizeLabel: 'Size',
             sizeTip: 'Element width × height in pixels',
@@ -1614,7 +1636,6 @@ export const messages = {
             defaultHeader: 'Default palette',
             copyTip: 'Click to copy the hex value',
             copied: 'Copied',
-            alphaLabel: 'α',
         },
         clipboard: {
             copySuccess: (n: number) => `Copied ${n} element${n === 1 ? '' : 's'}`,
@@ -1708,10 +1729,10 @@ export const messages = {
             dragHint: 'Drag to canvas or click to add',
             lockedDenied: 'Wall is locked — can\'t add icon',
             layerLocked: 'Active layer is locked',
+            closeAria: 'Close icon library',
         },
         workshop: {
             saveTitle: 'Save as template',
-            saveTip: 'Publish the current wall to the workshop',
             save: 'Publish',
             saving: 'Publishing…',
             cancel: 'Cancel',
@@ -1752,7 +1773,6 @@ export const messages = {
             replace: 'Replace image',
             replaceTip: 'Click to pick a new file, or drag / Ctrl+V paste onto the canvas',
             maskHeader: 'Shape mask',
-            maskPreset: 'Mask shape',
             maskPresetTip: '4 preset shapes today; free-form / lasso masks coming in a later release',
             maskInverted: 'Invert (show outside the mask)',
             maskInvertedTip: 'When checked, pixels outside the shape are shown instead (mask is inverted)',
@@ -1773,7 +1793,6 @@ export const messages = {
             maskLassoSimplified: 'That lasso was very detailed — its edge was simplified (masks allow at most 64 corner points)',
             uploading: 'Uploading…',
             uploadTip: 'Upload an image (click / drag onto canvas / Ctrl+V paste / paste URL)',
-            uploadUrlPasting: 'Detected an image URL — downloading…',
             uploadUrlFailed: 'Failed to fetch image from URL',
             uploadFailed: (status: number, msg: string) =>
                 status > 0 ? `Upload failed (${status})${msg ? ': ' + msg : ''}` : `Upload failed${msg ? ': ' + msg : ''}`,
@@ -1792,10 +1811,7 @@ export const messages = {
             renameTitle: 'Double-click to rename',
             toggleVisible: (on: boolean) => (on ? 'Hide layer' : 'Show layer'),
             toggleLock: (on: boolean) => (on ? 'Unlock layer' : 'Lock layer'),
-            lockedNotice: 'Layer is locked — unlock it to edit its elements',
             renameSave: 'Save (Enter)',
-            renameCancel: 'Cancel (Esc)',
-            defaultName: 'Layer',
             opacityLabel: 'Opacity',
             opacityHint: 'On the MC palette: semi-transparent = blended into the layers below, looks lighter (not true transparency)',
             blendModeLabel: 'Blend mode',
@@ -1833,7 +1849,6 @@ export const messages = {
             distributeH: 'Distribute horizontally (needs ≥ 3)',
             distributeV: 'Distribute vertically (needs ≥ 3)',
             distributeDisabled: 'Select at least 3 elements to distribute evenly',
-            lockedSkipped: (n: number) => `Skipped ${n} locked element${n === 1 ? '' : 's'}`,
         },
         elements: {
             header: 'Elements in layer',
@@ -1866,6 +1881,14 @@ export const messages = {
             // short current-tool labels for the status bar (vs the long tools.* tooltip text).
             toolSelect: 'Select',
             toolMove: 'Move',
+            toolHand: 'Hand',
+            toolLine: 'Line',
+            toolArrow: 'Arrow',
+            toolCircle: 'Circle',
+            toolStar: 'Star',
+            toolBrush: 'Brush',
+            toolPaintBucket: 'Paint bucket',
+            reconnectingIn: (sec: number, attempt: number) => `Disconnected — retrying in ${sec}s (attempt ${attempt})`,
         },
         // lock readonly multi-entry guard messages.
         // Shown when useLockGuard.guardMutation rejects a mutation while locked.
@@ -1874,7 +1897,6 @@ export const messages = {
             blockedWithAction: (action: string) => `Wall is locked — ${action} unavailable (ask the owner to unlock first)`,
         },
         // variable management panel / dialogs / error strings.
-        // H task will add picker / livePreview / hints subsections; merge into one variables section.
         variables: {
             // panel
             panelTitle: 'Variable manager',
@@ -1904,15 +1926,12 @@ export const messages = {
             // value display
             currentLabel: 'Current',
             defaultLabel: 'Default',
-            sourceLabel: 'Source',
-            boundToLabel: 'Bound to',
             // actions
             actionInc: '+1 (hold to keep adding)',
             actionDec: '-1 (hold to keep subtracting)',
             actionEdit: 'Edit value',
             actionDelete: 'Delete',
             actionBind: 'Let a plugin manage this',
-            actionUnbind: 'Unbind',
             // new variable dialog
             dialogNewTitle: 'New variable',
             dialogNewNameLabel: 'Name',
@@ -1940,7 +1959,6 @@ export const messages = {
             // VariablePanel inline alias chip + edit entry
             aliasChipPrefix: 'Alias:',
             actionEditAlias: 'Edit alias',
-            aliasEditTitle: 'Edit alias',
             aliasEmpty: '(no alias)',
             // value editor dialog
             dialogValueTitle: 'Edit current value',
@@ -1989,14 +2007,12 @@ export const messages = {
                 deletedWarning: 'Variable {names} has been deleted. Text referencing it will show "???"',
                 referencedHint: 'This text references variable {names}',
             },
-            // chip editor: hover tooltip / aria
+            // chip editor: hover tooltip
             chipEditor: {
                 tooltipRaw: 'Raw',
                 tooltipCurrent: 'Current',
                 tooltipSource: 'Source',
                 tooltipDeleted: 'Variable has been deleted — will render as "???"',
-                tooltipHint: 'Double-click to rebind',
-                ariaLabel: 'Text editor (variables shown as chips; double-click a chip to rebind)',
             },
             // chip error state: clicking a red chip triggers create-confirm
             chipError: {
@@ -2021,7 +2037,6 @@ export const messages = {
             sortDown: 'Move down',
             runs: 'Runs',
             newRun: 'New run',
-            runNumberPrompt: 'Run number (e.g. A01):',
             // new run inline dialog (replaces native prompt)
             newRunDialogTitle: 'New run',
             runNumberPlaceholder: 'e.g. A01 / B02',
@@ -2080,12 +2095,10 @@ export const messages = {
             tipStep4: 'Inside run details, click "Auto-generate timetable"',
             // prompt when auto-generate inputs are empty / NaN
             autoInvalidInput: 'Please enter a valid first departure time, travel seconds and dwell seconds (none may be blank)',
+            autoStartAfterEnd: 'Start station must come before end station',
         },
         // train / bus schedule manager (built-in fallback, zero external dependency)
         schedule: {
-            // TopBar
-            topbarButton: 'Train schedule',
-            topbarTooltip: 'Manage the wall\'s train / bus schedule; auto-exposes schedule.* variables',
             // Modal body
             modalTitle: 'Schedule manager',
             stationName: 'Station name',
@@ -2138,9 +2151,7 @@ export const messages = {
             close: 'Close',
             // Errors
             errorBadTimeFormat: 'Invalid time format (use HH:mm or HH:mm:ss 24h)',
-            errorEmptyDestination: 'Destination cannot be empty',
         },
-        // minimal timeline panel (keyframe animation).
         // block script editor.
         script: {
             editorTitle: 'Block scripts',
@@ -2150,7 +2161,6 @@ export const messages = {
             resetView: 'Reset view',
             zoom: 'Zoom',
             paletteTitle: 'Blocks',
-            palettePlaceholder: 'Blocks',
             // palette group titles + no-rule-selected hint
             paletteNeedRule: 'Pick a rule above first, then drag blocks onto the canvas',
             paletteGroup: {
@@ -2163,8 +2173,6 @@ export const messages = {
                 friendly: 'Element actions',
             },
             emptySlot: 'Drag a block here',
-            // tweenBlock body only allows property actions.
-            tweenBodyOnlyHint: 'Only move, resize, rotate, opacity or color blocks allowed here',
             unknownBlock: 'Unknown block',
             // ---- edit session ----
             rulesTitle: 'Rules',
@@ -2182,7 +2190,6 @@ export const messages = {
             deleteConfirmYes: 'Delete',
             deleteConfirmNo: 'Cancel',
             test: 'Test run',
-            testPlaceholder: 'Run this rule as a test',
             // ---- test-run highlight + validation ----
             testing: 'Testing…',
             testBlockedByErrors: 'Fix the errors below before running a test',
@@ -2198,6 +2205,10 @@ export const messages = {
             autoSaveFailedOther: 'Could not save your changes to "{name}": {err}. They are kept for you — open that rule again to keep editing; it will retry automatically.',
             autoSaveRestored: 'Restored the unsaved changes to "{name}".',
             createRuleFailed: 'Failed to create rule: no server acknowledgement',
+            createRuleError: (err: string) => `Failed to create rule: ${err}`,
+            deleteRuleError: (err: string) => `Failed to delete rule: ${err}`,
+            toggleRuleError: (err: string) => `Failed to toggle rule: ${err}`,
+            autoSaveError: (err: string) => `Auto-save failed: ${err}`,
             // test-run highlight legend (each result maps to a border color)
             legendOk: 'Ran',
             legendSkipped: 'Skipped',
@@ -2215,6 +2226,7 @@ export const messages = {
                 title: 'Variables in this script',
                 noRule: 'Pick a rule to see the variables it uses',
                 noVars: 'This rule doesn\'t use any variables yet',
+                setFailed: (err: string) => `Failed to set variable: ${err}`,
             },
             // drag a block onto the "delete zone" to remove a single block.
             deleteZone: {
@@ -2228,7 +2240,6 @@ export const messages = {
                 playerKill: 'When player kills',
                 playerNear: 'When player is near',
                 wallReady: 'When wall is ready',
-                // three new triggers.
                 rightClickWall: 'When wall right-clicked',
                 playerLeaveRange: 'When player leaves range',
                 playerQuit: 'When player quits',
@@ -2241,28 +2252,21 @@ export const messages = {
                 runCommand: 'Run command',
                 log: 'Log',
                 if: 'If',
-                // four low-risk new actions + relative move.
                 nudgeElement: 'Move a bit',
                 sendMessage: 'Send message',
                 setRandomVariable: 'Set random number',
                 scaleVariable: 'Multiply / divide variable',
                 playTimelineAwait: 'Play and wait',
-                // bounded loop.
                 repeat: 'Repeat',
-                // repeat until condition.
                 repeatUntil: 'Repeat until',
-                // three remaining actions.
                 stopScript: 'Stop script',
                 playParticle: 'Play particle',
                 waitUntil: 'Wait until',
-                // element / variable blocks.
                 copyVariable: 'Copy variable',
                 appendVariable: 'Append text',
                 cloneElement: 'Clone element',
                 deleteElement: 'Delete element',
-                // tween wrapper block.
                 tweenBlock: 'Over X seconds',
-                // four new blocks.
                 randomBranch: 'Random branch',
                 setElementLayer: 'Move element to front / back',
                 roundVariable: 'Round variable',
@@ -2464,32 +2468,103 @@ export const messages = {
                 noWall: 'No wall selected',
                 ghostHint: 'Drag the ghost to set target: move = center, resize = corner, rotate = handle',
             },
+            validation: {
+                ruleNull: 'Rule cannot be empty',
+                nameBlank: 'Rule name cannot be empty',
+                nameTooLong: (max: number) => `Rule name is too long (max ${max} chars)`,
+                missingTrigger: 'Missing trigger',
+                actionsEmpty: 'Actions list cannot be empty',
+                layoutTooLong: (max: number) => `Block layout data is too long (max ${max} chars)`,
+                tooManyBlocks: (total: number, max: number) => `Total block count ${total} exceeds limit ${max}`,
+                varChangeBlank: 'Variable-change trigger requires a variable name',
+                timerRange: (min: number, max: number) => `Timer interval must be between ${min}..${max} seconds`,
+                nearRange: (min: number, max: number) => `Player-near range must be between ${min}..${max} blocks`,
+                leaveRange: (min: number, max: number) => `Player-leave range must be between ${min}..${max} blocks`,
+                setVarNameBlank: 'Set-variable action requires a variable name',
+                setVarValueNull: 'Set-variable value cannot be null (empty string is allowed)',
+                setVarValueTooLong: (max: number) => `Set-variable value is too long (max ${max} chars)`,
+                incVarNameBlank: 'Increment-variable action requires a variable name',
+                incDeltaFinite: 'Increment step must be a finite number',
+                setPropMissingEl: 'Set-element-property action requires an element ID',
+                setPropInvalid: (p: unknown) => `Element property is not allowed: ${p}`,
+                setPropValueBlank: 'Set-element-property value cannot be empty',
+                timelineMissingId: 'Timeline action requires a timeline ID',
+                timelineInvalidOp: (op: unknown) => `Timeline operation is not allowed: ${op}`,
+                seekMissingMs: 'Seek operation requires seekMs',
+                seekNegative: 'seekMs cannot be negative',
+                soundIdInvalid: (max: number) => `Sound ID cannot be empty and must be at most ${max} chars`,
+                soundVolumeRange: (min: string, max: string) => `Volume must be between ${min}..${max}`,
+                soundPitchRange: (min: string, max: string) => `Pitch must be between ${min}..${max}`,
+                soundInvalidScope: (scope: unknown) => `Sound scope is not allowed: ${scope}`,
+                waitRange: (min: number, max: number) => `Wait duration must be between ${min}..${max} ms`,
+                cmdMissingTemplate: 'Run-command action requires a template ID',
+                cmdParamTooLong: (key: string, max: number) => `Command parameter '${key}' is too long (max ${max} chars)`,
+                logNull: 'Log message cannot be null',
+                logTooLong: (max: number) => `Log message is too long (max ${max} chars)`,
+                ifDepthExceeded: (max: number, depth: number) => `If nesting exceeds ${max} levels (depth=${depth})`,
+                ifConditionBlank: 'If condition cannot be empty',
+                ifConditionTooLong: (max: number) => `If condition is too long (max ${max} chars)`,
+                patchEmpty: 'Property patch cannot be empty',
+                patchTooManyKeys: (max: number) => `Property patch exceeds ${max} keys`,
+                kindTooLong: 'Block kind is too long',
+                patchPropBlank: (k: string) => `Property ${k} value cannot be empty`,
+                nudgeMissingEl: 'Nudge-element action requires an element ID',
+                nudgeFinite: 'Nudge dx/dy must be finite numbers',
+                msgNull: 'Message text cannot be null',
+                msgTooLong: (max: number) => `Message text is too long (max ${max})`,
+                msgInvalidChannel: (ch: unknown) => `Message channel is not allowed: ${ch}`,
+                msgInvalidTarget: (target: unknown) => `Message target is not allowed: ${target}`,
+                randVarNameBlank: 'Random-number action requires a variable name',
+                randBoundsFinite: 'Random bounds must be finite numbers',
+                randMinGtMax: 'Random min cannot be greater than max',
+                scaleVarNameBlank: 'Scale-variable action requires a variable name',
+                scaleInvalidOp: (op: unknown) => `Scale operation is not allowed: ${op}`,
+                scaleFactorFinite: 'Scale factor must be a finite number',
+                scaleDivZero: 'Divisor cannot be 0',
+                awaitTimelineMissingId: 'Play-and-wait action requires a timeline ID',
+                repeatCountRange: (min: number, max: number) => `Repeat count must be between ${min}..${max}`,
+                repeatBodyEmpty: 'Repeat loop body cannot be empty',
+                repeatUntilConditionInvalid: (max: number) => `Repeat-until condition cannot be empty and must be at most ${max} chars`,
+                repeatUntilMaxRange: (min: number, max: number) => `Max repeat count must be between ${min}..${max}`,
+                particleInvalid: (p: unknown) => `Particle type is not allowed: ${p}`,
+                particleCountRange: (min: number, max: number) => `Particle count must be between ${min}..${max}`,
+                particleOffsetFinite: 'Particle offset must be finite numbers',
+                waitUntilConditionInvalid: (max: number) => `Wait-until condition cannot be empty and must be at most ${max} chars`,
+                waitUntilTimeoutRange: (min: number, max: number) => `Timeout must be between ${min}..${max} ms`,
+                copyVarBlank: 'Copy-variable target and source cannot be empty',
+                appendVarBlank: 'Append-text target variable cannot be empty',
+                appendTextTooLong: (max: number) => `Appended text is too long (max ${max} chars)`,
+                cloneMissingEl: 'Clone-element target cannot be empty',
+                cloneOffsetFinite: 'Clone offset must be finite numbers',
+                deleteMissingEl: 'Delete-element target cannot be empty',
+                probRange: (min: number, max: number) => `Probability must be between ${min}..${max}`,
+                branchDepthExceeded: (max: number, depth: number) => `Branch nesting exceeds ${max} levels (depth=${depth})`,
+                layerMissingEl: 'Move-element-layer action requires an element ID',
+                layerInvalidMode: (mode: unknown) => `Layer mode is not allowed: ${mode}`,
+                roundVarBlank: 'Round-variable action requires a variable name',
+                roundInvalidMode: (mode: unknown) => `Round mode is not allowed: ${mode}`,
+                titleBothBlank: 'Title and subtitle cannot both be empty',
+                titleTooLong: (max: number) => `Title is too long (max ${max} chars)`,
+                subtitleTooLong: (max: number) => `Subtitle is too long (max ${max} chars)`,
+                fadeInRange: (max: number) => `Fade-in duration must be between 0..${max} ms`,
+                stayRange: (max: number) => `Stay duration must be between 0..${max} ms`,
+                fadeOutRange: (max: number) => `Fade-out duration must be between 0..${max} ms`,
+                titleInvalidTarget: (target: unknown) => `Title target is not allowed: ${target}`,
+                tweenDurationRange: (min: number, max: number) => `Tween duration must be between ${min}..${max} ms`,
+                tweenInvalidEasing: 'Invalid tween easing type',
+                tweenInvalidBezier: 'Invalid custom bezier control points (x1,x2 must be in 0..1)',
+                tweenUnexpectedBezier: 'bezier parameter is only allowed for cubicBezier easing',
+                tweenBodyEmpty: 'Tween block requires at least one action inside',
+                tweenBodyInvalidAction: 'Only move / resize / rotate / opacity / color blocks are allowed inside tween',
+                tweenBodyInvalidKind: (kind: string) => `Only move / resize / rotate / opacity / color blocks are allowed inside tween (unsupported kind=${kind})`,
+                fieldMustBeInteger: (label: string) => `${label} must be an integer (no decimals)`,
+            },
         },
         timeline: {
-            // Modal / entry
-            manager: 'Timeline (keyframe animation)',
-            modalTitle: 'Timeline manager',
-            close: 'Close',
-            // Section 1: timeline list
-            listHeader: 'Timelines',
-            emptyList: 'No timelines yet. Create one below to start animating elements on the wall.',
-            durationLabel: 'Duration',
-            fpsLabel: 'Frames per second',
-            loopLabel: 'Playback',
-            selectAria: 'Select this timeline',
-            deleteAria: 'Delete this timeline',
-            deleteConfirm: (name: string) => `Delete timeline "${name}"? All of its keyframes go with it.`,
-            deleteConfirmYes: 'Delete',
-            deleteConfirmNo: 'Cancel',
-            // Section 2: create form
-            newHeader: 'New timeline',
             newName: 'Name',
-            newNamePlaceholder: 'Leave blank to auto-name',
             newDuration: 'Duration (ms)',
             newFps: 'Frames per second',
             newLoop: 'Playback',
-            newSubmit: 'Create',
-            // Playback options (plain wording)
             loopOnce: 'Play once',
             loopLoop: 'Loop',
             loopPingPong: 'Back and forth',
@@ -2499,23 +2574,7 @@ export const messages = {
             triggerSchedule: 'On schedule (timetable)',
             triggerPickHint: 'Click to pick the variable to watch',
             triggerVarHint: 'When the bound variable changes, this animation plays once in-game.',
-            // Section 3: keyframe list
-            keyframesHeader: 'Keyframes',
-            emptyKeyframes: 'No keyframes on this timeline yet. Select an element on the canvas and add the first one below.',
-            elementMissing: '(element deleted)',
-            kfPropertyHeader: 'Property',
-            kfTimeHeader: 'Time (ms)',
-            kfValueHeader: 'Value',
             kfDeleteAria: 'Delete this keyframe',
-            // Section 4: add keyframe for the selected element
-            addHeader: 'Add keyframe for the selected element',
-            addNoSelection: 'Select an element on the canvas first',
-            addMultiSelection: 'Only one element at a time (please single-select)',
-            addProperty: 'Property',
-            addTime: 'Time (ms)',
-            addValue: 'Value',
-            addSubmit: 'Add keyframe',
-            // Property plain names
             propX: 'X position',
             propY: 'Y position',
             propW: 'Width',
@@ -2525,23 +2584,12 @@ export const messages = {
             propColor: 'Text color',
             propText: 'Text content',
             propFill: 'Fill',
-            // Section 5: playback control
-            playbackHeader: 'Playback control',
             play: 'Play',
             pause: 'Pause',
             rewind: 'Back to start',
-            playbackHint: 'Playback drives the animation on the real in-game wall; editor preview comes later.',
-            // Validation / errors (reason keys align with timelineLogic.validateCreateForm)
-            errDurationPositive: 'Duration must be a positive integer (ms)',
-            errDurationTooLong: 'Duration is too long (max 600000 ms = 10 minutes)',
             errDurationRange: 'Duration must be between 100 and 3600000 ms',
             errDurationBelowKeyframe: 'Duration can\'t be shorter than the last keyframe ({t}). Move or delete it first, then shrink the duration.',
-            errFpsPositive: 'Frames per second must be a positive integer',
-            errFpsTooHigh: 'Frames per second is too high (max 240)',
-            errLoopMode: 'Invalid playback mode',
-            errKeyframeTime: (max: number) => `Time must be between 0 and ${max} ms`,
             opFailed: 'That change never reached the server — the view was restored; check your connection and retry',
-            // Section 4: easing (plain wording, no bezier jargon)
             addEasing: 'Easing',
             easingLinear: 'Constant speed',
             easingEaseIn: 'Slow then fast',
@@ -2560,7 +2608,6 @@ export const messages = {
             dockSettings: 'Timeline settings',
             dockDelete: 'Delete timeline',
             dockDeleteConfirm: 'Confirm delete?',
-            fillHint: 'The keyframe captures the element\'s current fill; to change it, edit the element in the right panel first, then add the keyframe.',
         },
         // error code → user-friendly message.
         errors: {
@@ -2580,6 +2627,8 @@ export const messages = {
             SESSION_CLOSED: 'Editor session closed — refresh to reopen',
             CONNECTION_CLOSED: 'Connection to the server dropped — reconnecting…',
             PROTOCOL_VERSION_UNSUPPORTED: 'Editor version doesn\'t match the server — refresh to update',
+            PROTOCOL_MISMATCH_DETAIL: (acceptedV: number, clientV: number) =>
+                `Protocol version mismatch (server accepted_v=${acceptedV}, client=${clientV}); please refresh or update`,
             TIMEOUT: 'Server didn\'t respond in time — please try again',
             // Lock / collaboration
             WALL_LOCKED: 'Wall is locked — unlock it first to edit',
@@ -2621,13 +2670,8 @@ export const messages = {
         // extra tooltips for top bar / panel buttons
         tooltips: {
             saveTemplate: 'Publish the current wall to the template library for reuse',
-            openLayerPanel: 'Open the layers panel',
-            openElementList: 'Open the element list',
             colorPicker: 'Click to pick a color',
-            sliderHint: 'Drag the slider, or type a number in the box',
-            keyboardShortcutHint: (key: string) => `Shortcut: ${key}`,
             disabledWhenLocked: 'Not available while the wall is locked',
-            disabledWhenLayerLocked: 'Not available while the layer is locked',
         },
         help: {
             header: 'Keyboard shortcuts',
@@ -2669,4 +2713,13 @@ export const messages = {
     },
 } as const;
 
-export type Messages = typeof messages['zh'];
+type WidenLiterals<T> = T extends string
+    ? string
+    : T extends (...args: infer A) => infer R
+        ? (...args: A) => WidenLiterals<R>
+        : { readonly [K in keyof T]: WidenLiterals<T[K]> };
+
+export type Messages = WidenLiterals<(typeof messages)['zh']>;
+
+const _enParityCheck: Messages = messages.en;
+void _enParityCheck;

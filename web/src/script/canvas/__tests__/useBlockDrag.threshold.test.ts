@@ -14,7 +14,7 @@
  */
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { effectScope } from 'vue';
+import { effectScope, ref } from 'vue';
 
 import { useBlockDrag, DRAG_THRESHOLD } from '../useBlockDrag';
 import { useScriptEditStore } from '@/stores/scriptEdit';
@@ -44,13 +44,12 @@ function el(
     attrs: Record<string, string>,
     rect: { left: number; top: number; width: number; height: number },
 ): HTMLElement & { __captured: number } {
-    const e = document.createElement('div') as HTMLElement & { __captured: number };
+    const e = Object.assign(document.createElement('div'), { __captured: 0 });
     for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
     e.getBoundingClientRect = () => ({
         left: rect.left, top: rect.top, width: rect.width, height: rect.height,
         right: rect.left + rect.width, bottom: rect.top + rect.height, x: rect.left, y: rect.top, toJSON: () => ({}),
     }) as DOMRect;
-    e.__captured = 0;
     e.setPointerCapture = () => { e.__captured += 1; };
     e.releasePointerCapture = () => { /* stub */ };
     return e;
@@ -85,12 +84,12 @@ afterEach(() => {
 });
 
 function makeDrag() {
-    const ref = { value: canvasEl };
+    const canvasRef = ref<HTMLElement | null>(canvasEl);
     let drag!: ReturnType<typeof useBlockDrag>;
     scope = effectScope();
     scope.run(() => {
         drag = useBlockDrag({
-            canvasRef: ref as unknown as { value: HTMLElement | null },
+            canvasRef,
             screenToWorld: (x, y) => ({ x, y }),
         });
     });

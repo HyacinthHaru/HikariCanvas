@@ -1,5 +1,5 @@
 /**
- * 0.4.9 Sub B：TextGlyphExtractor 单元测试。
+ * TextGlyphExtractor 单元测试。
  *
  * 覆盖：
  * 1. 单字符 → glyph polygon（顶点 > bbox 4 顶点）
@@ -8,9 +8,9 @@
  * 4. 空字符串 → null
  * 5. fontkit 加载失败 → null
  * 6. 字体 fetch 失败 → null
- * 7. vertical 模式 → null（v1 不支持）
+ * 7. vertical 模式 → null
  * 8. polygon cache 命中 → 不重复 fetch
- * 9. ElementToPolygonAsync text 分支 → 真实 glyph polygon（fallback bbox 当 null）
+ * 9. elementToMultiPolygonAsync text 分支 → 真实 glyph MultiPolygon（失败时回落 bbox）
  *
  * 实现策略：不引真 fontkit / 真字体二进制。注入 mock fontkit module + mock fetch，
  * 让 layout 返回可控 glyph path 字符串——这样能精确验证 polygon 顶点数 / 形状。
@@ -24,7 +24,7 @@ import {
     __setFontkitModuleForTest,
     __resetCachesForTest,
 } from '../TextGlyphExtractor';
-import { elementToPolygonAsync, elementToMultiPolygonAsync } from '../ElementToPolygon';
+import { elementToMultiPolygonAsync } from '../ElementToPolygon';
 import { buildGraph, findGapAt } from '../LivePaintCore';
 import type { Element, TextElement } from '@/types/protocol';
 
@@ -296,69 +296,16 @@ describe('textElementToPolygon — cache', () => {
     });
 });
 
-describe('elementToPolygonAsync — text 分支', () => {
-    it('text 元素走 fontkit → 真实 glyph polygon', async () => {
-        mockFetchOk();
-        const mockFont = makeMockFont({
-            defaultPath: 'M0 0 L500 0 L500 500 L0 500 Z',
-        });
-        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
-
-        const el = makeText({ text: 'A', x: 10, y: 20, w: 30, h: 40 });
-        const poly = await elementToPolygonAsync(el);
-        expect(poly).not.toBeNull();
-        // Mock glyph 是 1 矩形（4 顶点） → fontkit 单字符可能输出 4 顶点；
-        // 但 union + transform 通常给出 ≥ 4 顶点 polygon。
-        expect(poly!.length).toBeGreaterThanOrEqual(4);
-    });
-
-    it('text 元素 glyph 提取失败 → fallback bbox 4 顶点', async () => {
-        mockFetchFail();
-        const mockFont = makeMockFont({});
-        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
-
-        const el = makeText({ text: 'A', x: 10, y: 20, w: 30, h: 40 });
-        const poly = await elementToPolygonAsync(el);
-        // glyph 提取失败 → bbox fallback
-        expect(poly).not.toBeNull();
-        expect(poly!.length).toBe(4);
-        expect(poly!).toEqual([
-            [10, 20],
-            [40, 20],
-            [40, 60],
-            [10, 60],
-        ]);
-    });
-
-    it('text 元素 vertical=true → fallback bbox', async () => {
-        mockFetchOk();
-        const mockFont = makeMockFont({});
-        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
-
-        const el = makeText({ text: 'A', x: 10, y: 20, w: 30, h: 40, vertical: true });
-        const poly = await elementToPolygonAsync(el);
-        expect(poly).not.toBeNull();
-        expect(poly!.length).toBe(4);
-    });
-
-    it('text 元素 visible=false → null', async () => {
-        const el = makeText({ text: 'A', visible: false });
-        const poly = await elementToPolygonAsync(el);
-        expect(poly).toBeNull();
-    });
-});
-
 /**
- * 0.4.10 bugfix：textElementToMultiPolygon 保留 holes + 多 polygon 测试。
+ * textElementToMultiPolygon 保留 holes + 多 polygon 测试。
  *
- * Bug 复现：用户点击 "HELLO" 中字母 "O" 内部洞，期望识别为 gap fill；旧代码只取面积
- * 最大外环，丢失 "O" 的内孔，导致 Live Paint 把整个 text bbox 当占用区，洞内点击
- * 落入"occupied"区被拒绝。
+ * 用户点击 "HELLO" 中字母 "O" 内部洞时，期望识别为 gap fill；若只取面积
+ * 最大外环会丢失 "O" 的内孔，导致洞内点击被误判为占用区。
  *
- * 修复：multi 路径返完整 polygon-clipping MultiPolygon =
+ * multi 路径返回完整 polygon-clipping MultiPolygon =
  *   [[outerRing, hole1, hole2, ...], [outerRing2, ...], ...]
  */
-describe('textElementToMultiPolygon — 0.4.10 holes + 多 polygon 保留', () => {
+describe('textElementToMultiPolygon — holes + 多 polygon 保留', () => {
     it('单字符 "O" mock 路径含内孔 → 输出 polygon 含 hole（≥2 ring）', async () => {
         mockFetchOk();
         // 模拟 "O" 字形：外环逆时针 + 内环顺时针（OpenType 通常这样表示挖洞）。

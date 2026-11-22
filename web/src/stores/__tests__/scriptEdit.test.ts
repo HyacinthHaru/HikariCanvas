@@ -848,7 +848,7 @@ describe('scriptEditStore — validationErrors 预校验阻止 save', () => {
     it('改成非法动作（wait 越界）→ 不 send', () => {
         const { edit } = setup();
         edit.setActions([{ type: 'wait', ms: 1 } as ScriptAction]);
-        expect(edit.validationErrors.some((e) => e.message.includes('等待时长'))).toBe(true);
+        expect(edit.validationErrors.some((e) => /等待时长|wait/i.test(e.message))).toBe(true);
         vi.advanceTimersByTime(800);
         expect(sendScriptUpdate).not.toHaveBeenCalled();
     });
@@ -1200,7 +1200,7 @@ describe('scriptEditStore — setEnabled 失败回滚', () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(edit.workingCopy?.enabled).toBe(true);    // 回滚
-        expect(useNetworkStore().lastError).toContain('切换开关失败');
+        expect(useNetworkStore().lastError).toMatch(/切换开关失败|Failed to toggle rule/);
     });
 
     it('发送成功 → 不回滚（开关停在用户切的那一档）', async () => {

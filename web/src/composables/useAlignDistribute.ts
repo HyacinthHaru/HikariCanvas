@@ -129,13 +129,3 @@ function computeDistributePatches(elements: Element[], axis: AlignAxis): Element
     }
     return out;
 }
-
-/**
- * 统计被跳过的 locked 元素数量，供 UI 提示"跳过了 N 个锁定元素"。
- * 不是 patch 计算的副产物，UI 想用就单独调一次。
- */
-export function countLockedSkipped(elements: Element[]): number {
-    let n = 0;
-    for (const e of elements) if (e.locked) n++;
-    return n;
-}

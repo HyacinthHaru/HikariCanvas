@@ -42,10 +42,7 @@ export const RDP_THRESHOLD = 80;
 /** RDP 默认 tolerance（px）；brush 笔触采样点本身已有精度，0.5 比较保守。 */
 export const RDP_TOLERANCE = 0.5;
 
-/** 端点 cap 采样段数（半圆）。16 在 size ≤ 64 下视觉无棱角；与 LivePaintCore 32 整圆采样保持比例。 */
-export const CAP_SAMPLES = 16;
-
-/** 接头 join 采样段数（整圆）。与端点 cap 数量级一致；接头处用整圆盘简化几何，让 union 自然贴合。 */
+/** 端点 cap 与接头 join 的整圆盘采样段数（16 段在 size ≤ 64 下视觉无棱角，让 union 自然贴合）。 */
 export const JOIN_SAMPLES = 16;
 
 /**
@@ -150,7 +147,7 @@ export function brushStrokeToMultiPolygon(
     try {
         merged = polygonClipping.union(subPolygons[0], ...subPolygons.slice(1));
     } catch (e) {
-        if (import.meta.env && import.meta.env.DEV) {
+        if (import.meta.env.DEV) {
             console.warn('[BrushStrokeOffset] union failed:', e);
         }
         return null;

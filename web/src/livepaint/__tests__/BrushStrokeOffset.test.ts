@@ -1,5 +1,5 @@
 /**
- * M18-P5+ BrushStrokeOffset 单元测试。
+ * BrushStrokeOffset 单元测试。
  *
  * 覆盖：
  * - 单 segment（2 点）→ 矩形 + 2 半圆 cap

@@ -26,7 +26,7 @@ const { t } = useI18n();
 
 /** 慢到这个程度才值得提示（毫秒）。 */
 const SHOW_DELAY_MS = 200;
-/** 一旦提示出来，至少显示这么久（毫秒）——作者要的"一秒左右"。 */
+/** 一旦提示出来，至少显示这么久（毫秒），避免极短闪现。 */
 const MIN_VISIBLE_MS = 1000;
 
 const visible = ref(false);

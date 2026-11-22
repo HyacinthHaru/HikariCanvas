@@ -79,17 +79,11 @@ export const RADIUS_OPTIONS: { id: RadiusScale; px: number }[] = [
 const FLAVOR_KEY = 'hikari-canvas:theme.flavor';
 const ACCENT_KEY = 'hikari-canvas:theme.accent';
 const RADIUS_KEY = 'hikari-canvas:theme.radius';
-/** 兼容旧 useUiStore.theme localStorage key（仍写以便回滚不丢） */
-const LEGACY_THEME_KEY = 'hikari-canvas:theme';
 
 function loadFlavor(): Flavor {
     try {
         const v = localStorage.getItem(FLAVOR_KEY);
         if (v === 'latte' || v === 'frappe' || v === 'macchiato') return v;
-        // 兼容旧 'dark' / 'light' → 转换：dark → frappe，light → latte
-        const legacy = localStorage.getItem(LEGACY_THEME_KEY);
-        if (legacy === 'dark') return 'frappe';
-        if (legacy === 'light') return 'latte';
     } catch { /* ignore */ }
     // 跟随系统：暗色 → frappe，浅色 → latte
     if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches) return 'latte';
@@ -121,8 +115,6 @@ function applyFlavor(flavor: Flavor): void {
     // 兼容 shadcn-vue 的 .dark 选择器：Frappé / Macchiato 为深色
     const isDark = flavor !== 'latte';
     html.classList.toggle('dark', isDark);
-    // 兼容旧 useUiStore.theme localStorage（避免新-旧版本切换时丢失偏好）
-    try { localStorage.setItem(LEGACY_THEME_KEY, isDark ? 'dark' : 'light'); } catch { /* ignore */ }
 }
 
 function applyAccent(accent: Accent): void {

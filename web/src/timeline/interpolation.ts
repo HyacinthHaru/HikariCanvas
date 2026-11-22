@@ -1,7 +1,7 @@
 /**
  * 关键帧插值器——后端 `render/KeyframeInterpolator.java` 的前端镜像，
  * 编辑器本地预览（scrubber）用。数学权威定义见 `docs/rendering.md §9`；游戏内
- * 最终输出永远以后端为权威（timeline.md D9）。
+ * 最终输出永远以后端为权威（见 `docs/timeline.md`）。
  *
  * 取值规则（§9.1：首帧前/末帧后不外插、重合帧取后）、缓动（`easing.ts`）、色彩
  * （`colorLerp.ts`）、数值舍入（x/y/w/h/rotation `Math.round` 回整数——与 Java record
@@ -11,7 +11,7 @@ import type { Element, Fill, Keyframe, LoopMode, ProjectState, Timeline } from '
 import { ease } from './easing';
 import { lerpFill, lerpHex } from './colorLerp';
 
-/** 数值轨 ${var:X} 求值 seam（P4 接前端变量 store 镜像）；缺省 = 无变量支持。 */
+/** 数值轨 ${var:X} 求值 seam（接入前端变量 store 镜像）；缺省 = 无变量支持。 */
 export type NumberResolver = (raw: string) => number;
 
 const NUMERIC_PROPERTIES = new Set(['x', 'y', 'w', 'h', 'rotation', 'opacity']);

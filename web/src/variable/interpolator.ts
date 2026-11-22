@@ -11,7 +11,7 @@
  * <p>用途：TextElement live preview（编辑器实时展示替换后的最终文本）。运行时渲染走后端
  * {@link VariableInterpolator}，本前端版本仅用于编辑器即时反馈，不参与 MC 内的实际投影。</p>
  *
- * @see /Users/haru/.../plugin/.../variable/VariableInterpolator.java 算法权威
+ * @see plugin/src/main/java/ac/haru/hikaricanvas/variable/VariableInterpolator.java 算法权威
  * @see docs/dynamic-data.md §2.3 / §5.3
  */
 import type { useVariableStore } from '@/stores/variables';
@@ -177,7 +177,6 @@ export function interpolate(
         depth++;
     }
     if (depth > 0 && import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
         console.warn(
             '[interpolator] nested placeholder detected; depth=', depth,
             'text=', (text ?? '').substring(0, 100),

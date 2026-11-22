@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { X, Sparkles, RotateCcw, AlertTriangle, ImageOff } from 'lucide-vue-next';
 import { useTemplatesStore } from '@/stores/templates';
 import { useProjectStore } from '@/stores/project';
@@ -8,7 +8,7 @@ import { getWsClient } from '@/network/wsClient';
 import { useLockGuard } from '@/composables/useLockGuard';
 import { useI18n } from '@/i18n';
 import { evalBoolean } from '@/lib/templateExpr';
-import { FONT_META } from '@/render/PreviewRenderer';
+import { loadFontList, type FontInfo } from '@/render/FontLoader';
 import type { TemplateParam, TemplateParamOption, TemplateSpec } from '@/types/template';
 
 const templates = useTemplatesStore();
@@ -19,6 +19,11 @@ const { t } = useI18n();
 // lock 时 apply 必须拒 — TemplateGallery 可被 LeftTools / TopBar 打开，
 // 但 apply 才是真正的 mutation（replaceContent + state.snapshot）。
 const lockGuard = useLockGuard();
+
+const availableFonts = ref<FontInfo[]>([]);
+onMounted(async () => {
+    availableFonts.value = await loadFontList();
+});
 
 const selected = computed<TemplateSpec | null>(() =>
     templates.selectedId ? templates.byId.get(templates.selectedId) ?? null : null);
@@ -78,7 +83,6 @@ const hasExistingContent = computed(() => {
     if (s.layers && s.layers.length > 0) {
         return s.layers.some((l) => (l.elements?.length ?? 0) > 0);
     }
-    // 没有 layers 字段（老快照）时退回兼容视图
     return (s.elements?.length ?? 0) > 0;
 });
 
@@ -241,12 +245,12 @@ function asBool(v: unknown): boolean {
     return false;
 }
 
-/** type: font 的 param 没声明 options 时回退到 FONT_META（ark_pixel + source_han_sans）。 */
+/** type: font 的 param 没声明 options 时回退到服务端全量可用字体列表（内置 + 用户字体）。 */
 function fontOptions(p: TemplateParam): TemplateParamOption[] {
     if (p.options && p.options.length > 0) return p.options;
-    return Object.entries(FONT_META).map(([id, meta]) => ({
-        label: meta.displayName,
-        value: id,
+    return availableFonts.value.map((f) => ({
+        label: f.displayName,
+        value: f.id,
     }));
 }
 </script>
@@ -502,7 +506,7 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
                     :value="String(opt.value)"
                   >{{ opt.label }}</option>
                 </select>
-                <!-- font (下拉，没 options 自动用 FONT_META) -->
+                <!-- font (下拉，无 options 时回退可用字体列表) -->
                 <select
                   v-else-if="isParamType(p, 'font')"
                   class="hc-input mt-1"
@@ -572,21 +576,6 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
 </template>
 
 <style scoped>
-.hc-input {
-    width: 100%;
-    padding: 0.375rem 0.5rem;
-    font-size: 0.8125rem;
-    line-height: 1.25rem;
-    border-radius: 4px;
-    background: var(--background);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-}
-.hc-input:focus {
-    outline: none;
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
-}
 .hc-color {
     border-radius: 4px;
     border: 1px solid var(--border);

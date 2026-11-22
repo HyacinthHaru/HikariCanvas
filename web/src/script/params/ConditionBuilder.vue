@@ -6,8 +6,8 @@
  * <ul>
  *   <li><b>可视模式</b>（普通用户）：逐行「[操作数] [比较符] [操作数]」拼条件，同一 {@code joiner}
  *       （且 / 或）连所有行；底部「+ 加条件」加行、每行删除按钮。操作数 = 类型下拉（变量 / 数字 /
- *       文本 / 对错）+ 对应输入（变量用 {@link VariablePicker} 按钮 + Teleport fixed 浮层，照
- *       {@code BlockParamInput} 的 memory 约束）。任意改动 → {@link buildConditionString} → emit。</li>
+ *       文本 / 对错）+ 对应输入（变量用 {@link VariablePicker}，由显式按钮触发，避免 click-outside 竞态，
+ *       并经 Teleport fixed 浮层绕开裁切）。任意改动 → {@link buildConditionString} → emit。</li>
  *   <li><b>高级模式</b>：直接编辑 condition 字符串（复杂表达式：算术 / 取反 / 嵌套括号等超出简化
  *       文法的形态）。「试着切回可视」用 {@link tryParseCondition} 反解析——成功切可视，失败 toast
  *       「表达式较复杂，继续用文本框」。</li>
@@ -228,7 +228,7 @@ function varNameOf(row: ConditionRow, side: 'lhs' | 'rhs'): string {
 }
 
 // ============================================================================
-// 变量 picker（Teleport fixed 浮层；照 BlockParamInput memory 约束）
+// 变量 picker（由显式按钮触发，避免 click-outside 竞态；Teleport fixed 浮层）
 // ============================================================================
 
 /** 当前打开 picker 的目标（行下标 + 侧）；null = 没开。 */
@@ -236,7 +236,7 @@ const pickerTarget = ref<{ idx: number; side: 'lhs' | 'rhs' } | null>(null);
 const pickerStyle = ref<Record<string, string>>({});
 
 /**
- * 打开变量 picker。memory 约束：① 必须按钮 click 打开（非 select-change）；② Teleport 到 body
+ * 打开变量 picker：① 由显式按钮触发，避免 click-outside 竞态；② Teleport 到 body
  * + 用按钮屏幕坐标 fixed 定位，绕开 overlay 的 world transform / overflow 裁切，picker 向下展开。
  */
 function openPicker(idx: number, side: 'lhs' | 'rhs', e: MouseEvent): void {
@@ -492,7 +492,7 @@ function tryBackToVisual(): void {
       </div>
     </template>
 
-    <!-- 变量 picker：Teleport 到 body + fixed 浮层（memory 约束） -->
+    <!-- 变量 picker：由显式按钮触发，Teleport 到 body + fixed 浮层 -->
     <Teleport to="body">
       <div v-if="pickerTarget" class="hc-cond-picker-host" :style="pickerStyle">
         <VariablePicker

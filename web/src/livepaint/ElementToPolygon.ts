@@ -1,11 +1,13 @@
 /**
- * Live Paint — Element → 单 ring Polygon 转换。
+ * Live Paint — Element → Polygon / MultiPolygon 转换。
  *
  * 各元素类型采样策略：
- * - rect / icon / text / image / brush：bbox 4 顶点（text 字形 / image alpha / brush 像素级 v2）
- * - circle：椭圆 32 点采样（CircleElement 注释明确支持 w ≠ h 椭圆）
+ * - rect / icon / image：bbox 4 顶点
+ * - text：同步路径走 bbox 4 顶点；异步路径（{@link elementToMultiPolygonAsync}）走 fontkit 真实字形轮廓（含内孔）
+ * - brush：真实笔触偏移多边形（{@link brushStrokeToPolygon} / {@link brushStrokeToMultiPolygon}，退化时回落 bbox）
+ * - circle：椭圆 32 点采样（CircleElement 支持 w ≠ h 椭圆）
  * - shape：sides 个正多边形顶点（star 用 2×sides 交替外/内）
- * - path：自实装 M / L / Q / C / Z 子集解析 + de Casteljau 12 段采样；多 subpath v1 只取第一段
+ * - path：自实装 M / L / Q / C / Z 子集解析 + de Casteljau 12 段采样；多 subpath 取第一段
  *
  * 所有 element 应用 rotation（绕 bbox 中心，弧度 = rotation × π / 180）。
  *
@@ -22,7 +24,7 @@ import type { Pair, MultiPolygon as PCMultiPolygon, Polygon as PCPolygon } from 
 import type { BrushStrokeElement, Element, TextElement } from '@/types/protocol';
 import type { Polygon } from './types';
 import { brushStrokeToPolygon, brushStrokeToMultiPolygon } from './BrushStrokeOffset';
-import { textElementToPolygon, textElementToMultiPolygon } from './TextGlyphExtractor';
+import { textElementToMultiPolygon } from './TextGlyphExtractor';
 
 /** 椭圆采样点数。32 在 128 像素半径下视觉上几乎无棱角；更多会让 union 顶点爆炸。 */
 export const CIRCLE_SAMPLE_POINTS = 32;
@@ -93,55 +95,11 @@ export function elementToPolygon(el: Element): Polygon | null {
 }
 
 /**
- * 异步版本——text 元素走 fontkit 真实 glyph polygon；其他类型同步返回。
- *
- * 调用方（如 LivePaintCore.buildGraph）需 await；旧 sync `elementToPolygon` 保留以便
- * 不需要 glyph 精度的场景沿用（向下兼容）。Worker 内 buildGraph 为 async，调用本版本。
- *
- * 失败 / null fallback 与同步版本一致：调用方决定是 fallback bbox 还是丢弃。
- */
-export async function elementToPolygonAsync(el: Element): Promise<Polygon | null> {
-    if (el.visible === false) return null;
-    if (!isFinite(el.x) || !isFinite(el.y) || !isFinite(el.w) || !isFinite(el.h)) return null;
-    if (el.w <= 0 || el.h <= 0) return null;
-
-    if (el.type === 'text') {
-        const textEl = el as TextElement;
-        let local: Polygon | null = null;
-        try {
-            local = await textElementToPolygon(textEl);
-        } catch {
-            local = null;
-        }
-        // glyph 提取失败 → fallback bbox（与同步版本对 text 的行为一致）
-        if (local === null || local.length < 3) {
-            local = [
-                [textEl.x, textEl.y],
-                [textEl.x + textEl.w, textEl.y],
-                [textEl.x + textEl.w, textEl.y + textEl.h],
-                [textEl.x, textEl.y + textEl.h],
-            ];
-        }
-        const rotation = (textEl.rotation ?? 0) % 360;
-        const rotated = rotation === 0 ? local : rotatePolygon(local, textEl.x + textEl.w / 2, textEl.y + textEl.h / 2, rotation);
-        for (const [x, y] of rotated) {
-            if (!isFinite(x) || !isFinite(y)) return null;
-        }
-        return rotated;
-    }
-    // 非 text → 直接走同步路径
-    return elementToPolygon(el);
-}
-
-/**
  * Element → polygon-clipping MultiPolygon（保留 holes + 多 polygon）。
  *
- * 对比 {@link elementToPolygonAsync}：
- * - 旧函数为 text 走 fontkit 但**只返单 ring polygon**——丢失 "O" 的内孔、丢失 "Hello"
- *   的非最大字符 polygon，导致 Live Paint 把 text bbox 整片当占用，无法识别字符内部洞
- *   或字符之间空白为 gap
- * - 本函数对 text 走新的 {@link textElementToMultiPolygon}，保留完整结构；其他元素类型
- *   仍是"单 polygon = 单 ring"，包装成 PCMultiPolygon 后形状不变
+ * - text 元素走 {@link textElementToMultiPolygon}，保留完整结构（如 "O" 内孔与多字符独立轮廓）；
+ * - brush 元素走 {@link brushStrokeToMultiPolygon}，保留闭合笔画内孔；
+ * - 其他元素类型由同步单 ring 包装成 PCMultiPolygon。
  *
  * 用途：LivePaintCore.buildGraph 收集占用区。union 时直接 spread 即可
  * （polygon-clipping union 支持 GeoJSON-style MultiPolygon 输入）。
@@ -170,7 +128,7 @@ export async function elementToMultiPolygonAsync(el: Element): Promise<PCMultiPo
             const cy = textEl.y + textEl.h / 2;
             return ensureClosedMulti(rotateMulti(multi, cx, cy, rotation));
         }
-        // glyph 提取失败 → fallback 单 ring bbox（与 elementToPolygonAsync 一致）
+        // glyph 提取失败 → fallback 单 ring bbox
         const bbox: PCPolygon = [closeRing([
             [textEl.x, textEl.y],
             [textEl.x + textEl.w, textEl.y],

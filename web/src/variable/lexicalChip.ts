@@ -26,6 +26,7 @@ import {
     $createTextNode,
     $getRoot,
     $getSelection,
+    $isElementNode,
     $isParagraphNode,
     $isRangeSelection,
     $isTextNode,
@@ -51,7 +52,6 @@ export const CHIP_DATA_FALLBACK = 'data-hk-var-fallback';
 export const CHIP_CLASS = 'hc-var-chip';
 
 /** chip 接收外部事件用的自定义事件名。 */
-export const CHIP_EVENT_CLICK = 'hk-chip-click';
 export const CHIP_EVENT_HOVER = 'hk-chip-hover';
 export const CHIP_EVENT_LEAVE = 'hk-chip-leave';
 
@@ -159,16 +159,10 @@ export class VariablePlaceholderNode extends DecoratorNode<null> {
         span.textContent = this.__rawName;
         // 阻止 chip 内的点击冒泡为 Lexical 的 selection 改变；编辑期间 chip 不应"吃掉"
         // caret 落位，让用户能在 chip 周围正常移动光标 + 输入文字。
-        // 彻底关闭 chip click / dblclick 触发 picker
-        // 的全部路径。用户原话："点击文本框，正常编辑内容；点击文本框右上角的「插入变量」，
-        // 才弹出变量选择功能"——picker 触发唯一路径 = "插入变量"按钮。
-        // chip click / dblclick / 错误态 click 全部移除；改绑定 / create confirm 由后续
-        // UI（VariablePanel / 专用按钮）承接，v1.x 再补。
+        // 变量选择器仅通过「插入变量」按钮或 `${` 输入触发，chip 本身不响应点击打开选择器。
         span.addEventListener('mousedown', (ev) => {
             ev.preventDefault();
         });
-        // 注意：CHIP_EVENT_CLICK 自定义事件常量仍保留供 hover / 未来扩展用，但 chip span
-        // 不再在任何场景 dispatch 它。外层 listener（onChipClick）仍可挂；只是不会被触发。
         span.addEventListener('mouseenter', () => {
             span.dispatchEvent(
                 new CustomEvent(CHIP_EVENT_HOVER, {
@@ -345,12 +339,14 @@ export function $insertVariableChipAtSelection(
     } else {
         // 无 selection：直接 append 到末尾
         const root = $getRoot();
-        let last = root.getLastChild();
-        if (!last || !$isParagraphNode(last)) {
-            last = $createParagraphNode();
-            root.append(last);
+        const last = root.getLastChild();
+        if ($isElementNode(last) && $isParagraphNode(last)) {
+            last.append(chip);
+        } else {
+            const p = $createParagraphNode();
+            p.append(chip);
+            root.append(p);
         }
-        last.append(chip);
     }
 }
 

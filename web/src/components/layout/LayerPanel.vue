@@ -278,7 +278,7 @@ function thumbnailFor(layer: Layer): string | null {
           <!-- 图层缩略图（32×32，带棋盘格透明提示）。
                透明像素背景由 CSS 棋盘格显示；img 自身为渲染器输出的 PNG dataURL。 -->
           <span
-            class="hc-layer-thumb shrink-0"
+            class="hc-layer-thumb hc-alpha-checkerboard shrink-0"
             :title="t.layerPanel.thumbnailAlt(layer.name)"
           >
             <img
@@ -320,7 +320,7 @@ function thumbnailFor(layer: Layer): string | null {
             v-if="ui.editingLayerId === layer.id"
             v-model="renameDraft"
             type="text"
-            class="hc-input flex-1 px-1 py-0 text-xs"
+            class="hc-layer-input flex-1 px-1 py-0 text-xs"
             :data-layer-rename="layer.id"
             maxlength="64"
             :title="t.layerPanel.renameSave"
@@ -438,13 +438,13 @@ function thumbnailFor(layer: Layer): string | null {
 </template>
 
 <style scoped>
-.hc-input {
+.hc-layer-input {
     background: var(--ctp-surface0);
     color: var(--foreground);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
 }
-.hc-input:focus {
+.hc-layer-input:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 50%, transparent);
@@ -462,7 +462,7 @@ function thumbnailFor(layer: Layer): string | null {
     font-size: 11px;
     padding: 2px 5px;
 }
-/* 图层缩略图。固定 28×28；棋盘格背景显示透明像素。 */
+/* 图层缩略图。固定 28×28；棋盘格背景由全局 hc-alpha-checkerboard 提供。 */
 .hc-layer-thumb {
     display: block;
     width: 28px;
@@ -470,14 +470,6 @@ function thumbnailFor(layer: Layer): string | null {
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     overflow: hidden;
-    /* 8px 棋盘格 — 透明像素位置可见 */
-    background-image:
-        linear-gradient(45deg, var(--ctp-surface0) 25%, transparent 25%),
-        linear-gradient(-45deg, var(--ctp-surface0) 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, var(--ctp-surface0) 75%),
-        linear-gradient(-45deg, transparent 75%, var(--ctp-surface0) 75%);
-    background-size: 8px 8px;
-    background-position: 0 0, 0 4px, 4px -4px, -4px 0;
     background-color: var(--ctp-mantle);
 }
 /* 颜色标签圆点按钮。selected 状态加白圈高亮。 */

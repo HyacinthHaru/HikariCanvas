@@ -135,7 +135,6 @@ export function hitGhostHandle(
  * - rotate：中心→指针角度 + 90°（手柄正上方时 rotation=0），normalize。
  */
 export function applyGhostDrag(
-    kind: CoordKind,
     handle: GhostHandle,
     startG: Element,
     startWx: number,
@@ -162,6 +161,5 @@ export function applyGhostDrag(
         const deg = normalizeDeg((Math.atan2(curWy - c.y, curWx - c.x) * 180) / Math.PI + 90);
         return { rotation: String(deg) };
     }
-    void kind;
     return {};
 }

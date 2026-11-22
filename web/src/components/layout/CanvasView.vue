@@ -9,7 +9,7 @@ import { preloadMetrics, onMetricsReady } from '@/render/GlyphMetricsLut';
 import { ensureLoaded as ensureFontLoaded, onFontLoaded } from '@/render/FontLoader';
 import { onIconLoaded } from '@/render/IconLoader';
 import { useI18n } from '@/i18n';
-import type { Element, Layer } from '@/types/protocol';
+import type { Element, ImageElement, Layer } from '@/types/protocol';
 
 import CanvasGridOverlay from '@/components/canvas/CanvasGridOverlay.vue';
 import CanvasZoomBar from '@/components/canvas/CanvasZoomBar.vue';
@@ -80,15 +80,12 @@ const fileInputRef = ref<HTMLInputElement | null>(null);
 
 // ---------- inline editor 的 VariablePicker 接入 ----------
 //
-// CanvasView 自持一个 picker overlay 实例：用户在画布内双击文本进入 chip 编辑器后，
-// 输入 `${` / 点击 chip 都触发 picker，不需要回到 RightPanel。
-// pickerMode 与 TextElementSection 行为一致（insertNew / replaceChip）。
+// CanvasView 自持一个 picker overlay 实例，供画布内就地文本编辑器插入 / 替换变量 chip。
 type InlinePickerMode =
     | { kind: 'insertNew' }
     | { kind: 'replaceChip'; oldRawName: string };
 const inlinePickerOpen = ref(false);
 const inlinePickerMode = ref<InlinePickerMode>({ kind: 'insertNew' });
-const inlinePickerAnchor = ref<{ x: number; y: number } | null>(null);
 
 const editingElement = computed(() => {
     if (!editingId.value) return null;
@@ -105,7 +102,7 @@ useEventListener(window, 'keydown', (e: KeyboardEvent) => { if (e.key === 'Shift
 useEventListener(window, 'keyup', (e: KeyboardEvent) => { if (e.key === 'Shift') isShiftDown.value = false; });
 useEventListener(window, 'blur', () => { isShiftDown.value = false; });
 const snapManager = useSnapManager({ project, ui, bypass: () => isShiftDown.value });
-/** M17.4：当前 snap 命中信息，传给 SnapGuideOverlay 画线 + 间距标注。drag/transform 结束时清。 */
+/** 当前 snap 命中信息，传给 SnapGuideOverlay 画线 + 间距标注。drag/transform 结束时清。 */
 const activeSnapHints = ref<SnapHints | null>(null);
 
 const sizeLabel = computed(() => {
@@ -350,8 +347,10 @@ const { onTransformEnd } = useTransformerManager({
     displayGeometryOf: (id) => previewGeometry.value?.get(id) ?? null,
 });
 
-/** M17.4：包一层透传给 onTransformEnd，并在结束时清 snap visualizer。 */
-function onElementTransformEnd(ev: Parameters<typeof onTransformEnd>[0], id: string): void {
+type TransformEndEvt = Parameters<typeof onTransformEnd>[0];
+
+/** 包一层透传给 onTransformEnd，并在结束时清 snap visualizer。 */
+function onElementTransformEnd(ev: TransformEndEvt, id: string): void {
     onTransformEnd(ev, id);
     activeSnapHints.value = null;
     // resize / rotate 落定也 upsert 整体帧（值取 onTransformEnd 已 mutate 的 el 最终几何）。
@@ -394,12 +393,12 @@ const {
 // 触发：当前 select 工具 + 选中单 image element + Alt 按住 + pointer down 在 image 内。
 // 输出：M/L/Z subset 的 SVG path d → element.update mask 字段，featherPx 保留。
 const lassoGuide = ref<{ active: boolean; points: Array<[number, number]>; w: number; h: number } | null>(null);
-function getSelectedImage(): import('@/types/protocol').ImageElement | null {
+function getSelectedImage(): ImageElement | null {
     const id = ui.selectedElementId;
     if (!id) return null;
     const el = project.elementById(id);
     if (!el || el.type !== 'image') return null;
-    return el as import('@/types/protocol').ImageElement;
+    return el;
 }
 function clientToImageLocal(clientX: number, clientY: number): { lx: number; ly: number } | null {
     const img = getSelectedImage();
@@ -413,7 +412,7 @@ function clientToImageLocal(clientX: number, clientY: number): { lx: number; ly:
     if (lx < 0 || ly < 0 || lx > img.w || ly > img.h) return null;
     return { lx, ly };
 }
-/** 2026-05-25 项 1：lasso 预览用 — image element 的画布原点偏移。 */
+/** lasso 预览用 — image element 的画布原点偏移。 */
 const lassoImageOffset = computed(() => {
     const img = getSelectedImage();
     if (!img) return null;
@@ -569,21 +568,32 @@ function hitConfig(e: Element) {
     };
 }
 
-function onHitMouseEnter(ev: { target?: { getStage?: () => { container?: () => HTMLElement | undefined } | undefined } }, id: string) {
+interface HitHoverEvt {
+    target?: { getStage?: () => { container?: () => HTMLElement | undefined } | undefined };
+}
+interface HitClickEvt {
+    cancelBubble?: boolean;
+    evt?: MouseEvent | TouchEvent;
+}
+interface HitDblClickEvt {
+    cancelBubble?: boolean;
+}
+
+function onHitMouseEnter(ev: HitHoverEvt, id: string) {
     hoverId.value = id;
     const stage = ev?.target?.getStage?.();
     const container = stage?.container?.();
     if (container) container.style.cursor = 'move';
 }
 
-function onHitMouseLeave(ev: { target?: { getStage?: () => { container?: () => HTMLElement | undefined } | undefined } }) {
+function onHitMouseLeave(ev: HitHoverEvt) {
     hoverId.value = null;
     const stage = ev?.target?.getStage?.();
     const container = stage?.container?.();
     if (container) container.style.cursor = 'default';
 }
 
-function onHitClick(ev: { cancelBubble?: boolean; evt?: MouseEvent | TouchEvent }, id: string): void {
+function onHitClick(ev: HitClickEvt, id: string): void {
     // 切到别的元素或者在编辑中点同一元素的非 textarea 区域 → 先收编辑态
     if (editingId.value && editingId.value !== id) finishEditing();
     // Shift / Cmd / Ctrl click = 加选 / 切换；普通 click = 单选替换
@@ -596,7 +606,7 @@ function onHitClick(ev: { cancelBubble?: boolean; evt?: MouseEvent | TouchEvent 
     if (ev) ev.cancelBubble = true;
 }
 
-function onHitDblClick(ev: { cancelBubble?: boolean }, id: string): void {
+function onHitDblClick(ev: HitDblClickEvt, id: string): void {
     const el = project.elementById(id);
     if (!el || el.type !== 'text') return;
     ui.selectElement(id);
@@ -623,41 +633,6 @@ function finishEditing() {
 }
 
 // ---------- inline editor 的 picker hooks ----------
-
-function onInlineInsertVariableRequest() {
-    inlinePickerMode.value = { kind: 'insertNew' };
-    inlinePickerOpen.value = true;
-}
-
-function onInlineEditVariableRequest(payload: { rawName: string; fallback: string | null }) {
-    inlinePickerMode.value = { kind: 'replaceChip', oldRawName: payload.rawName };
-    inlinePickerOpen.value = true;
-}
-
-function onInlineCreateVariableRequest(payload: { rawName: string }) {
-    // 缺失变量补创 — 简化 v1 用 native confirm；外观打磨留 v1.x
-    if (typeof window === 'undefined') return;
-    const ok = window.confirm(
-        `${t.value.variables.chipError.notFound.replace('{name}', payload.rawName)}\n` +
-        `${t.value.variables.chipError.createConfirm}`,
-    );
-    if (!ok) return;
-    // 仅支持 user/X 短名补创（其他 namespace 由 Provider 自动注册，不在此手动创建路径）
-    const trimmed = payload.rawName.trim();
-    let userKey: string;
-    if (trimmed.startsWith('user/')) userKey = trimmed.substring('user/'.length);
-    else if (trimmed.indexOf('/') < 0 && trimmed.indexOf('.') < 0) userKey = trimmed;
-    else {
-        // 非用户变量域（system / scoreboard / papi / schedule / plugin）：提示用户走对应路径
-        window.alert(t.value.variables.chipError.onlyUserCanCreate);
-        return;
-    }
-    ws.send('variable.create', {
-        name: userKey,
-        type: 'STRING',
-        defaultValue: '',
-    });
-}
 
 function onInlinePickerSelect(shortName: string) {
     const editor = inlineEditorRef.value;
@@ -871,7 +846,7 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
             net.pushLog('meta', t.value.livePaint.layerLocked);
             return;
         }
-        // 仅 4 种元素支持 fill 字段（任务约束）：rect / circle / shape / path
+        // 仅 4 种元素支持 fill 字段：rect / circle / shape / path
         if (
             hitElement.type === 'rect'
             || hitElement.type === 'circle'
@@ -1042,17 +1017,22 @@ function onDragStart(id: string): void {
     }
 }
 
-interface DragEvt { target: {
-    id?: () => string;
-    x: () => number; y: () => number;
-    width: () => number; height: () => number;
-    x(v: number): void; y(v: number): void;
-} }
+interface DragEvt {
+    target: {
+        id?: () => string;
+        x(): number;
+        x(v: number): void;
+        y(): number;
+        y(v: number): void;
+        width: () => number;
+        height: () => number;
+    };
+}
 
 function onDragMove(ev: DragEvt, id: string): void {
-    // F2: 必须同步更新 leader 自身的 store，否则底层 PreviewRenderer（依赖 deep-watch
-    //   project.state）不重绘 → 用户看到顶层 Konva hit-rect 跟手但实际像素不动。
-    //   仅本地 mutate + requestDraw，不发 WS（避免 60fps 塞爆服务端，落地仍走 onDragEnd）。
+    // 必须同步更新 leader 自身的 store，否则底层 PreviewRenderer（依赖 deep-watch
+    // project.state）不重绘 → 用户看到顶层 Konva hit-rect 跟手但实际像素不动。
+    // 仅本地 mutate + requestDraw，不发 WS（避免 60fps 塞爆服务端，落地仍走 onDragEnd）。
     const initLeader = dragInitial.value.get(id);
     if (!initLeader) return;
     const node = ev.target;
@@ -1130,7 +1110,7 @@ function onDragEnd(ev: DragEvt, id: string): void {
     const newY = Math.round(node.y() - h / 2);
     const el = project.elementById(id);
     // 判等必须用 dragInitial 记录的初始位置而非 mutated 后的 el.x/y——
-    // onDragMove 已经乐观把 el.x/y 同步到拖后位置（line 728-729 F2 视觉跟手），
+    // onDragMove 已经乐观把 el.x/y 同步到拖后位置（视觉跟手），
     // 这里若再判 el.x !== newX 恒为 false → ws.send 永不发 → server 漏更新元素位置。
     // 多选 case 已做过同样修复，但单选 path 曾漏修，导致所有拖动从未真正同步。
     const initLeader = dragInitial.value.get(id);
@@ -1205,7 +1185,7 @@ watch(editingId, () => requestDraw());
 // 让 PreviewRenderer 内的 interpolator 重新计算占位符替换值。useVariableStore.set/remove/clear
 // 都走 `variables.value = new Map(...)` 替换整个 ref，无需 deep watch。
 watch(() => variableStore.variables, () => requestDraw());
-// 播放头 / 预览开关变化 → 重绘（浅 watch 标量，绕开 :979 的 project.state deep watch；
+// 播放头 / 预览开关变化 → 重绘（浅 watch 标量，绕开 project.state 的 deep watch；
 // scrubber 60fps 拖动每帧只付 1 rAF + 1 interpolate 浅拷贝 + 1 Canvas2D 全画，无深度 diff）。
 watch(() => timelineStore.playheadMs, () => requestDraw());
 watch(() => timelineStore.previewActive, () => requestDraw());
@@ -1242,8 +1222,6 @@ onMounted(() => {
         outer.scrollTop = Math.max(0, (outer.scrollHeight - outer.clientHeight) / 2);
     });
 });
-
-// （drawPending / drawRafId 已上移到 immediate watch 之前声明，见上方注释）
 
 // Konva 清理：组件 unmount 时显式 destroy stage（级联清理 Layer / Transformer
 // 内部的 listeners + 2D context + cached image data）。Vue Konva 不主动 destroy node。
@@ -1327,7 +1305,7 @@ function requestDraw(): void {
       @drop="onOuterDrop"
     >
       <!-- 画布居中容器
-           M17 F4：1024px 虚空白边——padding 让 scrollWidth / scrollHeight 虚拟扩大，
+           1024px 虚空白边——padding 让 scrollWidth / scrollHeight 虚拟扩大，
            用户可以把画布拖到 viewport 任意角落。fitToViewport 仍按 v-stage 实际尺寸计算
            不受 padding 影响；初次居中由 scrollLeft / scrollTop 中点策略实现。 -->
       <div class="min-h-full min-w-full flex items-center justify-center hc-canvas-padding">
@@ -1389,15 +1367,15 @@ function requestDraw(): void {
                   v-for="el in elements"
                   :key="el.id"
                   :config="hitConfig(el)"
-                  @click="(ev: any) => onHitClick(ev, el.id)"
-                  @tap="(ev: any) => onHitClick(ev, el.id)"
-                  @dblclick="(ev: any) => onHitDblClick(ev, el.id)"
+                  @click="(ev: HitClickEvt) => onHitClick(ev, el.id)"
+                  @tap="(ev: HitClickEvt) => onHitClick(ev, el.id)"
+                  @dblclick="(ev: HitDblClickEvt) => onHitDblClick(ev, el.id)"
                   @dragstart="() => onDragStart(el.id)"
-                  @dragmove="(ev: any) => onDragMove(ev, el.id)"
-                  @dragend="(ev: any) => onDragEnd(ev, el.id)"
-                  @transformend="(ev: any) => onElementTransformEnd(ev, el.id)"
-                  @mouseenter="(ev: any) => onHitMouseEnter(ev, el.id)"
-                  @mouseleave="(ev: any) => onHitMouseLeave(ev)"
+                  @dragmove="(ev: DragEvt) => onDragMove(ev, el.id)"
+                  @dragend="(ev: DragEvt) => onDragEnd(ev, el.id)"
+                  @transformend="(ev: TransformEndEvt) => onElementTransformEnd(ev, el.id)"
+                  @mouseenter="(ev: HitHoverEvt) => onHitMouseEnter(ev, el.id)"
+                  @mouseleave="(ev: HitHoverEvt) => onHitMouseLeave(ev)"
                 />
                 <v-transformer ref="transformerRef" :config="transformerConfig" />
               </v-layer>
@@ -1445,9 +1423,6 @@ function requestDraw(): void {
               @update:text="onEditTextUpdate"
               @finish="finishEditing"
               @cancel="finishEditing"
-              @insert-variable-request="onInlineInsertVariableRequest"
-              @edit-variable-request="onInlineEditVariableRequest"
-              @create-variable-request="onInlineCreateVariableRequest"
             />
             <!-- inline editor 触发的 VariablePicker（与 RightPanel 的 picker 不冲突，
                  同一时刻只有一个 editor 在焦点） -->
@@ -1513,7 +1488,7 @@ function requestDraw(): void {
 /* canvas / brush host 视觉样式由全局 / Tailwind 提供；
    TextInlineEditor / CanvasZoomBar 各自 scoped 自带样式。 */
 
-/* M17 F4：1024px 虚空白边——让画布可以拖到 viewport 任意角落（Figma / PS 风格）。
+/* 1024px 虚空白边——让画布可以拖到 viewport 任意角落（Figma / PS 风格）。
    不用 Tailwind 的 p-[1024px]：scoped 下 arbitrary value 偶失效，直接写 CSS 最稳。
    注意：padding 不影响 fitToViewport 计算（按 widthPx / heightPx 而非 scrollWidth），
    但会让 scrollWidth / scrollHeight 比 viewport 大 → outer.scrollLeft/Top 有空间走。 */
@@ -1521,9 +1496,9 @@ function requestDraw(): void {
     padding: 1024px;
 }
 
-/* P3.5：inline picker 浮在 inline editor 上方（VariablePicker 自身是 absolute / fixed 形态，
+/* inline picker 浮在 inline editor 上方（VariablePicker 自身是 absolute / fixed 形态，
    父容器有 relative 上下文即可让其捕获最近的 positioned ancestor）。这里让它定位到画布右上角，
-   不与画布 element 重叠；具体位置可在 v1.x 用 anchor rect 精细调整。 */
+   不与画布 element 重叠。 */
 .hc-inline-var-picker {
     position: absolute;
     top: 48px;

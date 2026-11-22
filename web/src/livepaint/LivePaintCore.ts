@@ -17,7 +17,7 @@ import polygonClipping from 'polygon-clipping';
 import type { Pair, MultiPolygon as PCMultiPolygon, Polygon as PCPolygon, Ring as PCRing } from 'polygon-clipping';
 import type { Element } from '@/types/protocol';
 import type { GapPolygon, LivePaintGraph, Polygon } from './types';
-import { elementToPolygon, elementToMultiPolygonAsync } from './ElementToPolygon';
+import { elementToMultiPolygonAsync } from './ElementToPolygon';
 
 /**
  * 构建当前画布的 gap graph（async）。
@@ -25,8 +25,6 @@ import { elementToPolygon, elementToMultiPolygonAsync } from './ElementToPolygon
  * async 原因：text 元素走 fontkit 真实 glyph 提取（dynamic import +
  * fetch 字体文件）。其他元素类型仍同步。在 Worker 内调用——主线程通过 onmessage
  * 接 graph 结果，不感知 async 切换。
- *
- * 旧同步入口仍保留 `buildGraphSync`，供单测与不需 glyph 精度的场景使用。
  */
 export async function buildGraph(
     elements: Element[],

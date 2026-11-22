@@ -276,7 +276,6 @@ export const TRIGGER_DEFS: Record<string, BlockDef> = {
         labelKey: 'script.blocks.wallReady',
         fields: [],
     },
-    // ---- 3 个新触发器（右键墙 / 玩家离开靠近区域 / 玩家退服）----
     rightClickWall: {
         kind: 'rightClickWall',
         category: 'trigger',
@@ -412,7 +411,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'message', type: 'text', labelKey: 'script.fields.message' },
         ],
     },
-    // ---- 4 个低风险新动作 + 相对移动（友好元素积木走 FRIENDLY_ELEMENT_DEFS，不在此）----
+    // ---- 元素相对移动、消息与变量运算（友好元素积木走 FRIENDLY_ELEMENT_DEFS，不在此）----
     nudgeElement: {
         kind: 'nudgeElement',
         category: 'action',
@@ -503,7 +502,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'body', type: 'statements', labelKey: 'script.fields.body' },
         ],
     },
-    // ---- 3 个剩余动作（停止脚本 / 播放粒子 / 等待直到）----
+    // ---- 停止脚本 / 播放粒子 / 等待直到 ----
     // palette 由 ACTION_DEFS 按 category 自动分组。停止脚本 / 等待直到是控制流 → category
     // 'control'（绿，与 if/repeat/wait 同组）；播放粒子是副作用 → 留 'action'（蓝）。
     // waitUntil 的条件字段用 type:'condition' 复用 ConditionBuilder。
@@ -537,7 +536,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'timeoutMs', type: 'number', labelKey: 'script.fields.timeoutMs', min: 50, max: 60000, step: 50, integer: true },
         ],
     },
-    // ---- 4 个新动作（变量复制 / 文本拼接 / 克隆元素 / 删除元素，都是副作用 → 'action' 蓝）----
+    // ---- 变量复制 / 文本拼接 / 克隆元素 / 删除元素 ----
     // 变量字段走 type:'variable'（现有 VariablePicker）；元素字段走 type:'element'（现有元素下拉）；
     // offsetX/Y 走 type:'number'。palette 由 ACTION_DEFS 按 category 自动分组（蓝组），无需另登记。
     copyVariable: {
@@ -748,7 +747,7 @@ export const FRIENDLY_ELEMENT_DEFS: Record<string, FriendlyElementDef> = {
 /**
  * 友好元素积木 {@code kind} → 「点选元素时该从元素当前态取哪些值填进 patch」。
  *
- * <p>预览框点选命中元素后（深度2），除回填 {@code elementId}，对<b>坐标/尺寸/旋转/透明度</b>类
+ * <p>预览框点选命中元素后，除回填 {@code elementId}，对<b>坐标/尺寸/旋转/透明度</b>类
  * 友好积木顺带把元素的当前几何填进 {@code patch}——免去用户手抄坐标。映射的字段名（{@code x/y/
  * w/h/rotation/opacity}）<b>与后端 ELEMENT_PROPERTIES 白名单 + FRIENDLY_ELEMENT_DEFS 的 patch
  * 键逐字符一致</b>（moveTo→x/y，resize→w/h，rotateTo→rotation，setOpacity→opacity）。</p>
@@ -796,7 +795,7 @@ export function defFor(kind: string): BlockDef | null {
  *       合法占位让积木"拖出即合法"，用户再按需改成自己的变量 / 声音；</li>
  *   <li><b>依赖墙上有什么</b>的引用（元素 {@code elementId} / 时间轴 {@code timelineId} / 命令模板
  *       {@code templateId}）：仍给空串——这些没有通用合法默认（墙上有哪些元素 / 时间轴是动态的），
- *       用户必须从下拉里选；视觉层会把空引用标"请选择"（不在本任务范围）。</li>
+ *       用户必须从下拉里选；视觉层会把空引用标待填写角标。</li>
  * </ul>
  * <p>数值默认取范围内常用值（timer 间隔 10s / 靠近 8 格 / 等待 500ms）；枚举取首项（op=play /
  * scope=near / property=x）。if 的 then/else 默认空数组（非 null，wire 契约）。</p>
@@ -840,7 +839,7 @@ export function makeDefaultAction(kind: string): ScriptAction {
             const def = FRIENDLY_ELEMENT_DEFS[kind];
             return { type: 'setElementProperties', elementId: '', patch: { ...def.defaultPatch }, kind };
         }
-        // 4 个低风险新动作 + nudge。引用字段给非空合理默认（拖出即合法）：
+        // 元素微移 / 消息 / 变量运算动作。引用字段给非空合理默认（拖出即合法）：
         // nudge / 随机 / 乘除给变量名或 dx/dy；sendMessage text 空串后端合法（非引用字段）。
         case 'nudgeElement':
             // elementId 依赖墙上元素 → 留空让用户选；dx/dy 默认 0（合法，验证只查有限）。
@@ -870,7 +869,6 @@ export function makeDefaultAction(kind: string): ScriptAction {
             // 拖出即合法）；maxIterations 默 10（安全阀，落 1..100）；body 空数组——由用户往循环体拖块填，
             // 拖出态提示"重复体不能为空"（与 if 空分支不同：repeatUntil 要求 body 非空）。
             return { type: 'repeatUntil', condition: 'var("user/x") > 0', maxIterations: 10, body: [] };
-        // ---- 3 个剩余动作 ----
         case 'stopScript':
             // 无字段——拖出即合法（清栈中止本次 run）。
             return { type: 'stopScript' };
@@ -880,19 +878,19 @@ export function makeDefaultAction(kind: string): ScriptAction {
         case 'waitUntil':
             // condition 给能被 tryParseCondition 解析回可视模式的合法默认（同 if）；timeoutMs 5000（落 50..60000）。
             return { type: 'waitUntil', condition: 'var("user/score") > 0', timeoutMs: 5000 };
-        // ---- 变量积木默认（source/target 留空——拖出态提示"目标 / 来源不能为空"，用户从 picker 选）。
+        // 变量积木默认（source/target 留空——拖出态提示"目标 / 来源不能为空"，用户从 picker 选）。
         // 与 setVariable 不同：copy/append 两端都是用户要点选的具体变量，没有通用合理默认，故空串。
         case 'copyVariable':
             return { type: 'copyVariable', source: '', target: '' };
         case 'appendVariable':
             // fullName 留空（用户选追加目标）；text 空串后端合法（拼接内容由用户填）。
             return { type: 'appendVariable', fullName: '', text: '' };
-        // ---- 元素积木默认（elementId 依赖墙上元素 → 留空让用户选；偏移默认 10,10 错开可见）。
+        // 元素积木默认（elementId 依赖墙上元素 → 留空让用户选；偏移默认 10,10 错开可见）。
         case 'cloneElement':
             return { type: 'cloneElement', elementId: '', offsetX: 10, offsetY: 10 };
         case 'deleteElement':
             return { type: 'deleteElement', elementId: '' };
-        // ---- 补间包裹积木默认（1000ms / easeInOut / body 含一条 moveTo 默认）。
+        // 补间包裹积木默认（1000ms / easeInOut / body 含一条 moveTo 默认）。
         case 'tweenBlock':
             // durationMs 1000ms（落 1..60000 合法）；easing 默 easeInOut（最常见）；
             // body 给一条 setElementProperties(moveTo) 占位——validator 要求 body 非空 + 每条必须是
@@ -904,7 +902,6 @@ export function makeDefaultAction(kind: string): ScriptAction {
                 easing: { type: 'easeInOut' },
                 body: [{ type: 'setElementProperties', elementId: '', patch: { x: '0', y: '0' }, kind: 'moveTo' }],
             };
-        // ---- 4 个新积木默认值 ----
         case 'randomBranch':
             // probability 默 50（对半开；合法落 0..100）；then/else 空数组（wire 契约）。
             // 与 if 同策略：空分支合法，让用户往内拖块填。
@@ -948,7 +945,6 @@ export function makeDefaultTrigger(kind: string): ScriptTrigger {
             return { type: 'playerNear', rangeBlocks: 8 };
         case 'wallReady':
             return { type: 'wallReady' };
-        // ---- 3 个新触发器 ----
         case 'rightClickWall':
             return { type: 'rightClickWall' };
         case 'playerLeaveRange':

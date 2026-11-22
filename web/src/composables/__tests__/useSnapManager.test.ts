@@ -58,7 +58,7 @@ function makeManager({
                 ? [{ visible: true, elements }]
                 : [],
         },
-    } as ReturnType<import('@/stores/project').useProjectStore>;
+    } as unknown as ReturnType<typeof import('@/stores/project').useProjectStore>;
 
     const ui = {
         snapEnabled: true,
@@ -67,7 +67,7 @@ function makeManager({
         snapToElement,
         snapToGrid,
         snapToDistribute,
-    } as ReturnType<import('@/stores/ui').useUiStore>;
+    } as unknown as ReturnType<typeof import('@/stores/ui').useUiStore>;
 
     return useSnapManager({ project, ui });
 }
@@ -159,7 +159,7 @@ describe('snapEdge — disabled / bypass', () => {
             canvasPixelWidth: 256,
             canvasPixelHeight: 128,
             state: { canvas: { gridSize: 0 }, layers: [] },
-        } as ReturnType<import('@/stores/project').useProjectStore>;
+        } as unknown as ReturnType<typeof import('@/stores/project').useProjectStore>;
         const ui = {
             snapEnabled: false,
             snapThreshold: 8,
@@ -167,20 +167,19 @@ describe('snapEdge — disabled / bypass', () => {
             snapToElement: false,
             snapToGrid: false,
             snapToDistribute: false,
-        } as ReturnType<import('@/stores/ui').useUiStore>;
+        } as unknown as ReturnType<typeof import('@/stores/ui').useUiStore>;
         const mgr = useSnapManager({ project, ui });
         // 即使距 canvas 右边 = 256 只差 5，也不吸附
         expect(mgr.snapEdge(251, 'x', new Set())).toBe(0);
     });
 
     it('bypass() 返 true → 返 0', () => {
-        const mgr = makeManager({ snapToElement: false });
         // bypass 开 → 始终不 snap
         const project = {
             canvasPixelWidth: 256,
             canvasPixelHeight: 128,
             state: { canvas: { gridSize: 0 }, layers: [] },
-        } as ReturnType<import('@/stores/project').useProjectStore>;
+        } as unknown as ReturnType<typeof import('@/stores/project').useProjectStore>;
         const ui = {
             snapEnabled: true,
             snapThreshold: 8,
@@ -188,7 +187,7 @@ describe('snapEdge — disabled / bypass', () => {
             snapToElement: false,
             snapToGrid: false,
             snapToDistribute: false,
-        } as ReturnType<import('@/stores/ui').useUiStore>;
+        } as unknown as ReturnType<typeof import('@/stores/ui').useUiStore>;
         const mgr2 = useSnapManager({ project, ui, bypass: () => true });
         expect(mgr2.snapEdge(251, 'x', new Set())).toBe(0);
     });
@@ -200,7 +199,7 @@ describe('snapEdge — grid snap', () => {
             canvasPixelWidth: 256,
             canvasPixelHeight: 128,
             state: { canvas: { gridSize: 32 }, layers: [] },
-        } as ReturnType<import('@/stores/project').useProjectStore>;
+        } as unknown as ReturnType<typeof import('@/stores/project').useProjectStore>;
         const ui = {
             snapEnabled: true,
             snapThreshold: 8,
@@ -208,7 +207,7 @@ describe('snapEdge — grid snap', () => {
             snapToElement: false,
             snapToGrid: true,
             snapToDistribute: false,
-        } as ReturnType<import('@/stores/ui').useUiStore>;
+        } as unknown as ReturnType<typeof import('@/stores/ui').useUiStore>;
         const mgr = useSnapManager({ project, ui });
         const delta = mgr.snapEdge(61, 'x', new Set()); // floor(61/32)*32=32, ceil=64; 64-61=3
         expect(delta).toBe(3);

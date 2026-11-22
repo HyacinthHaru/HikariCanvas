@@ -15,13 +15,12 @@ import Tooltip from '@/components/ui/Tooltip.vue';
  * 内容：
  *   - 主题 preset（Catppuccin Latte / Frappé / Macchiato）
  *   - Accent 色（8 个 Catppuccin accent）
- *   - Radius scale（sm / md / lg / xl / full）
+ *   - Radius scale（sm / md / lg）
  *
- * 风格纪律（避开 AI 审美）：
+ * 视觉样式：
  *   - 单一 surface tone（var(--card)）做底，不堆 backdrop-blur / shadow-2xl；
  *   - 选中态用 ring + check icon，不用 glow；
- *   - 圆点 swatch + radio 文本，简洁高对比度；
- *   - hover 不上 scale，按 Material 3 用底色加深表达交互态。
+ *   - 列表项按 Material 3 用底色加深表达 hover 态，圆点 swatch 轻度放大强调焦点。
  */
 const theme = useThemeStore();
 const ui = useUiStore();

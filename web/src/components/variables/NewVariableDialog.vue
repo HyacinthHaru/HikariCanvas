@@ -17,7 +17,7 @@
  * <p>错误处理：服务端拒绝（{@code VARIABLE_EXISTS} 等）通过 sendWithAck reject 抛错，
  * 捕获后显示在 footer，不立即关弹窗（保留用户输入便于改名重试）。</p>
  */
-import { computed, ref, watchEffect, onMounted } from 'vue';
+import { computed, ref, onMounted } from 'vue';
 import { X, Plus } from 'lucide-vue-next';
 import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
@@ -26,8 +26,9 @@ import { useProjectStore } from '@/stores/project';
 import ColorInput from '@/components/ui/ColorInput.vue';
 import type { VarType } from '@/types/variable';
 import { makeUserFullName, makeUserGlobalFullName } from '@/types/variable';
+import { validateVariableName, VARIABLE_NAME_MAX_LEN } from './variableNameValidation';
 
-/** 0.4.3：变量作用域。'wall' = per-wall user 变量（默认）；'global' = userglobal 全服共享。 */
+/** 变量作用域：'wall' = per-wall user 变量（默认）；'global' = userglobal 全服共享。 */
 type Scope = 'wall' | 'global';
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'created', fullName: string): void }>();
@@ -36,10 +37,6 @@ const { t } = useI18n();
 const ws = getWsClient();
 const net = useNetworkStore();
 const project = useProjectStore();
-
-/** 与 P1-A `Variable.NAME_REGEX`（{@code ^[a-zA-Z0-9_.-]+$}）一致；后端会再校一遍。 */
-const NAME_REGEX = /^[a-zA-Z0-9_.-]+$/;
-const MAX_NAME_LEN = 64;
 
 const name = ref('');
 const scope = ref<Scope>('wall');  // 默认 wall
@@ -61,12 +58,9 @@ onMounted(() => {
 });
 
 /** 名称校验：返 i18n key 或 null。empty 不显示 error（避免初次打开就刷红）。 */
-const nameValidation = computed<{ valid: boolean; errorKey: 'empty' | 'invalid' | 'tooLong' | null }>(() => {
-    const v = name.value;
-    if (v.length === 0) return { valid: false, errorKey: 'empty' };
-    if (v.length > MAX_NAME_LEN) return { valid: false, errorKey: 'tooLong' };
-    if (!NAME_REGEX.test(v)) return { valid: false, errorKey: 'invalid' };
-    return { valid: true, errorKey: null };
+const nameValidation = computed(() => {
+    const r = validateVariableName(name.value);
+    return { valid: r.valid, errorKey: r.error };
 });
 
 /** 是否显示 error message（empty 只有 user 输入过才提示）。 */
@@ -139,13 +133,6 @@ function onCancel() {
     emit('close');
 }
 
-/** 类型切换时同时重置默认值控件（避免残留旧值）。 */
-watchEffect(() => {
-    // 仅监听 type；避免无限递归把别的 ref 拉进 dep
-    const _ = type.value;
-    void _;
-});
-
 const TYPE_OPTIONS: { value: VarType; labelKey: 'typeString' | 'typeNumber' | 'typeBoolean' | 'typeColor' }[] = [
     { value: 'STRING', labelKey: 'typeString' },
     { value: 'NUMBER', labelKey: 'typeNumber' },
@@ -181,7 +168,7 @@ const TYPE_OPTIONS: { value: VarType; labelKey: 'typeString' | 'typeNumber' | 't
             :class="showNameError ? 'hc-input-error' : ''"
             :placeholder="t.variables.dialogNewNamePlaceholder"
             v-model="name"
-            :maxlength="MAX_NAME_LEN + 8"
+            :maxlength="VARIABLE_NAME_MAX_LEN + 8"
             @keydown.enter.prevent="onSubmit"
           />
           <span
@@ -281,7 +268,7 @@ const TYPE_OPTIONS: { value: VarType; labelKey: 'typeString' | 'typeNumber' | 't
         <label class="block">
           <span class="text-xs text-[color:var(--muted-foreground)]">
             {{ t.variables.dialogNewAliasLabel }}
-            <span class="opacity-60">（{{ t.variables.optional }}）</span>
+            <span class="opacity-60">({{ t.variables.optional }})</span>
           </span>
           <input
             type="text"
@@ -324,21 +311,6 @@ const TYPE_OPTIONS: { value: VarType; labelKey: 'typeString' | 'typeNumber' | 't
 </template>
 
 <style scoped>
-.hc-input {
-    width: 100%;
-    padding: 0.25rem 0.375rem;
-    font-size: 0.75rem;
-    line-height: 1rem;
-    border-radius: 4px;
-    background: var(--background);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-}
-.hc-input:focus {
-    outline: none;
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
-}
 .hc-input-error {
     border-color: var(--destructive);
 }

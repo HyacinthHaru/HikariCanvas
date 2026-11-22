@@ -2,23 +2,23 @@
  * shapesToPath.ts
  * 把 SVG 基本形状元素转换为等价的 path `d` 字符串。
  *
- * 支持: rect / circle / ellipse / line / polyline / polygon / path
- * 不支持(返回 null): image 及其它未知元素
+ * 支持：rect / circle / ellipse / line / polyline / polygon / path
+ * 不支持（返回 null）：image 及其它未知元素
  */
 
 /** kappa = 4*(sqrt(2)-1)/3 ≈ 0.5522847498 — 贝塞尔近似圆弧的控制点系数 */
 const KAPPA = 0.5522847498;
 
 /**
- * 数字紧凑格式:整数输出整数字符串,浮点数最多 4 位小数并去尾零。
- * 例: 10 → "10", 2.7614 → "2.7614", 3.0 → "3"
+ * 数字紧凑格式：整数输出整数字符串，浮点数最多 4 位小数并去尾零。
+ * 例：10 → "10"，2.7614 → "2.7614"，3.0 → "3"
  */
 function num(n: number): string {
     if (Number.isInteger(n)) return String(n);
     return parseFloat(n.toFixed(4)).toString();
 }
 
-/** 读取属性,缺省 0 */
+/** 读取属性，缺省 0 */
 function attr(el: Element, name: string, fallback = 0): number {
     const v = el.getAttribute(name);
     return v !== null ? parseFloat(v) : fallback;
@@ -36,15 +36,15 @@ function parsePoints(el: Element): [number, number][] {
 }
 
 /**
- * 4 段三次贝塞尔近似椭圆,从右极点 (cx+rx, cy) 顺时针出发。
- * 格式: M{cx+rx} {cy} C... C... C... C... Z
+ * 4 段三次贝塞尔近似椭圆，从右极点 (cx+rx, cy) 顺时针出发。
+ * 格式：M{cx+rx} {cy} C... C... C... C... Z
  */
 function ellipseToPath(cx: number, cy: number, rx: number, ry: number): string {
     const kx = rx * KAPPA;
     const ky = ry * KAPPA;
 
-    // 4 个极点坐标 (右 → 下 → 左 → 上,顺时针)
-    // 右 (cx+rx, cy), 下 (cx, cy+ry), 左 (cx-rx, cy), 上 (cx, cy-ry)
+    // 4 个极点坐标（右 → 下 → 左 → 上，顺时针）
+    // 右 (cx+rx, cy)，下 (cx, cy+ry)，左 (cx-rx, cy)，上 (cx, cy-ry)
     const segments: string[] = [
         `M${num(cx + rx)} ${num(cy)}`,
         // 右 → 下

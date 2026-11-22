@@ -10,9 +10,8 @@
  * 且 sendUpdateDebounced 在调用时捕获 selected.value?.id 传入内层，
  * 测试通过直接模拟逻辑来验证路由正确性。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { ref, computed } from 'vue';
 import { useProjectStore } from '@/stores/project';
 import type { ProjectState } from '@/types/protocol';
 

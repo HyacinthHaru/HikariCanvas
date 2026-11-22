@@ -195,9 +195,7 @@ async function runAutoGenerate() {
     submitting.value = true;
     error.value = null;
     try {
-        // 复用 rail.run.create 路径不行（已建）；改走"先 update（更新区间起止）→ 重置 timetable"
-        // 简化方案：调 timetable.set 前在前端用 generator 算出 rows 也行
-        // 这里走后端：rerun create with generateOptions 不行（已存在），所以前端跑算法 → set
+        // 已存在的车次直接在前端按区间与跳站推算各站时刻，再通过 timetable.set 落库
         const stations = props.stations.slice();
         if (draftDirection.value === 'down') stations.reverse();
         // 截取区间段
@@ -211,7 +209,7 @@ async function runAutoGenerate() {
             const i = stations.findIndex((s) => s.id === draftEndId.value);
             if (i >= 0) endIdx = i;
         }
-        if (startIdx > endIdx) throw new Error('start station after end station');
+        if (startIdx > endIdx) throw new Error(t.value.rail.autoStartAfterEnd);
 
         const segment = stations.slice(startIdx, endIdx + 1);
         const rows: Array<{ stationId: string; arrival: string | null;
@@ -371,7 +369,7 @@ function getRow(stationId: string) {
     return row;
 }
 
-/** 0.4.5 P4：HH:mm 或 HH:mm:ss 格式校验。空串视同合法（首/末站可空）。 */
+/** HH:mm 或 HH:mm:ss 格式校验。空串视同合法（首/末站可空）。 */
 function isValidTime(v: string): boolean {
     if (!v || v.length === 0) return true;
     return /^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/.test(v);
@@ -624,21 +622,6 @@ function isValidTime(v: string): boolean {
 </template>
 
 <style scoped>
-.hc-input {
-    width: 100%;
-    padding: 0.25rem 0.375rem;
-    font-size: 0.75rem;
-    line-height: 1rem;
-    border-radius: 4px;
-    background: var(--background);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-}
-.hc-input:focus {
-    outline: none;
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
-}
 .hc-input-error {
     border-color: var(--destructive);
 }

@@ -134,7 +134,7 @@ const childDisabled = computed(() => !ui.snapEnabled);
 .hc-snap-checkbox {
     width: 0.9rem;
     height: 0.9rem;
-    /* M24-B：用 primary（= 当前 accent）替代浅蓝 #60a5fa，跟随 ThemeSwitcher accent */
+    /* 用 primary（当前 accent）跟随主题强调色 */
     accent-color: var(--primary);
 }
 </style>

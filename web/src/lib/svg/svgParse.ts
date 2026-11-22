@@ -13,7 +13,7 @@ const SHAPE_TAGS = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polyli
 export function parseSvg(svg: string, maxBytes = 512 * 1024): SvgDoc {
     preParseGuard(svg, maxBytes);
     const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
-    if (doc.querySelector('parsererror')) throw new SvgImportError('SVG_MALFORMED', 'SVG 解析失败');
+    if (doc.querySelector('parsererror')) throw new SvgImportError('SVG_MALFORMED', 'Malformed SVG XML');
     const root = doc.documentElement as unknown as SVGSVGElement;
     stripDangerous(root);
     const shapes: Element[] = [];

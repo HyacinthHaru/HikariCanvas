@@ -1,32 +1,19 @@
 <script setup lang="ts">
 /**
- * 双击文本元素弹出的就地编辑器（0.4.1 chip 化）。
+ * 双击文本元素弹出的就地编辑器。
  *
- * <p>0.4.1 把内部从 {@code <textarea>} 升级为 {@link VariableChipEditor}：占位符
- * {@code ${var:X}} 在画布上直接渲染成 chip pill，而不是字面字符串。背景透明 +
- * 字体继承 → 营造"直接在画布上编辑"观感不变。</p>
+ * <p>内部使用 {@link VariableChipEditor}：占位符 {@code ${var:X}} 在画布上直接渲染成
+ * chip pill，而不是字面字符串。背景透明 + 字体继承，营造"直接在画布上编辑"观感。</p>
  *
  * <p>PreviewRenderer 由父组件传 hide set，跳过 editingId 对应的 element，避免画布底层
  * 字形与本编辑器重影。</p>
  *
- * <p>原 textarea 的 input/keydown 事件路径换成 chip editor 的 update:text / submit /
- * cancel：父组件收 update:text 后照旧 element.update 上行。</p>
+ * <p>文本变更走 chip editor 的 update:text / submit / cancel：父组件收 update:text 后
+ * 照旧 element.update 上行。</p>
  */
 import { ref } from 'vue';
 import VariableChipEditor from '@/components/variables/VariableChipEditor.vue';
-import type { Element } from '@/types/protocol';
-
-interface TextLike {
-    id: string;
-    type: 'text';
-    text: string;
-    x: number; y: number; w: number; h: number;
-    fontSize: number;
-    fontId: string;
-    color: string;
-    align: string;
-    rotation: number;
-}
+import type { Element, TextElement } from '@/types/protocol';
 
 const props = defineProps<{
     element: Element | null;
@@ -41,10 +28,6 @@ const emit = defineEmits<{
     finish: [];
     /** ESC → 父组件可选择恢复旧值；当前实现等同 finish。 */
     cancel: [];
-    /** P3.5：用户在 inline editor 输入 ${ 或点已有 chip 时，让 CanvasView 弹 picker。 */
-    insertVariableRequest: [];
-    editVariableRequest: [payload: { rawName: string; fallback: string | null }];
-    createVariableRequest: [payload: { rawName: string }];
 }>();
 
 const chipEditorRef = ref<InstanceType<typeof VariableChipEditor> | null>(null);
@@ -57,8 +40,8 @@ defineExpose({
         chipEditorRef.value?.replaceVariableChip(oldRaw, newRaw, newFallback),
 });
 
-function asText(el: Element | null): TextLike | null {
-    return el && el.type === 'text' ? (el as unknown as TextLike) : null;
+function asText(el: Element | null): TextElement | null {
+    return el && el.type === 'text' ? el : null;
 }
 
 function onUpdateText(v: string) {
@@ -86,7 +69,7 @@ function onCancel() {
       fontSize: `${asText(props.element)!.fontSize}px`,
       fontFamily: asText(props.element)!.fontId,
       color: asText(props.element)!.color,
-      textAlign: asText(props.element)!.align as any,
+      textAlign: asText(props.element)!.align,
       transform: `rotate(${asText(props.element)!.rotation}deg)`,
       transformOrigin: 'center center',
     }"
@@ -105,9 +88,6 @@ function onCancel() {
       @update:text="onUpdateText"
       @submit="onSubmit"
       @cancel="onCancel"
-      @insert-variable-request="emit('insertVariableRequest')"
-      @edit-variable-request="(p) => emit('editVariableRequest', p)"
-      @create-variable-request="(p) => emit('createVariableRequest', p)"
     />
   </div>
 </template>

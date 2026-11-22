@@ -52,7 +52,6 @@ const GHOST_HANDLE_RADIUS_CSS = 7;
 interface GhostDragSession {
     handle: GhostHandle;
     path: string;
-    kind: CoordKind;
     startG: Element;
     startWx: number;
     startWy: number;
@@ -157,12 +156,11 @@ function boundElementId(): string | null {
 function drawBindingHighlight(ctx: CanvasRenderingContext2D, scale: number): void {
     const el = boundElement();
     if (!el) return;
-    if (typeof ctx.strokeRect !== 'function') return; // 测试 / 退化 ctx 容错
     const lw = scale > 0 ? Math.max(1, 2 / scale) : 2;
     ctx.save();
     ctx.lineWidth = lw;
     ctx.strokeStyle = '#cba6f7';
-    if (typeof ctx.setLineDash === 'function') ctx.setLineDash([]);
+    ctx.setLineDash([]);
     ctx.strokeRect(el.x - lw / 2, el.y - lw / 2, el.w + lw, el.h + lw);
     ctx.restore();
 }
@@ -220,19 +218,18 @@ function drawGhost(ctx: CanvasRenderingContext2D, scale: number): void {
     ctx.restore();
 
     // 虚影轮廓（mauve 实线）+ handle。
-    if (typeof ctx.strokeRect !== 'function') return;
     const lw = scale > 0 ? Math.max(1, 1.5 / scale) : 1.5;
     const rWall = scale > 0 ? GHOST_HANDLE_RADIUS_CSS / scale : GHOST_HANDLE_RADIUS_CSS;
     ctx.save();
     ctx.strokeStyle = '#cba6f7';
     ctx.fillStyle = '#cba6f7';
     ctx.lineWidth = lw;
-    if (typeof ctx.setLineDash === 'function') ctx.setLineDash([]);
+    ctx.setLineDash([]);
     drawGhostOutline(ctx, g);
 
     const handles = ghostHandlePos(g, cb.kind);
     // rotate handle：画中心→手柄连杆（视觉提示"转"）。
-    if (cb.kind === 'rotateTo' && handles.rotate && typeof ctx.moveTo === 'function') {
+    if (cb.kind === 'rotateTo' && handles.rotate) {
         const c = { x: g.x + g.w / 2, y: g.y + g.h / 2 };
         ctx.beginPath();
         ctx.moveTo(c.x, c.y);
@@ -242,7 +239,7 @@ function drawGhost(ctx: CanvasRenderingContext2D, scale: number): void {
     // 圆点 handle（resize/rotate；moveTo 无独立 handle）。
     for (const key of Object.keys(handles) as GhostHandle[]) {
         const p = handles[key];
-        if (!p || typeof ctx.arc !== 'function') continue;
+        if (!p) continue;
         ctx.beginPath();
         ctx.arc(p.x, p.y, rWall, 0, Math.PI * 2);
         ctx.fill();
@@ -252,7 +249,6 @@ function drawGhost(ctx: CanvasRenderingContext2D, scale: number): void {
 
 /** 画虚影 bbox 轮廓（含 rotation：4 角连线）。 */
 function drawGhostOutline(ctx: CanvasRenderingContext2D, g: Element): void {
-    if (typeof ctx.beginPath !== 'function') return;
     const cx = g.x + g.w / 2;
     const cy = g.y + g.h / 2;
     const deg = g.rotation ?? 0;
@@ -271,7 +267,7 @@ function drawGhostOutline(ctx: CanvasRenderingContext2D, g: Element): void {
 /** client → 墙坐标，以 canvas 真实 rect 为原点（绕开 transform.offset）。 */
 function clientToWallCoord(clientX: number, clientY: number): { x: number; y: number } | null {
     const canvas = canvasRef.value;
-    if (!canvas || typeof canvas.getBoundingClientRect !== 'function') return null;
+    if (!canvas) return null;
     const crect = canvas.getBoundingClientRect();
     return clientToWall(crect, project.canvasPixelWidth, project.canvasPixelHeight, clientX, clientY);
 }
@@ -296,7 +292,7 @@ function onPointerDown(e: PointerEvent): void {
             const rWall = scale > 0 ? GHOST_HANDLE_RADIUS_CSS / scale : GHOST_HANDLE_RADIUS_CSS;
             const handle = hitGhostHandle(g, cb.kind, w.x, w.y, rWall);
             if (handle) {
-                ghostDrag = { handle, path: cb.path, kind: cb.kind, startG: g, startWx: w.x, startWy: w.y };
+                ghostDrag = { handle, path: cb.path, startG: g, startWx: w.x, startWy: w.y };
                 edit.snapshotForUndo();  // 起拖存 1 份 undo（拖动中逐帧 coalesce 不再入栈，防爆栈）
                 edit.setDragging(true);  // 冻结 server 整树替换（堵第一帧前回声替换树写错积木的边缘）
                 window.addEventListener('pointermove', onGhostPointerMove);
@@ -324,7 +320,7 @@ function onGhostPointerMove(e: PointerEvent): void {
     const w = clientToWallCoord(e.clientX, e.clientY);
     if (!w) return;
     const patch = applyGhostDrag(
-        ghostDrag.kind, ghostDrag.handle, ghostDrag.startG,
+        ghostDrag.handle, ghostDrag.startG,
         ghostDrag.startWx, ghostDrag.startWy, w.x, w.y,
     );
     if (Object.keys(patch).length === 0) return;
@@ -345,7 +341,7 @@ function onGhostPointerUp(): void {
 }
 
 /**
- * 把点选命中的元素回填到当前活跃积木：① elementId；② 按 friendly kind 取元素当前几何（深度2）。
+ * 把点选命中的元素回填到当前活跃积木：① elementId；② 按 friendly kind 取元素当前几何。
  * 无 activeElementBinding → 不填（点选仅可能高亮已有绑定，不新增）。
  */
 function applyPickedElement(el: Element): void {
@@ -450,7 +446,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="hc-preview-pane">
     <div class="hc-preview-title">{{ t.script.preview.title }}</div>
-    <div ref="hostRef" class="hc-preview-canvas-host">
+    <div ref="hostRef" class="hc-preview-canvas-host hc-alpha-checkerboard">
       <!-- canvas pointerdown = 虚影拖动 或 元素点选 -->
       <canvas
         ref="canvasRef"
@@ -495,15 +491,8 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     justify-content: center;
-    /* 棋盘格底，让透明背景墙的边界可辨 */
+    /* 棋盘格底纹由全局 hc-alpha-checkerboard 提供，让透明背景墙的边界可辨 */
     background-color: var(--muted);
-    background-image:
-        linear-gradient(45deg, color-mix(in srgb, var(--border) 60%, transparent) 25%, transparent 25%),
-        linear-gradient(-45deg, color-mix(in srgb, var(--border) 60%, transparent) 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--border) 60%, transparent) 75%),
-        linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--border) 60%, transparent) 75%);
-    background-size: 16px 16px;
-    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
 .hc-preview-canvas {
     display: block;

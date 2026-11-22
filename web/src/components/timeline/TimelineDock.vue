@@ -230,7 +230,7 @@ function blockLeft(elementId: string, timeMs: number): number {
     return kfX(timeMs);
 }
 
-// ---------- 框选批量选中整体帧（问题 3：拉框 → Del 批量删） ----------
+// ---------- 框选批量选中整体帧（拉框 → Del 批量删） ----------
 const marquee = ref<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 let marqueePointerId = -1;
 function tracksContentXY(e: PointerEvent): { x: number; y: number } | null {
@@ -420,7 +420,7 @@ function onDurationChange(e: Event): void {
     const input = e.target as HTMLInputElement;
     const v = parseInt(input.value, 10);
     settingsError.value = null;
-    const m = t.value.timeline as unknown as Record<string, string>;
+    const m = t.value.timeline;
     if (!Number.isInteger(v) || v < 100 || v > 3_600_000) {
         settingsError.value = m.errDurationRange;
         input.value = String(tl.value?.durationMs ?? '');   // 回弹到当前有效值
@@ -446,8 +446,7 @@ function deleteTimeline(): void {
     confirmDeleteTimeline.value = false; settingsOpen.value = false;
 }
 function loopModeLabel(m: string): string {
-    // t 是 ComputedRef，script 内须 .value 解包
-    const x = t.value.timeline as unknown as Record<string, string>;
+    const x = t.value.timeline;
     const map: Record<string, string> = { once: x.loopOnce, loop: x.loopLoop, pingPong: x.loopPingPong };
     return map[m] ?? m;
 }
@@ -481,7 +480,7 @@ function cancelTriggerPicker(): void {
     triggerPickerOpen.value = false;
 }
 function triggerTypeLabel(ty: string): string {
-    const m = t.value.timeline as unknown as Record<string, string>;
+    const m = t.value.timeline;
     const map: Record<string, string> = {
         manual: m.triggerManual, variableChange: m.triggerVariableChange, schedule: m.triggerSchedule,
     };
@@ -492,8 +491,19 @@ watch(settingsOpen, (open) => { if (!open) { confirmDeleteTimeline.value = false
 
 // ---------- 标签 ----------
 function propertyLabel(p: string): string {
-    const m = t.value.timeline as unknown as Record<string, string>;
-    return m['prop' + p.charAt(0).toUpperCase() + p.slice(1)] ?? p;
+    const m = t.value.timeline;
+    const map: Record<string, string> = {
+        x: m.propX,
+        y: m.propY,
+        w: m.propW,
+        h: m.propH,
+        rotation: m.propRotation,
+        opacity: m.propOpacity,
+        color: m.propColor,
+        text: m.propText,
+        fill: m.propFill,
+    };
+    return map[p] ?? p;
 }
 function elementLabel(row: FlatRow): string {
     const short = row.elementId.startsWith('e-') ? row.elementId.slice(2) : row.elementId;

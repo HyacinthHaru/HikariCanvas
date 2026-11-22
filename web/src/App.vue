@@ -129,7 +129,6 @@ function notifyLockedSkipped(count: number): void {
 
 // 全局快捷键。跳过 input/textarea/contenteditable 以免 typing 时误触
 useEventListener(document, 'keydown', (e: KeyboardEvent) => {
-    // 变量名别再叫 t —— 外层的 t 是 i18n 文案（notifyLockedSkipped 要用），重名会看晕人
     const target = e.target as HTMLElement | null;
     if (target && (target.matches?.('input, textarea, select') || target.isContentEditable)) return;
 

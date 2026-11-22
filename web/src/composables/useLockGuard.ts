@@ -6,18 +6,17 @@ import { useI18n } from '@/i18n';
 /**
  * wall lock readonly 多入口 guard。
  *
- * <p>CLAUDE.md §lock-state 第 4 条规定"前端是 lock 的唯一执行者"，后端编辑 op 透明放行。
+ * <p>{@code docs/architecture.md §3.4 / §13} 规定"前端是 lock 的唯一执行者"，后端编辑 op 透明放行。
  * 但是 wall locked 时，前端如果漏了某个 mutation 入口（按钮 / 快捷键 / 拖入），
  * 用户能成功改 wall —— 因为后端 lock 不拦编辑 op。所以多入口失防 = 实质上 lock 失效。</p>
  *
  * <p>CanvasView 顶部已有一个 stage 内 overlay（pointer-events 吃掉所有 stage 内 click），
- * RightPanel 的编辑区用 `inert` 属性屏蔽（0.9.17 从 `pointer-events: none` 换过来——那个
- * 只挡鼠标，Tab 仍能聚焦进去改值并真的落库，还会连带把面板滚动一起吃掉）。但 LeftTools
- * 按钮 / CanvasZoomBar grid input / TemplateGallery apply / SVG 与工程导入 / 时间轴 dock /
- * 快捷键（Ctrl+Z 等）/ Paint Bucket 点击都是独立入口 —— 必须在每个发 op 的函数开头加一道
- * 防线。<b>漏一个入口 = lock 实质失效</b>，0.9.17 就在导入与时间轴两处补过缺口。</p>
+ * RightPanel 的编辑区用 `inert` 属性屏蔽（避免 `pointer-events: none` 只挡鼠标而仍允许 Tab 聚焦
+ * 进去改值落库，或连带吃掉面板滚动）。但 LeftTools 按钮 / CanvasZoomBar grid input /
+ * TemplateGallery apply / SVG 与工程导入 / 时间轴 dock / 快捷键（Ctrl+Z 等）/ Paint Bucket 点击
+ * 都是独立入口 —— 必须在每个发 op 的函数开头加一道防线。<b>漏一个入口 = lock 实质失效</b>。</p>
  *
- * <p><b>语义约定</b>（与代码库其他点一致，与 CLAUDE.md §lock-state "owner 仅有解锁权限"对齐）：</p>
+ * <p><b>语义约定</b>（与 {@code docs/architecture.md §3.4} "owner 仅有解锁权限"对齐）：</p>
  * <ul>
  *   <li>lock 状态下任何人都不能编辑（owner 也要先按 TopBar 的 Unlock 才能改）；</li>
  *   <li>所以 {@code isReadonly = isLocked}（不区分 owner）；</li>
@@ -76,8 +75,7 @@ export function useLockGuard(): {
             : t.value.lockGuard.blocked;
         net.pushLog('err', msg);
         // DEV-only console 警告，帮 future contributor 发现新入口忘了 guard
-        if (typeof import.meta !== 'undefined' && (import.meta as { env?: { DEV?: boolean } }).env?.DEV) {
-            // eslint-disable-next-line no-console
+        if (import.meta.env.DEV) {
             console.warn(`[useLockGuard] mutation blocked (wall locked): ${actionName ?? '(unknown action)'}`);
         }
         return false;

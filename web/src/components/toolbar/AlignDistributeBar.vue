@@ -16,13 +16,11 @@ import {
 } from 'lucide-vue-next';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
-import { useNetworkStore } from '@/stores/network';
 import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import {
     computeAlignDistributePatches,
-    countLockedSkipped,
     type AlignAxis,
     type AlignMode,
 } from '@/composables/useAlignDistribute';
@@ -30,7 +28,6 @@ import type { Element } from '@/types/protocol';
 
 const project = useProjectStore();
 const ui = useUiStore();
-const net = useNetworkStore();
 const ws = getWsClient();
 const { t } = useI18n();
 
@@ -85,13 +82,6 @@ function applyAlignDistribute(axis: AlignAxis, mode: AlignMode): void {
         }
         if (Object.keys(patch).length === 0) continue;
         ws.send('element.update', { elementId: p.id, patch });
-    }
-
-    // UX：如果跳过了 locked，提示一下（走 network store lastOpError 通道复用浮动 banner？
-    // 这里走 console log + 后续可挂 toast；保持轻量）
-    const skipped = countLockedSkipped(els);
-    if (skipped > 0) {
-        net.pushLog('meta', t.value.alignDistribute.lockedSkipped(skipped));
     }
 }
 </script>

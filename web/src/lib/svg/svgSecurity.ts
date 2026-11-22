@@ -2,13 +2,13 @@ export class SvgImportError extends Error {
     constructor(public code: string, message: string) { super(message); }
 }
 
-/** 解析前闸:体积上限 + 拒 XML 实体(DOCTYPE/ENTITY,防十亿笑 + XXE 表面)。 */
+/** 解析前闸：体积上限 + 拒 XML 实体（DOCTYPE / ENTITY，防十亿笑 + XXE 表面）。 */
 export function preParseGuard(svg: string, maxBytes: number): void {
     if (svg.length > maxBytes) {
-        throw new SvgImportError('SVG_TOO_LARGE', `SVG 体积 ${svg.length} 超过上限 ${maxBytes}`);
+        throw new SvgImportError('SVG_TOO_LARGE', `SVG size ${svg.length} exceeds limit ${maxBytes}`);
     }
     if (/<!DOCTYPE/i.test(svg) || /<!ENTITY/i.test(svg)) {
-        throw new SvgImportError('SVG_HAS_ENTITY', 'SVG 含 DOCTYPE/ENTITY,已拒绝');
+        throw new SvgImportError('SVG_HAS_ENTITY', 'DOCTYPE/ENTITY declarations are not allowed');
     }
 }
 
@@ -59,7 +59,7 @@ export function complexityGuard(
     const maxTotalVertices = limits?.maxTotalVertices ?? 50000;
 
     if (shapes.length > maxShapes) {
-        throw new SvgImportError('SVG_TOO_COMPLEX', `形状数 ${shapes.length} 超过上限 ${maxShapes}`);
+        throw new SvgImportError('SVG_TOO_COMPLEX', `Shape count ${shapes.length} exceeds limit ${maxShapes}`);
     }
 
     let total = 0;
@@ -79,20 +79,20 @@ export function complexityGuard(
             total += 4;   // rect/circle/ellipse/line/image 常数
         }
         if (total > maxTotalVertices) {
-            throw new SvgImportError('SVG_TOO_COMPLEX', `估算顶点数超过上限 ${maxTotalVertices}`);
+            throw new SvgImportError('SVG_TOO_COMPLEX', `Estimated vertex count exceeds limit ${maxTotalVertices}`);
         }
     }
 }
 
-/** 危险标签列表(小写)——用 tagName.toLowerCase() 匹配,绕过 happy-dom querySelectorAll 大小写敏感问题。 */
+/** 危险标签列表（小写）——用 tagName.toLowerCase() 匹配，绕过 happy-dom querySelectorAll 大小写敏感问题。 */
 const DANGEROUS_TAGS = new Set([
     'script', 'foreignobject', 'use', 'symbol',
     'animate', 'animatetransform', 'animatemotion', 'set', 'style',
 ]);
 
-/** 解析后闸:原地剥离危险节点 + on* 事件属性 + 外链 image。不支持项一并剔除。 */
+/** 解析后闸：原地剥离危险节点 + on* 事件属性 + 外链 image。不支持项一并剔除。 */
 export function stripDangerous(root: Element): void {
-    // 深度优先遍历,收集要删除的节点,避免边走边删破坏迭代
+    // 深度优先遍历，收集要删除的节点，避免边走边删破坏迭代
     const toRemove: Element[] = [];
 
     const walk = (el: Element) => {
@@ -101,7 +101,7 @@ export function stripDangerous(root: Element): void {
         // 危险标签
         if (DANGEROUS_TAGS.has(tag)) {
             toRemove.push(el);
-            return; // 子节点跟着一起删,无需继续遍历
+            return; // 子节点跟着一起删，无需继续遍历
         }
 
         // on* 事件属性

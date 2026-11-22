@@ -1,140 +1,109 @@
 /**
- * 前端 validator 镜像 —— 后端 {@code ScriptRuleValidator} 的逐字段复刻。
+ * 前端脚本规则校验器 —— 后端 `ScriptRuleValidator` 的逐字段复刻。
  *
- * <p><b>权威 = {@code plugin/src/main/java/ac/haru/hikaricanvas/script/ScriptRuleValidator.java}</b>。
- * 本文件的常量（数值上下界 / 长度上限 / 白名单集合）必须与后端<b>逐一一致</b>——任一处漂移都会
- * 让"前端放行、后端打回"（或反之）。后端是唯一执行权威，前端这层只为<b>保存前预校验</b>：
- * 拖完一拍就在编辑器里给红字提示 + 阻止 send，而不是等 server 回 {@code SCRIPT_INVALID}。</p>
+ * 权威：`plugin/src/main/java/ac/haru/hikaricanvas/script/ScriptRuleValidator.java`。
+ * 本文件的常量（数值上下界 / 长度上限 / 白名单集合）必须与后端逐一一致，用于保存前预校验：
+ * 拖完即在编辑器里给提示并阻止无效自动保存，而不是等服务端返回 `SCRIPT_INVALID`。
  *
- * <p><b>与后端的两点形态差异（有意为之，语义不变）</b>：</p>
- * <ol>
- *   <li>后端 {@code validate} 是 <b>fail-fast</b>（返第一个错误的 {@code Optional<String>}）；前端
- *       {@link validateRule} <b>收集所有错误</b>返 {@link ValidationError}[]，让 UI 一次列全 + 每条
- *       带 {@code blockId}（积木树路径，与 trace blockId 同构）能点定位。但<b>每条错误的判定逻辑与文案
- *       与后端逐字一致</b>——只是从"短路"改成"全收"。</li>
- *   <li>错误文案直接复制后端中文串（同样的 "最多 N 字符" / "需在 A..B 之间" 措辞），保证用户在
- *       前端看到的提示与万一漏到后端时一致。</li>
- * </ol>
+ * 与后端的两点形态差异（语义一致）：
+ * 1. 后端 `validate` 是 fail-fast（返第一个错误）；前端 `validateRule` 收集所有错误返回
+ *    `ValidationError[]`，每条带 `blockId`（积木树路径，与 trace `blockId` 同构）供 UI 定位。
+ * 2. 错误文案走 `messages[locale].script.validation`，中文表与后端逐字一致，同时支持英文界面。
  *
- * <p>纯逻辑、零 Vue / 零 DOM。{@link validateRule} 只读 {@link ScriptRule}，不改入参。</p>
+ * 纯逻辑、无 Vue / DOM 依赖。`validateRule` 只读 `ScriptRule`，不修改入参。
  */
 
 import type { ScriptRule, ScriptTrigger, ScriptAction, EasingType } from '@/types/protocol';
 import { ACTION_DEFS, TRIGGER_DEFS, TWEENABLE_KINDS, type FieldDef } from './blockDefs';
+import { countBlocks } from './blockTree';
 import { messages } from '@/i18n/messages';
 
-// ---------- 常量（逐一对照 ScriptRuleValidator.java，数值 / 集合必须一致）----------
+// ---------- 常量（与 ScriptRuleValidator.java 对齐）----------
 
-/** 规则名最大长度。后端 {@code NAME_MAX}。 */
+/** 规则名最大长度（后端 `NAME_MAX`）。 */
 export const NAME_MAX = 64;
-/** 积木总数上限（每个 Action 计 1，If 自身计 1 再加两分支递归）。后端 {@code MAX_TOTAL_BLOCKS}。 */
+/** 积木总数上限（每个动作计 1，容器块自身计 1 再加子序列递归；后端 `MAX_TOTAL_BLOCKS`）。 */
 export const MAX_TOTAL_BLOCKS = 50;
-/** if 嵌套深度上限（第 5 层拒）。后端 {@code MAX_IF_DEPTH}。 */
+/** 条件分支嵌套深度上限（第 5 层拒绝；后端 `MAX_IF_DEPTH`）。 */
 export const MAX_IF_DEPTH = 4;
-/** Wait.ms 范围（毫秒）。后端 {@code WAIT_MIN} / {@code WAIT_MAX}。 */
+/** `Wait.ms` 范围（毫秒；后端 `WAIT_MIN` / `WAIT_MAX`）。 */
 export const WAIT_MIN = 50;
 export const WAIT_MAX = 5000;
-/** Timer.intervalSeconds 范围（秒）。后端 {@code TIMER_MIN} / {@code TIMER_MAX}。 */
+/** `Timer.intervalSeconds` 范围（秒；后端 `TIMER_MIN` / `TIMER_MAX`）。 */
 export const TIMER_MIN = 1;
 export const TIMER_MAX = 86400;
-/** PlayerNear.rangeBlocks 范围（方块）。后端 {@code NEAR_MIN} / {@code NEAR_MAX}。 */
+/** `PlayerNear` / `PlayerLeaveRange` 的 `rangeBlocks` 范围（方块；后端 `NEAR_MIN` / `NEAR_MAX`）。 */
 export const NEAR_MIN = 1;
 export const NEAR_MAX = 32;
-/** blockLayout JSON 最大长度（null 当 "{}" 合法）。后端 {@code BLOCK_LAYOUT_MAX}。 */
+/** `blockLayout` JSON 最大长度（null 当 `"{}"` 合法；后端 `BLOCK_LAYOUT_MAX`）。 */
 export const BLOCK_LAYOUT_MAX = 65536;
-/** SetVariable.value 最大长度（空串合法、null 拒）。后端 {@code SET_VALUE_MAX}。 */
+/** `SetVariable.value` / `AppendVariable.text` 最大长度（后端 `SET_VALUE_MAX`）。 */
 export const SET_VALUE_MAX = 4096;
-/** PlaySound.soundId 最大长度。后端 {@code SOUND_ID_MAX}。 */
+/** `PlaySound.soundId` 最大长度（后端 `SOUND_ID_MAX`）。 */
 export const SOUND_ID_MAX = 128;
-/** RunCommand.params 每个值的最大长度。后端 {@code COMMAND_PARAM_MAX}。 */
+/** `RunCommand.params` 每个值的最大长度（后端 `COMMAND_PARAM_MAX`）。 */
 export const COMMAND_PARAM_MAX = 256;
-/** Log.message 最大长度。后端 {@code LOG_MESSAGE_MAX}。 */
+/** `Log.message` 最大长度（后端 `LOG_MESSAGE_MAX`）。 */
 export const LOG_MESSAGE_MAX = 256;
-/** If.condition 最大长度。后端 {@code CONDITION_MAX}。 */
+/** `If` / `RepeatUntil` / `WaitUntil` 的 `condition` 最大长度（后端 `CONDITION_MAX`）。 */
 export const CONDITION_MAX = 512;
-/** PlaySound.volume 范围。后端 {@code VOLUME_MIN} / {@code VOLUME_MAX}。 */
+/** `PlaySound.volume` 范围（后端 `VOLUME_MIN` / `VOLUME_MAX`）。 */
 export const VOLUME_MIN = 0.0;
 export const VOLUME_MAX = 2.0;
-/** PlaySound.pitch 范围。后端 {@code PITCH_MIN} / {@code PITCH_MAX}。 */
+/** `PlaySound.pitch` 范围（后端 `PITCH_MIN` / `PITCH_MAX`）。 */
 export const PITCH_MIN = 0.5;
 export const PITCH_MAX = 2.0;
+/** `SendMessage.text` 最大长度（后端 `MESSAGE_MAX`）。 */
+export const MESSAGE_MAX = 256;
+/** `SetElementProperties.patch` 最大键数（后端 `PATCH_MAX_KEYS`）。 */
+export const PATCH_MAX_KEYS = 8;
+/** `SetElementProperties.kind` 最大长度（后端 `KIND_MAX`）。 */
+export const KIND_MAX = 32;
+/** `Repeat.count` / `RepeatUntil.maxIterations` 范围（后端 `REPEAT_MIN` / `REPEAT_MAX`）。 */
+export const REPEAT_MIN = 1;
+export const REPEAT_MAX = 100;
+/** `RandomBranch.probability` 范围（百分比整数；后端 `PROBABILITY_MIN` / `PROBABILITY_MAX`）。 */
+export const PROBABILITY_MIN = 0;
+export const PROBABILITY_MAX = 100;
+/** `ShowTitle.title` / `subtitle` 各自最大长度（后端 `TITLE_MAX`）。 */
+export const TITLE_MAX = 256;
+/** `ShowTitle.fadeInMs` / `fadeOutMs` 上限（毫秒；后端 `TITLE_FADE_MAX`）。 */
+export const TITLE_FADE_MAX = 10000;
+/** `ShowTitle.stayMs` 上限（毫秒；后端 `TITLE_STAY_MAX`）。 */
+export const TITLE_STAY_MAX = 60000;
+/** `TweenBlock.durationMs` 范围（毫秒；后端 `TWEEN_DURATION_MIN` / `TWEEN_DURATION_MAX`）。 */
+export const TWEEN_DURATION_MIN = 1;
+export const TWEEN_DURATION_MAX = 60000;
+/** `PlayParticle.count` 范围（后端 `PARTICLE_COUNT_MIN` / `PARTICLE_COUNT_MAX`）。 */
+export const PARTICLE_COUNT_MIN = 1;
+export const PARTICLE_COUNT_MAX = 1000;
+/** `WaitUntil.timeoutMs` 范围（毫秒；后端 `WAIT_UNTIL_TIMEOUT_MIN` / `WAIT_UNTIL_TIMEOUT_MAX`）。 */
+export const WAITUNTIL_TIMEOUT_MIN = 50;
+export const WAITUNTIL_TIMEOUT_MAX = 60000;
 
-/** SetElementProperty.property 白名单（后端 {@code ELEMENT_PROPERTIES}，9 项）。 */
+/** `SetElementProperty.property` / `SetElementProperties.patch` 键白名单（后端 `ELEMENT_PROPERTIES`）。 */
 export const ELEMENT_PROPERTIES: ReadonlySet<string> = new Set([
     'x', 'y', 'w', 'h', 'rotation', 'opacity', 'text', 'fill', 'color',
 ]);
-/** PlayTimeline.op 白名单（后端 {@code TIMELINE_OPS}）。 */
+/** `PlayTimeline.op` 白名单（后端 `TIMELINE_OPS`）。 */
 export const TIMELINE_OPS: ReadonlySet<string> = new Set(['play', 'pause', 'seek']);
-/** PlaySound.scope 白名单（后端 {@code SOUND_SCOPES}）。 */
+/** `PlaySound.scope` 白名单（后端 `SOUND_SCOPES`）。 */
 export const SOUND_SCOPES: ReadonlySet<string> = new Set(['near', 'all']);
-
-// ---------- 新动作常量（逐一对照 ScriptRuleValidator.java）----------
-
-/** SendMessage.text 最大长度。后端 {@code MESSAGE_MAX}。 */
-export const MESSAGE_MAX = 256;
-/** SetElementProperties.patch 最大键数。后端 {@code PATCH_MAX_KEYS}。 */
-export const PATCH_MAX_KEYS = 8;
-/** SetElementProperties.kind 最大长度。后端 {@code KIND_MAX}。 */
-export const KIND_MAX = 32;
-/** SendMessage.channel 白名单。后端 {@code MESSAGE_CHANNELS}。 */
+/** `SendMessage.channel` 白名单（后端 `MESSAGE_CHANNELS`）。 */
 export const MESSAGE_CHANNELS: ReadonlySet<string> = new Set(['chat', 'actionbar', 'title']);
-/** ScaleVariable.op 白名单。后端 {@code SCALE_OPS}。 */
+/** `ScaleVariable.op` 白名单（后端 `SCALE_OPS`）。 */
 export const SCALE_OPS: ReadonlySet<string> = new Set(['multiply', 'divide']);
-
-// ---------- repeat 常量（逐一对照 ScriptRuleValidator.java）----------
-
-/** Repeat.count 范围（重复次数）。后端 {@code REPEAT_MIN} / {@code REPEAT_MAX}。 */
-export const REPEAT_MIN = 1;
-export const REPEAT_MAX = 100;
-
-// ---------- sendMessage target / repeatUntil 常量（逐一对照 ScriptRuleValidator.java）----------
-
-/**
- * SendMessage.target 白名单。后端 {@code MESSAGE_TARGETS}。{@code trigger} 给触发玩家（默认）/
- * {@code all} 全服广播。repeatUntil 的 maxIterations 范围复用 {@link REPEAT_MIN} / {@link REPEAT_MAX}
- * （后端同样复用 repeat 的 1..100 硬上限，不另加 config）。
- */
+/** `SendMessage.target` / `ShowTitle.target` 白名单（后端 `MESSAGE_TARGETS`）。 */
 export const MESSAGE_TARGETS: ReadonlySet<string> = new Set(['trigger', 'all']);
-
-// ---------- 4 个新积木常量（逐一对照 ScriptRuleValidator.java）----------
-
-/** RandomBranch.probability 范围（百分比整数）。后端 {@code PROBABILITY_MIN} / {@code PROBABILITY_MAX}。 */
-export const PROBABILITY_MIN = 0;
-export const PROBABILITY_MAX = 100;
-/** SetElementLayer.mode 白名单。后端 {@code ELEMENT_LAYER_MODES}。 */
+/** `SetElementLayer.mode` 白名单（后端 `ELEMENT_LAYER_MODES`）。 */
 export const ELEMENT_LAYER_MODES: ReadonlySet<string> = new Set(['front', 'back']);
-/** RoundVariable.mode 白名单。后端 {@code ROUND_MODES}。 */
+/** `RoundVariable.mode` 白名单（后端 `ROUND_MODES`）。 */
 export const ROUND_MODES: ReadonlySet<string> = new Set(['round', 'floor', 'ceil']);
-/** ShowTitle.title / subtitle 各自最大长度（后端 {@code TITLE_MAX}）。 */
-export const TITLE_MAX = 256;
-/** ShowTitle.fadeInMs / fadeOutMs 上限（毫秒）。后端 {@code TITLE_FADE_MAX}。 */
-export const TITLE_FADE_MAX = 10000;
-/** ShowTitle.stayMs 上限（毫秒）。后端 {@code TITLE_STAY_MAX}。 */
-export const TITLE_STAY_MAX = 60000;
-
-// ---------- 补间包裹常量（逐一对照 ScriptRuleValidator.java）----------
-
-/** TweenBlock.durationMs 最小值（毫秒）。后端 {@code TWEEN_DURATION_MIN}。 */
-export const TWEEN_DURATION_MIN = 1;
-/** TweenBlock.durationMs 最大值（毫秒）。后端 {@code TWEEN_DURATION_MAX}。 */
-export const TWEEN_DURATION_MAX = 60000;
-/** Easing.type 合法值集合（对应 EasingType）。后端 {@code EasingType} enum 4 成员。 */
+/** `Easing.type` 合法值集合（对应 `EasingType`）。 */
 export const VALID_EASING_TYPES: ReadonlySet<EasingType> = new Set<EasingType>([
     'linear', 'easeIn', 'easeOut', 'easeInOut', 'cubicBezier',
 ]);
-
-// ---------- 停止 / 粒子 / 等待直到常量（逐一对照 ScriptRuleValidator.java）----------
-
-/** PlayParticle.count 范围。后端 {@code PARTICLE_COUNT_MIN} / {@code PARTICLE_COUNT_MAX}。 */
-export const PARTICLE_COUNT_MIN = 1;
-export const PARTICLE_COUNT_MAX = 1000;
-/** WaitUntil.timeoutMs 范围（毫秒）。后端 {@code WAIT_UNTIL_TIMEOUT_MIN} / {@code WAIT_UNTIL_TIMEOUT_MAX}。 */
-export const WAITUNTIL_TIMEOUT_MIN = 50;
-export const WAITUNTIL_TIMEOUT_MAX = 60000;
-/**
- * PlayParticle.particle 白名单（14 个，逐字镜像后端 {@code PARTICLE_WHITELIST}）。
- * wire 字段名是 {@code particle}（与后端 record 字段同名）。
- */
+/** `PlayParticle.particle` 白名单（14 项，镜像后端 `PARTICLE_WHITELIST`）。 */
 export const PARTICLES: ReadonlySet<string> = new Set([
     'minecraft:flame', 'minecraft:smoke', 'minecraft:heart', 'minecraft:happy_villager',
     'minecraft:crit', 'minecraft:enchant', 'minecraft:portal', 'minecraft:firework',
@@ -145,10 +114,8 @@ export const PARTICLES: ReadonlySet<string> = new Set([
 // ---------- 返回类型 ----------
 
 /**
- * 单条校验错误。{@code blockId} 是积木树路径（{@code 'trigger'} / {@code 'actions/2'} /
- * {@code 'actions/2/then/1'}，与后端 trace blockId 同构）——UI 用它点定位到具体积木。
- * 规则级错误（名称 / 动作列表空 / 总块数超 / blockLayout 超长）无 blockId（{@code undefined}）。
- * {@code message} 是人读中文（与后端文案逐字一致）。
+ * 单条校验错误。`blockId` 是积木树路径（`'trigger'` / `'actions/2'` / `'actions/2/then/1'`，
+ * 与后端 trace `blockId` 同构），供 UI 定位到具体积木；规则级错误无 `blockId`。
  */
 export interface ValidationError {
     blockId?: string;
@@ -158,54 +125,47 @@ export interface ValidationError {
 // ---------- 主入口 ----------
 
 /**
- * 校验整条规则，收集<b>所有</b>错误（空数组 = 合法）。
+ * 校验整条规则，收集所有错误（空数组表示合法）。
  *
- * <p>检查顺序与后端 {@code ScriptRuleValidator.validate} 一致（只是不短路、全收集）：
- * 规则名 → 触发器存在 → 动作列表非空 → blockLayout 长度 → 触发器字段 → 积木总数 →
- * 逐个动作递归。每条动作 / 触发器的字段判定与后端文案逐字相同。</p>
+ * 检查顺序与后端 `ScriptRuleValidator.validate` 一致：
+ * 规则名 -> 触发器存在 -> 动作列表非空 -> `blockLayout` 长度 -> 触发器字段 -> 积木总数 -> 逐个动作递归。
  */
-export function validateRule(rule: ScriptRule): ValidationError[] {
+export function validateRule(rule: ScriptRule, locale: 'zh' | 'en' = 'zh'): ValidationError[] {
+    const v = messages[locale].script.validation;
     const errors: ValidationError[] = [];
     if (rule == null) {
-        errors.push({ message: '规则不能为空' });
+        errors.push({ message: v.ruleNull });
         return errors;
     }
 
-    // 规则名（后端：blank → "规则名称不能为空"；超长 → "规则名称超长（最多 N 字符）"）。
     if (rule.name == null || isBlank(rule.name)) {
-        errors.push({ message: '规则名称不能为空' });
+        errors.push({ message: v.nameBlank });
     } else if (rule.name.length > NAME_MAX) {
-        errors.push({ message: `规则名称超长（最多 ${NAME_MAX} 字符）` });
+        errors.push({ message: v.nameTooLong(NAME_MAX) });
     }
 
-    // 触发器存在性（后端：trigger == null → "缺少触发器"）。
     if (rule.trigger == null) {
-        errors.push({ blockId: 'trigger', message: '缺少触发器' });
+        errors.push({ blockId: 'trigger', message: v.missingTrigger });
     }
 
-    // 动作列表非空（后端：actions.isEmpty → "动作列表不能为空"）。
     if (!rule.actions || rule.actions.length === 0) {
-        errors.push({ message: '动作列表不能为空' });
+        errors.push({ message: v.actionsEmpty });
     }
 
-    // blockLayout 长度（后端：null 当 "{}" 合法）。
     if (rule.blockLayout != null && rule.blockLayout.length > BLOCK_LAYOUT_MAX) {
-        errors.push({ message: `积木布局数据超长（最多 ${BLOCK_LAYOUT_MAX} 字符）` });
+        errors.push({ message: v.layoutTooLong(BLOCK_LAYOUT_MAX) });
     }
 
-    // 触发器字段范围。
     if (rule.trigger != null) {
-        validateTrigger(rule.trigger, errors);
+        validateTrigger(rule.trigger, locale, errors);
     }
 
-    // 积木总数（后端：countBlocks > MAX → "积木总数 N 超过上限 M"）。
     if (rule.actions && rule.actions.length > 0) {
         const total = countBlocks(rule.actions);
         if (total > MAX_TOTAL_BLOCKS) {
-            errors.push({ message: `积木总数 ${total} 超过上限 ${MAX_TOTAL_BLOCKS}` });
+            errors.push({ message: v.tooManyBlocks(total, MAX_TOTAL_BLOCKS) });
         }
-        // 逐个动作递归（ifDepth 从 0 起，与后端一致）。
-        validateActions(rule.actions, 0, 'actions', errors);
+        validateActions(rule.actions, 0, 'actions', locale, errors);
     }
 
     return errors;
@@ -213,26 +173,31 @@ export function validateRule(rule: ScriptRule): ValidationError[] {
 
 // ---------- 触发器 ----------
 
-/** 触发器各子类字段范围（镜像后端 validateTrigger，文案逐字一致）。blockId 恒为 'trigger'。 */
-function validateTrigger(trigger: ScriptTrigger, errors: ValidationError[]): void {
-    // 整数字段（间隔秒数 / 范围方块数）——后端 TriggerDeserializer 用 requireInt 读，带小数直接拒。
+/** 校验触发器各分支字段范围（`blockId` 恒为 `'trigger'`）。 */
+function validateTrigger(
+    trigger: ScriptTrigger,
+    locale: 'zh' | 'en',
+    errors: ValidationError[],
+): void {
+    const v = messages[locale].script.validation;
     validateIntegerFields(
         TRIGGER_DEFS[trigger.type]?.fields,
         trigger as unknown as Record<string, unknown>,
         'trigger',
+        locale,
         errors,
     );
     switch (trigger.type) {
         case 'variableChange':
             if (isBlank(trigger.fullName)) {
-                errors.push({ blockId: 'trigger', message: '变量变化触发器的变量名不能为空' });
+                errors.push({ blockId: 'trigger', message: v.varChangeBlank });
             }
             break;
         case 'timer':
             if (trigger.intervalSeconds < TIMER_MIN || trigger.intervalSeconds > TIMER_MAX) {
                 errors.push({
                     blockId: 'trigger',
-                    message: `定时器间隔需在 ${TIMER_MIN}..${TIMER_MAX} 秒之间`,
+                    message: v.timerRange(TIMER_MIN, TIMER_MAX),
                 });
             }
             break;
@@ -240,20 +205,18 @@ function validateTrigger(trigger: ScriptTrigger, errors: ValidationError[]): voi
             if (trigger.rangeBlocks < NEAR_MIN || trigger.rangeBlocks > NEAR_MAX) {
                 errors.push({
                     blockId: 'trigger',
-                    message: `玩家靠近半径需在 ${NEAR_MIN}..${NEAR_MAX} 方块之间`,
+                    message: v.nearRange(NEAR_MIN, NEAR_MAX),
                 });
             }
             break;
-        // playerLeaveRange 范围校验同 playerNear（复用 NEAR_MIN/MAX），文案"玩家离开半径"。
         case 'playerLeaveRange':
             if (trigger.rangeBlocks < NEAR_MIN || trigger.rangeBlocks > NEAR_MAX) {
                 errors.push({
                     blockId: 'trigger',
-                    message: `玩家离开半径需在 ${NEAR_MIN}..${NEAR_MAX} 方块之间`,
+                    message: v.leaveRange(NEAR_MIN, NEAR_MAX),
                 });
             }
             break;
-        // 无字段触发器（后端 Optional.empty）：含 rightClickWall / playerQuit。
         case 'playerJoin':
         case 'playerKill':
         case 'wallReady':
@@ -266,131 +229,129 @@ function validateTrigger(trigger: ScriptTrigger, errors: ValidationError[]): voi
 // ---------- 动作（递归）----------
 
 /**
- * 逐个动作校验 + 递归进 if 分支。{@code ifDepth} = 进入本层前已有的 if 嵌套层数（镜像后端）。
- * {@code seqPrefix} 是当前序列的 path 前缀（顶层 {@code 'actions'} / if 分支
- * {@code 'actions/2/then'}），与后端 trace blockId 同构——拼下标即每块的 blockId。
+ * 逐个动作校验并递归进子序列。`ifDepth` 为进入本层前已有的条件分支嵌套层数，
+ * `seqPrefix` 为当前序列的 path 前缀（顶层 `'actions'` / 分支 `'actions/2/then'`）。
  */
 function validateActions(
     actions: ScriptAction[],
     ifDepth: number,
     seqPrefix: string,
+    locale: 'zh' | 'en',
     errors: ValidationError[],
 ): void {
     for (let i = 0; i < actions.length; i++) {
         const path = `${seqPrefix}/${i}`;
-        validateAction(actions[i], ifDepth, path, errors);
+        validateAction(actions[i], ifDepth, path, locale, errors);
     }
 }
 
-/** 单个动作字段校验（镜像后端 validateAction switch，逐分支文案一致）。 */
+/** 单个动作字段校验（镜像后端 `validateAction`）。 */
 function validateAction(
     action: ScriptAction,
     ifDepth: number,
     path: string,
+    locale: 'zh' | 'en',
     errors: ValidationError[],
 ): void {
-    // 整数字段统一先过一遍（等待毫秒 / 重复次数 / 各种时长…），见 validateIntegerFields。
+    const v = messages[locale].script.validation;
     validateIntegerFields(
         ACTION_DEFS[action.type]?.fields,
         action as unknown as Record<string, unknown>,
         path,
+        locale,
         errors,
     );
     switch (action.type) {
         case 'setVariable': {
             if (isBlank(action.fullName)) {
-                errors.push({ blockId: path, message: '设置变量的变量名不能为空' });
+                errors.push({ blockId: path, message: v.setVarNameBlank });
             }
-            // 后端：value == null → "...不能为 null（空串合法）"；空串放行。
             if (action.value == null) {
-                errors.push({ blockId: path, message: '设置变量的值不能为 null（空串合法）' });
+                errors.push({ blockId: path, message: v.setVarValueNull });
             } else if (action.value.length > SET_VALUE_MAX) {
-                errors.push({ blockId: path, message: `设置变量的值超长（最多 ${SET_VALUE_MAX} 字符）` });
+                errors.push({ blockId: path, message: v.setVarValueTooLong(SET_VALUE_MAX) });
             }
             break;
         }
         case 'incrementVariable': {
             if (isBlank(action.fullName)) {
-                errors.push({ blockId: path, message: '累加变量的变量名不能为空' });
+                errors.push({ blockId: path, message: v.incVarNameBlank });
             }
-            // 后端：!Double.isFinite(delta) → "累加步长必须是有限数值"。
             if (!Number.isFinite(action.delta)) {
-                errors.push({ blockId: path, message: '累加步长必须是有限数值' });
+                errors.push({ blockId: path, message: v.incDeltaFinite });
             }
             break;
         }
         case 'setElementProperty': {
             if (isBlank(action.elementId)) {
-                errors.push({ blockId: path, message: '设置元素属性缺少元素 ID' });
+                errors.push({ blockId: path, message: v.setPropMissingEl });
             }
             if (action.property == null || !ELEMENT_PROPERTIES.has(action.property)) {
-                errors.push({ blockId: path, message: `元素属性不在允许范围：${action.property}` });
+                errors.push({ blockId: path, message: v.setPropInvalid(action.property) });
             }
             if (isBlank(action.value)) {
-                errors.push({ blockId: path, message: '设置元素属性的值不能为空' });
+                errors.push({ blockId: path, message: v.setPropValueBlank });
             }
             break;
         }
         case 'playTimeline': {
             if (isBlank(action.timelineId)) {
-                errors.push({ blockId: path, message: '时间轴控制缺少时间轴 ID' });
+                errors.push({ blockId: path, message: v.timelineMissingId });
             }
             if (action.op == null || !TIMELINE_OPS.has(action.op)) {
-                errors.push({ blockId: path, message: `时间轴操作不在允许范围：${action.op}` });
+                errors.push({ blockId: path, message: v.timelineInvalidOp(action.op) });
             }
             if (action.op === 'seek' && action.seekMs == null) {
-                errors.push({ blockId: path, message: 'seek 操作必须提供 seekMs' });
+                errors.push({ blockId: path, message: v.seekMissingMs });
             }
             if (action.seekMs != null && action.seekMs < 0) {
-                errors.push({ blockId: path, message: 'seekMs 不能为负数' });
+                errors.push({ blockId: path, message: v.seekNegative });
             }
             break;
         }
         case 'playSound': {
             if (isBlank(action.soundId) || action.soundId.length > SOUND_ID_MAX) {
-                errors.push({ blockId: path, message: `声音 ID 不能为空且最多 ${SOUND_ID_MAX} 字符` });
+                errors.push({ blockId: path, message: v.soundIdInvalid(SOUND_ID_MAX) });
             }
-            // 后端取反区间写法：NaN 任何比较都 false 连带被拒（finite 纪律）——!(v>=min && v<=max)。
+            // 取反区间写法，NaN 比较为 false 连带被拒（与后端一致）。
             if (!(action.volume >= VOLUME_MIN && action.volume <= VOLUME_MAX)) {
-                errors.push({ blockId: path, message: `音量需在 ${fmt(VOLUME_MIN)}..${fmt(VOLUME_MAX)} 之间` });
+                errors.push({ blockId: path, message: v.soundVolumeRange(fmt(VOLUME_MIN), fmt(VOLUME_MAX)) });
             }
             if (!(action.pitch >= PITCH_MIN && action.pitch <= PITCH_MAX)) {
-                errors.push({ blockId: path, message: `音调需在 ${fmt(PITCH_MIN)}..${fmt(PITCH_MAX)} 之间` });
+                errors.push({ blockId: path, message: v.soundPitchRange(fmt(PITCH_MIN), fmt(PITCH_MAX)) });
             }
             if (action.scope == null || !SOUND_SCOPES.has(action.scope)) {
-                errors.push({ blockId: path, message: `声音范围不在允许范围：${action.scope}` });
+                errors.push({ blockId: path, message: v.soundInvalidScope(action.scope) });
             }
             break;
         }
         case 'wait': {
             if (action.ms < WAIT_MIN || action.ms > WAIT_MAX) {
-                errors.push({ blockId: path, message: `等待时长需在 ${WAIT_MIN}..${WAIT_MAX} 毫秒之间` });
+                errors.push({ blockId: path, message: v.waitRange(WAIT_MIN, WAIT_MAX) });
             }
             break;
         }
         case 'runCommand': {
             if (isBlank(action.templateId)) {
-                errors.push({ blockId: path, message: '执行命令缺少模板 ID' });
+                errors.push({ blockId: path, message: v.cmdMissingTemplate });
             }
-            // 后端：Map.copyOf 保证 value 非 null，只查长度。
             const params = action.params ?? {};
             for (const key of Object.keys(params)) {
-                const v = params[key];
-                if (typeof v === 'string' && v.length > COMMAND_PARAM_MAX) {
+                const paramVal = params[key];
+                if (typeof paramVal === 'string' && paramVal.length > COMMAND_PARAM_MAX) {
                     errors.push({
                         blockId: path,
-                        message: `命令参数 '${key}' 超长（最多 ${COMMAND_PARAM_MAX} 字符）`,
+                        message: v.cmdParamTooLong(key, COMMAND_PARAM_MAX),
                     });
                 }
             }
             break;
         }
         case 'log': {
-            // 后端：message == null → "日志内容不能为 null"；超长另报。空串合法。
             if (action.message == null) {
-                errors.push({ blockId: path, message: '日志内容不能为 null' });
+                errors.push({ blockId: path, message: v.logNull });
             } else if (action.message.length > LOG_MESSAGE_MAX) {
-                errors.push({ blockId: path, message: `日志内容超长（最多 ${LOG_MESSAGE_MAX} 字符）` });
+                errors.push({ blockId: path, message: v.logTooLong(LOG_MESSAGE_MAX) });
             }
             break;
         }
@@ -399,288 +360,258 @@ function validateAction(
             if (depth > MAX_IF_DEPTH) {
                 errors.push({
                     blockId: path,
-                    message: `if 嵌套超过 ${MAX_IF_DEPTH} 层（depth=${depth}）`,
+                    message: v.ifDepthExceeded(MAX_IF_DEPTH, depth),
                 });
             }
             if (isBlank(action.condition)) {
-                errors.push({ blockId: path, message: 'if 条件不能为空' });
+                errors.push({ blockId: path, message: v.ifConditionBlank });
             } else if (action.condition.length > CONDITION_MAX) {
-                errors.push({ blockId: path, message: `if 条件超长（最多 ${CONDITION_MAX} 字符）` });
+                errors.push({ blockId: path, message: v.ifConditionTooLong(CONDITION_MAX) });
             }
-            // 递归两分支（depth 已 +1，与后端一致）。
-            validateActions(action.then ?? [], depth, `${path}/then`, errors);
-            validateActions(action.else ?? [], depth, `${path}/else`, errors);
+            validateActions(action.then ?? [], depth, `${path}/then`, locale, errors);
+            validateActions(action.else ?? [], depth, `${path}/else`, locale, errors);
             break;
         }
-        // ---- 6 个新 action（文案与后端 ScriptRuleValidator 逐字一致）----
         case 'setElementProperties': {
             if (isBlank(action.elementId)) {
-                errors.push({ blockId: path, message: '设置元素属性缺少元素 ID' });
+                errors.push({ blockId: path, message: v.setPropMissingEl });
             }
             const keys = Object.keys(action.patch ?? {});
             if (keys.length === 0) {
-                errors.push({ blockId: path, message: '批量设属性的 patch 不能为空' });
+                errors.push({ blockId: path, message: v.patchEmpty });
             }
             if (keys.length > PATCH_MAX_KEYS) {
-                errors.push({ blockId: path, message: `patch 属性数超过 ${PATCH_MAX_KEYS}` });
+                errors.push({ blockId: path, message: v.patchTooManyKeys(PATCH_MAX_KEYS) });
             }
             if (action.kind != null && action.kind.length > KIND_MAX) {
-                errors.push({ blockId: path, message: 'kind 超长' });
+                errors.push({ blockId: path, message: v.kindTooLong });
             }
-            for (const [k, v] of Object.entries(action.patch ?? {})) {
+            for (const [k, val] of Object.entries(action.patch ?? {})) {
                 if (!ELEMENT_PROPERTIES.has(k)) {
-                    errors.push({ blockId: path, message: `元素属性不在允许范围：${k}` });
+                    errors.push({ blockId: path, message: v.setPropInvalid(k) });
                 }
-                // text 空串是合法内容（后端 ElementPropertyApplier.buildPatch 接受空文字）；
-                // 其余键空串会静默变 0 或 hex 失败，仍查空——与后端逐字一致。
-                if (k !== 'text' && isBlank(v)) {
-                    errors.push({ blockId: path, message: `属性 ${k} 的值不能为空` });
+                // text 允许空串（后端 ElementPropertyApplier.buildPatch 接受空文字）；其余键空串拒绝。
+                if (k !== 'text' && isBlank(val)) {
+                    errors.push({ blockId: path, message: v.patchPropBlank(k) });
                 }
             }
             break;
         }
         case 'nudgeElement': {
             if (isBlank(action.elementId)) {
-                errors.push({ blockId: path, message: '相对移动缺少元素 ID' });
+                errors.push({ blockId: path, message: v.nudgeMissingEl });
             }
             if (!Number.isFinite(action.dx) || !Number.isFinite(action.dy)) {
-                errors.push({ blockId: path, message: '相对移动的 dx/dy 必须是有限数值' });
+                errors.push({ blockId: path, message: v.nudgeFinite });
             }
             break;
         }
         case 'sendMessage': {
             if (action.text == null) {
-                errors.push({ blockId: path, message: '发消息内容不能为 null' });
+                errors.push({ blockId: path, message: v.msgNull });
             } else if (action.text.length > MESSAGE_MAX) {
-                errors.push({ blockId: path, message: `发消息内容超长（最多 ${MESSAGE_MAX}）` });
+                errors.push({ blockId: path, message: v.msgTooLong(MESSAGE_MAX) });
             }
             if (action.channel == null || !MESSAGE_CHANNELS.has(action.channel)) {
-                errors.push({ blockId: path, message: `消息渠道不在允许范围：${action.channel}` });
+                errors.push({ blockId: path, message: v.msgInvalidChannel(action.channel) });
             }
-            // target 白名单（trigger / all）。后端 Deserializer 缺省默 'trigger'，故
-            // <b>缺失（旧 payload）当 trigger 放行</b>（向后兼容）；非空但不在白名单才拒。
-            // 文案与后端 ScriptRuleValidator 逐字一致（"发送对象不在允许范围："）。
+            // 缺失（旧 payload）按默认 trigger 放行；非空且不在白名单才拒绝。
             if (action.target != null && !MESSAGE_TARGETS.has(action.target)) {
-                errors.push({ blockId: path, message: `发送对象不在允许范围：${action.target}` });
+                errors.push({ blockId: path, message: v.msgInvalidTarget(action.target) });
             }
             break;
         }
         case 'setRandomVariable': {
             if (isBlank(action.fullName)) {
-                errors.push({ blockId: path, message: '随机数变量名不能为空' });
+                errors.push({ blockId: path, message: v.randVarNameBlank });
             }
             if (!Number.isFinite(action.min) || !Number.isFinite(action.max)) {
-                errors.push({ blockId: path, message: '随机区间必须是有限数值' });
+                errors.push({ blockId: path, message: v.randBoundsFinite });
             } else if (action.min > action.max) {
-                errors.push({ blockId: path, message: '随机区间 min 不能大于 max' });
+                errors.push({ blockId: path, message: v.randMinGtMax });
             }
             break;
         }
         case 'scaleVariable': {
             if (isBlank(action.fullName)) {
-                errors.push({ blockId: path, message: '乘除变量名不能为空' });
+                errors.push({ blockId: path, message: v.scaleVarNameBlank });
             }
             if (action.op == null || !SCALE_OPS.has(action.op)) {
-                errors.push({ blockId: path, message: `运算不在允许范围：${action.op}` });
+                errors.push({ blockId: path, message: v.scaleInvalidOp(action.op) });
             }
             if (!Number.isFinite(action.factor)) {
-                errors.push({ blockId: path, message: '乘除系数必须是有限数值' });
+                errors.push({ blockId: path, message: v.scaleFactorFinite });
             } else if (action.op === 'divide' && action.factor === 0) {
-                errors.push({ blockId: path, message: '除数不能为 0' });
+                errors.push({ blockId: path, message: v.scaleDivZero });
             }
             break;
         }
         case 'playTimelineAwait': {
             if (isBlank(action.timelineId)) {
-                errors.push({ blockId: path, message: '播时间轴缺少时间轴 ID' });
+                errors.push({ blockId: path, message: v.awaitTimelineMissingId });
             }
             break;
         }
-        // ---- repeat 有界循环（文案与后端 ScriptRuleValidator 逐字一致）----
         case 'repeat': {
             if (typeof action.count !== 'number' || action.count < REPEAT_MIN || action.count > REPEAT_MAX) {
-                errors.push({ blockId: path, message: `重复次数需在 ${REPEAT_MIN}..${REPEAT_MAX} 之间` });
+                errors.push({ blockId: path, message: v.repeatCountRange(REPEAT_MIN, REPEAT_MAX) });
             }
             if (!action.body || action.body.length === 0) {
-                errors.push({ blockId: path, message: '重复循环体不能为空' });
+                errors.push({ blockId: path, message: v.repeatBodyEmpty });
             }
-            // body 递归（ifDepth 不变——repeat 不增 if 深度）；blockId 路径 `${path}/body`
-            // 与后端 ScriptRunner 展开同构（不带 round，前端只一份 body）。
-            validateActions(action.body ?? [], ifDepth, `${path}/body`, errors);
+            validateActions(action.body ?? [], ifDepth, `${path}/body`, locale, errors);
             break;
         }
-        // ---- repeatUntil 动态循环（while 语义；文案与后端 ScriptRuleValidator 逐字一致）----
-        // 与 repeat 部分措辞有别：condition 报"重复条件…"、maxIterations 报"重复次数上限…"；
-        // body 空与 repeat 同文案"重复循环体不能为空"。
         case 'repeatUntil': {
             if (isBlank(action.condition) || action.condition.length > CONDITION_MAX) {
-                errors.push({ blockId: path, message: `重复条件不能为空且最多 ${CONDITION_MAX} 字符` });
+                errors.push({ blockId: path, message: v.repeatUntilConditionInvalid(CONDITION_MAX) });
             }
             if (typeof action.maxIterations !== 'number' || action.maxIterations < REPEAT_MIN || action.maxIterations > REPEAT_MAX) {
-                errors.push({ blockId: path, message: `重复次数上限需在 ${REPEAT_MIN}..${REPEAT_MAX} 之间` });
+                errors.push({ blockId: path, message: v.repeatUntilMaxRange(REPEAT_MIN, REPEAT_MAX) });
             }
             if (!action.body || action.body.length === 0) {
-                errors.push({ blockId: path, message: '重复循环体不能为空' });
+                errors.push({ blockId: path, message: v.repeatBodyEmpty });
             }
-            // body 递归（ifDepth 不变——repeatUntil 不增 if 深度）；blockId 路径 `${path}/body`
-            // 与后端 ScriptRunner 动态压栈 blockId 同构（不带轮数，前端只一份 body）。
-            validateActions(action.body ?? [], ifDepth, `${path}/body`, errors);
+            validateActions(action.body ?? [], ifDepth, `${path}/body`, locale, errors);
             break;
         }
-        // ---- 停止 / 粒子 / 等待直到（文案与后端 ScriptRuleValidator 逐字一致）----
         case 'stopScript':
-            // 无字段——永远合法（后端 Optional.empty）。
             break;
         case 'playParticle': {
             if (action.particle == null || !PARTICLES.has(action.particle)) {
-                errors.push({ blockId: path, message: `粒子种类不在允许范围: ${action.particle}` });
+                errors.push({ blockId: path, message: v.particleInvalid(action.particle) });
             }
             if (typeof action.count !== 'number' || action.count < PARTICLE_COUNT_MIN || action.count > PARTICLE_COUNT_MAX) {
-                errors.push({ blockId: path, message: `粒子数量需在 ${PARTICLE_COUNT_MIN}..${PARTICLE_COUNT_MAX} 之间` });
+                errors.push({ blockId: path, message: v.particleCountRange(PARTICLE_COUNT_MIN, PARTICLE_COUNT_MAX) });
             }
             if (!Number.isFinite(action.offsetX) || !Number.isFinite(action.offsetY) || !Number.isFinite(action.offsetZ)) {
-                errors.push({ blockId: path, message: '粒子偏移必须是有限数值' });
+                errors.push({ blockId: path, message: v.particleOffsetFinite });
             }
             break;
         }
         case 'waitUntil': {
             if (isBlank(action.condition) || action.condition.length > CONDITION_MAX) {
-                errors.push({ blockId: path, message: `等待条件不能为空且最多 ${CONDITION_MAX} 字符` });
+                errors.push({ blockId: path, message: v.waitUntilConditionInvalid(CONDITION_MAX) });
             }
             if (typeof action.timeoutMs !== 'number' || action.timeoutMs < WAITUNTIL_TIMEOUT_MIN || action.timeoutMs > WAITUNTIL_TIMEOUT_MAX) {
-                errors.push({ blockId: path, message: `超时时长需在 ${WAITUNTIL_TIMEOUT_MIN}..${WAITUNTIL_TIMEOUT_MAX} 毫秒之间` });
+                errors.push({ blockId: path, message: v.waitUntilTimeoutRange(WAITUNTIL_TIMEOUT_MIN, WAITUNTIL_TIMEOUT_MAX) });
             }
             break;
         }
-        // ---- 变量积木 + 元素积木（文案与后端 ScriptRuleValidator 逐字一致）----
-        // 注：克隆偏移这层只查"有限数值"；上界（ELEMENT_OFFSET_MAX）由后端 validator 兜底
-        // （前端从简——offset 在表单里就是普通数字输入，越界由 server 打回）。
         case 'copyVariable': {
             if (isBlank(action.target) || isBlank(action.source)) {
-                errors.push({ blockId: path, message: '变量复制的目标 / 来源不能为空' });
+                errors.push({ blockId: path, message: v.copyVarBlank });
             }
             break;
         }
         case 'appendVariable': {
             if (isBlank(action.fullName)) {
-                errors.push({ blockId: path, message: '文本拼接的目标变量不能为空' });
+                errors.push({ blockId: path, message: v.appendVarBlank });
             }
-            // 后端：text != null && text.length > SET_VALUE_MAX → 拒（null 合法，拼接 null 视为空）。
             if (action.text != null && action.text.length > SET_VALUE_MAX) {
-                errors.push({ blockId: path, message: `拼接文本超长（最多 ${SET_VALUE_MAX} 字符）` });
+                errors.push({ blockId: path, message: v.appendTextTooLong(SET_VALUE_MAX) });
             }
             break;
         }
         case 'cloneElement': {
             if (isBlank(action.elementId)) {
-                errors.push({ blockId: path, message: '克隆元素的目标不能为空' });
+                errors.push({ blockId: path, message: v.cloneMissingEl });
             }
             if (!Number.isFinite(action.offsetX) || !Number.isFinite(action.offsetY)) {
-                errors.push({ blockId: path, message: '克隆偏移必须是有限数值' });
+                errors.push({ blockId: path, message: v.cloneOffsetFinite });
             }
             break;
         }
         case 'deleteElement': {
             if (isBlank(action.elementId)) {
-                errors.push({ blockId: path, message: '删除元素的目标不能为空' });
+                errors.push({ blockId: path, message: v.deleteMissingEl });
             }
             break;
         }
-        // ---- 4 个新积木（文案与后端 ScriptRuleValidator 逐字一致）----
         case 'randomBranch': {
-            // probability 必须在 [0,100] 之间（整数，后端 int 存储）。
             if (typeof action.probability !== 'number' || action.probability < PROBABILITY_MIN || action.probability > PROBABILITY_MAX) {
-                errors.push({ blockId: path, message: `随机概率需在 ${PROBABILITY_MIN}..${PROBABILITY_MAX} 之间` });
+                errors.push({ blockId: path, message: v.probRange(PROBABILITY_MIN, PROBABILITY_MAX) });
             }
-            // then/else 递归（ifDepth +1，与 if 同语义——randomBranch 也算一层条件分支深度）。
             const depth = ifDepth + 1;
             if (depth > MAX_IF_DEPTH) {
-                errors.push({ blockId: path, message: `分支嵌套超过 ${MAX_IF_DEPTH} 层（depth=${depth}）` });
+                errors.push({ blockId: path, message: v.branchDepthExceeded(MAX_IF_DEPTH, depth) });
             }
-            validateActions(action.then ?? [], depth, `${path}/then`, errors);
-            validateActions(action.else ?? [], depth, `${path}/else`, errors);
+            validateActions(action.then ?? [], depth, `${path}/then`, locale, errors);
+            validateActions(action.else ?? [], depth, `${path}/else`, locale, errors);
             break;
         }
         case 'setElementLayer': {
             if (isBlank(action.elementId)) {
-                errors.push({ blockId: path, message: '元素置层缺少元素 ID' });
+                errors.push({ blockId: path, message: v.layerMissingEl });
             }
             if (action.mode == null || !ELEMENT_LAYER_MODES.has(action.mode)) {
-                errors.push({ blockId: path, message: `置层方向不在允许范围：${action.mode}` });
+                errors.push({ blockId: path, message: v.layerInvalidMode(action.mode) });
             }
             break;
         }
         case 'roundVariable': {
             if (isBlank(action.fullName)) {
-                errors.push({ blockId: path, message: '取整变量名不能为空' });
+                errors.push({ blockId: path, message: v.roundVarBlank });
             }
             if (action.mode == null || !ROUND_MODES.has(action.mode)) {
-                errors.push({ blockId: path, message: `取整方式不在允许范围：${action.mode}` });
+                errors.push({ blockId: path, message: v.roundInvalidMode(action.mode) });
             }
             break;
         }
         case 'showTitle': {
-            // title 和 subtitle 至少一个非空（后端同校验）。
             const titleBlank = isBlank(action.title);
             const subtitleBlank = isBlank(action.subtitle);
             if (titleBlank && subtitleBlank) {
-                errors.push({ blockId: path, message: '标题和副标题不能同时为空' });
+                errors.push({ blockId: path, message: v.titleBothBlank });
             }
             if (!titleBlank && action.title.length > TITLE_MAX) {
-                errors.push({ blockId: path, message: `标题超长（最多 ${TITLE_MAX} 字符）` });
+                errors.push({ blockId: path, message: v.titleTooLong(TITLE_MAX) });
             }
             if (!subtitleBlank && action.subtitle.length > TITLE_MAX) {
-                errors.push({ blockId: path, message: `副标题超长（最多 ${TITLE_MAX} 字符）` });
+                errors.push({ blockId: path, message: v.subtitleTooLong(TITLE_MAX) });
             }
             if (typeof action.fadeInMs !== 'number' || action.fadeInMs < 0 || action.fadeInMs > TITLE_FADE_MAX) {
-                errors.push({ blockId: path, message: `淡入时长需在 0..${TITLE_FADE_MAX} 毫秒之间` });
+                errors.push({ blockId: path, message: v.fadeInRange(TITLE_FADE_MAX) });
             }
             if (typeof action.stayMs !== 'number' || action.stayMs < 0 || action.stayMs > TITLE_STAY_MAX) {
-                errors.push({ blockId: path, message: `停留时长需在 0..${TITLE_STAY_MAX} 毫秒之间` });
+                errors.push({ blockId: path, message: v.stayRange(TITLE_STAY_MAX) });
             }
             if (typeof action.fadeOutMs !== 'number' || action.fadeOutMs < 0 || action.fadeOutMs > TITLE_FADE_MAX) {
-                errors.push({ blockId: path, message: `淡出时长需在 0..${TITLE_FADE_MAX} 毫秒之间` });
+                errors.push({ blockId: path, message: v.fadeOutRange(TITLE_FADE_MAX) });
             }
             if (action.target == null || !MESSAGE_TARGETS.has(action.target)) {
-                errors.push({ blockId: path, message: `弹窗发送对象不在允许范围：${action.target}` });
+                errors.push({ blockId: path, message: v.titleInvalidTarget(action.target) });
             }
             break;
         }
-        // ---- 补间包裹积木（文案与后端 ScriptRuleValidator 逐字一致）----
         case 'tweenBlock': {
-            // durationMs 范围。
             if (typeof action.durationMs !== 'number' || action.durationMs < TWEEN_DURATION_MIN || action.durationMs > TWEEN_DURATION_MAX) {
-                errors.push({ blockId: path, message: `补间时长需在 ${TWEEN_DURATION_MIN}..${TWEEN_DURATION_MAX} 毫秒之间` });
+                errors.push({ blockId: path, message: v.tweenDurationRange(TWEEN_DURATION_MIN, TWEEN_DURATION_MAX) });
             }
-            // easing 合法性——type 必须在白名单内；cubicBezier 时 bezier 必须是 4 元数组且 x 坐标 ∈ [0,1]。
             const easing = action.easing;
             if (easing == null || !VALID_EASING_TYPES.has(easing.type as EasingType)) {
-                errors.push({ blockId: path, message: '补间缓动类型不合法' });
+                errors.push({ blockId: path, message: v.tweenInvalidEasing });
             } else if (easing.type === 'cubicBezier') {
                 const b = easing.bezier;
                 if (!b || b.length !== 4 || !(b[0] >= 0 && b[0] <= 1) || !(b[2] >= 0 && b[2] <= 1)) {
-                    errors.push({ blockId: path, message: '自定义缓动的控制点不合法（x1,x2 需在 0..1 之间）' });
+                    errors.push({ blockId: path, message: v.tweenInvalidBezier });
                 }
             } else if (easing.bezier != null) {
-                // 后端：type 合法但非 cubicBezier 却带 bezier → 拒（ScriptRuleValidator §580）。
-                errors.push({ blockId: path, message: 'bezier 参数仅允许 cubicBezier 缓动' });
+                errors.push({ blockId: path, message: v.tweenUnexpectedBezier });
             }
-            // body 非空。
             if (!action.body || action.body.length === 0) {
-                errors.push({ blockId: path, message: '补间里至少要放一个动作' });
+                errors.push({ blockId: path, message: v.tweenBodyEmpty });
             }
-            // body 每条只允许属性动作（setElementProperties，kind ∈ TWEENABLE_KINDS）。
             for (let bi = 0; bi < (action.body ?? []).length; bi++) {
                 const bAction = action.body[bi];
                 const bPath = `${path}/body/${bi}`;
                 if (bAction.type !== 'setElementProperties') {
-                    errors.push({ blockId: bPath, message: '补间里只能放移动/缩放/转动/透明度/变色' });
+                    errors.push({ blockId: bPath, message: v.tweenBodyInvalidAction });
                 } else if (!TWEENABLE_KINDS.has(bAction.kind)) {
-                    errors.push({ blockId: bPath, message: `补间里只能放移动/缩放/转动/透明度/变色（不支持 kind=${bAction.kind}）` });
+                    errors.push({ blockId: bPath, message: v.tweenBodyInvalidKind(bAction.kind) });
                 }
             }
-            // body 每条属性动作自身的字段校验（递归，但 ifDepth 不变——tweenBlock 不增 if 深度）。
-            validateActions(action.body ?? [], ifDepth, `${path}/body`, errors);
+            validateActions(action.body ?? [], ifDepth, `${path}/body`, locale, errors);
             break;
         }
     }
@@ -689,41 +620,34 @@ function validateAction(
 // ---------- 内部辅助 ----------
 
 /**
- * 数字字段「必须是整数」检查 —— 镜像后端 {@code ActionDeserializer.requireInt / requireLong /
- * optionalLong}（它们用 {@code isIntegralNumber()}，连 {@code 3.0} 这种整值浮点都拒）。
+ * 数字字段整数性检查 —— 镜像后端 `ActionDeserializer.requireInt / requireLong / optionalLong`。
  *
- * <p><b>为什么单独一段而不是逐个动作写 if</b>：哪些字段收整数由 {@code blockDefs} 的字段表
- * （{@link FieldDef.integer}）一处声明，这里照着表查。加新积木时在字段表上标一下就自动拦住，
- * 不会漏——「前端只 {@code Number(v)}、后端 {@code requireInt}」这道严格度差正是它反复复发的地方。</p>
- *
- * <p>报错落在具体积木上（blockId），用户点头部提示能直接跳到那块；否则这个错要等后端反序列化
- * 才炸，前端只能给一句"保存失败"，指不出是哪块积木。</p>
- *
- * <p>只对<b>已经是数字</b>的值判整（缺失 / null 交给各字段自己的必填校验；非数字类型由各动作的
- * 范围校验负责），避免同一个字段报两条。{@code NaN} 会命中这里——各处范围比较对 NaN 恒 false，
- * 本来就漏网。</p>
+ * 按 `blockDefs` 中 `FieldDef.integer` 声明检查，仅对已经是 `number` 的值判整（缺失 / null
+ * 交由各字段必填校验；`NaN` 在此一并拦截）。
  */
 function validateIntegerFields(
     fields: FieldDef[] | undefined,
     holder: Record<string, unknown>,
     blockId: string,
+    locale: 'zh' | 'en',
     errors: ValidationError[],
 ): void {
     if (!fields) return;
+    const v = messages[locale].script.validation;
     for (const f of fields) {
         if (f.integer !== true) continue;
-        const v = holder[f.name];
-        if (typeof v !== 'number' || Number.isInteger(v)) continue;
-        errors.push({ blockId, message: `${fieldLabel(f.labelKey)}必须是整数（不能带小数）` });
+        const val = holder[f.name];
+        if (typeof val !== 'number' || Number.isInteger(val)) continue;
+        errors.push({ blockId, message: v.fieldMustBeInteger(fieldLabel(f.labelKey, locale)) });
     }
 }
 
 /**
- * 取字段的中文标签（{@code 'script.fields.ms'} → {@code '毫秒'}）。
- * 本文件的报错全是中文（与后端文案逐字对齐），故固定读中文表；查不到退回 key 本身不崩。
+ * 取字段在指定语言下的显示标签（如 `'script.fields.ms'` -> `'毫秒'` / `'ms'`）。
+ * 查不到时退回 `labelKey` 本身。
  */
-function fieldLabel(labelKey: string): string {
-    let cur: unknown = messages.zh;
+function fieldLabel(labelKey: string, locale: 'zh' | 'en'): string {
+    let cur: unknown = messages[locale];
     for (const seg of labelKey.split('.')) {
         if (cur === null || typeof cur !== 'object') return labelKey;
         cur = (cur as Record<string, unknown>)[seg];
@@ -731,36 +655,13 @@ function fieldLabel(labelKey: string): string {
     return typeof cur === 'string' ? cur : labelKey;
 }
 
-/**
- * 镜像后端 {@code countBlocks}：每个动作计 1；if 自身计 1 再加 then + else 递归；
- * repeat 自身计 1 再加 body 递归——<b>不乘 count</b>（硬限 50 是积木树节点数，
- * 不是展开后的执行动作数；展开数超 50 靠运行时 Budget 熔断，§9 决策）。
- */
-function countBlocks(actions: ScriptAction[]): number {
-    let count = 0;
-    for (const action of actions) {
-        count++;
-        if (action.type === 'if' || action.type === 'randomBranch') {
-            // randomBranch 与 if 同——自身计 1 + then/else 节点递归。
-            count += countBlocks(action.then ?? []) + countBlocks(action.else ?? []);
-        } else if (action.type === 'repeat' || action.type === 'repeatUntil' || action.type === 'tweenBlock') {
-            // repeatUntil 与 repeat 同——自身计 1 + body 节点递归（不乘轮数；
-            // 展开数超 50 靠运行时 Budget 熔断，§9 决策）。tweenBlock 同。
-            count += countBlocks(action.body ?? []);
-        }
-    }
-    return count;
-}
-
-/** 镜像后端 {@code blank(String)}：null / 全空白 → true。 */
+/** 镜像后端 `blank(String)`：null / 全空白 -> true。 */
 function isBlank(s: string | null | undefined): boolean {
     return s == null || s.trim().length === 0;
 }
 
 /**
- * 数值格式化：与 Java {@code Double.toString} 的整数 / 小数呈现对齐
- * （{@code 0.0} → "0.0"，{@code 2.0} → "2.0"，{@code 0.5} → "0.5"）。
- * 后端文案是 "音量需在 0.0..2.0 之间" / "音调需在 0.5..2.0 之间"，需保留 ".0" 尾缀。
+ * 数值格式化：与 Java `Double.toString` 对齐（`0.0` -> `"0.0"`，`2.0` -> `"2.0"`，`0.5` -> `"0.5"`）。
  */
 function fmt(n: number): string {
     return Number.isInteger(n) ? `${n}.0` : String(n);

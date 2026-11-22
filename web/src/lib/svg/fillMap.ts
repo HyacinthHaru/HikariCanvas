@@ -335,7 +335,7 @@ export function matrixScale(m: readonly number[]): number {
  * <p>只看元素自身属性、不做继承与默认值回落；导入主流程走
  * {@link resolveFillValue}（见文件头说明）。</p>
  *
- * PB-4 降维忽略：gradientTransform / gradientUnits=userSpaceOnUse / spreadMethod / fx,fy
+ * 暂不支持并忽略：gradientTransform / gradientUnits=userSpaceOnUse / spreadMethod / fx,fy
  */
 export function mapFill(el: Element, root?: Element): Fill | undefined {
     const raw = getAttr(el, 'fill');

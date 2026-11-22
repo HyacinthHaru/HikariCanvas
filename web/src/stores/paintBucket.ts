@@ -6,8 +6,8 @@
  *
  * 字段：
  *   - currentFill：FillCompat 联合类型（solid / linear / radial）；FillInput 组件直接绑定。
- *   - tolerance：v1.x 新增。Live Paint RDP 简化的基础 tolerance（px）。范围 [0.25, 5]，
- *     默认 0.5（与 PolygonToPath.maybeSimplify 历史 baseline 一致）。
+ *   - tolerance：Live Paint RDP 简化的基础 tolerance（px）。范围 [0.25, 5]，
+ *     默认 0.5（与 PolygonToPath.maybeSimplify baseline 一致）。
  *     - 低 = 更精细多顶点（接近原 polygon-clipping 输出）
  *     - 高 = 平滑少顶点（路径数据量更小，但视觉边缘更圆滑）
  *     PolygonToPath.maybeSimplify 把该值作为初始 tolerance；如果首轮简化后顶点仍超
@@ -18,11 +18,11 @@
 
 import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
-import type { FillCompat } from '@/types/protocol';
+import type { FillCompat, SolidFill } from '@/types/protocol';
 
 const KEY = 'hikari-canvas:paint-bucket';
 
-const DEFAULT_FILL: FillCompat = { type: 'solid', color: '#000000' };
+const DEFAULT_FILL: SolidFill = { type: 'solid', color: '#000000' };
 /** RDP 基础 tolerance 默认值；保持与 PolygonToPath 历史 baseline 一致。 */
 export const DEFAULT_TOLERANCE = 0.5;
 /** Slider 范围：低端精细 / 高端平滑。 */
@@ -70,28 +70,17 @@ function loadState(): { fill: FillCompat; tolerance: number } {
         const raw = localStorage.getItem(KEY);
         if (raw) {
             const parsed = JSON.parse(raw) as unknown;
-            // v1 旧格式：直接是 FillCompat（string 或带 type 的对象）；升级到新对象格式
-            if (typeof parsed === 'string') {
-                return { fill: parsed as FillCompat, tolerance: DEFAULT_TOLERANCE };
-            }
-            if (parsed && typeof parsed === 'object') {
+            if (parsed && typeof parsed === 'object' && 'fill' in parsed) {
                 const obj = parsed as Record<string, unknown>;
-                // 新格式：{ fill, tolerance }
-                if ('fill' in obj) {
-                    const f = obj.fill;
-                    const fill = (typeof f === 'string' || (f && typeof f === 'object' && 'type' in (f as object)))
-                        ? f as FillCompat
-                        : ({ ...DEFAULT_FILL } as FillCompat);
-                    return { fill, tolerance: clampTolerance(obj.tolerance) };
-                }
-                // 兼容 v1 老格式：原 FillCompat 对象（带 type）；升级
-                if ('type' in obj) {
-                    return { fill: obj as unknown as FillCompat, tolerance: DEFAULT_TOLERANCE };
-                }
+                const f = obj.fill;
+                const fill: FillCompat = (f && typeof f === 'object' && 'type' in (f as object))
+                    ? (f as FillCompat)
+                    : { ...DEFAULT_FILL };
+                return { fill, tolerance: clampTolerance(obj.tolerance) };
             }
         }
     } catch {
         /* ignore */
     }
-    return { fill: { ...(DEFAULT_FILL as object) } as FillCompat, tolerance: DEFAULT_TOLERANCE };
+    return { fill: { ...DEFAULT_FILL }, tolerance: DEFAULT_TOLERANCE };
 }

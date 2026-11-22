@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTransform, mul, applyPoint, IDENTITY } from '../transform';
+import { parseTransform, applyPoint, IDENTITY } from '../transform';
 
 describe('transform', () => {
     it('translate', () => { expect(applyPoint(parseTransform('translate(5,3)'), 1, 1)).toEqual([6, 4]); });

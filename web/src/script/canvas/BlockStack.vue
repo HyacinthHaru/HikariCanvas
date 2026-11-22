@@ -3,11 +3,11 @@
  * 单条 {@link ScriptRule} 的积木堆 = 触发器帽子 + 动作序列。
  *
  * <p><b>帽子</b>读 {@link TRIGGER_DEFS}（按 rule.trigger.type）渲染：梯形 / 帽子视觉（peach 底），
- * 显规则名 + 触发器 label + 触发器标量参数占位。<b>动作序列</b>用 {@link BlockNode} 递归渲染，
+ * 显规则名 + 触发类型切换 + 触发器标量参数控件。<b>动作序列</b>用 {@link BlockNode} 递归渲染，
  * 顶层动作 path = {@code `actions/${i}`}（与后端 trace blockId 同构）。</p>
  *
  * <p>堆 {@code position:absolute} 定位在 world 坐标系——坐标由父级（BlockCanvas）从
- * blockLayout 解析后通过 props.x / props.y 传入。规则名本阶段只显示（编辑留后续）。
+ * blockLayout 解析后通过 props.x / props.y 传入；规则名在顶栏编辑，帽子同步回显。
  * 触发器帽子 path = {@code 'trigger'}（trace 中触发器步的 blockId）。</p>
  */
 import { computed, inject, provide, ref } from 'vue';
@@ -39,7 +39,7 @@ const edit = useScriptEditStore();
 const locked = computed(() => project.isLocked);
 /** 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
 const dragHandles = inject(BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES);
-/** H 试跑高亮（帽子 blockId = 'trigger'）；单独 mount 走空 map 兜底。 */
+/** 试跑高亮（帽子 blockId = 'trigger'）；单独 mount 走空 map 兜底。 */
 const EMPTY_HIGHLIGHT: HighlightInject = {
     results: ref<HighlightMap>(new Map()),
     details: ref<Map<string, string>>(new Map()),
@@ -61,7 +61,7 @@ const hatDetail = computed(() => highlight.details.value.get(highlightKey(props.
  * 帽子 pointerdown：选中本规则 + 启动移堆（拖帽子移整堆）。只接管主键（左键）。
  * 中键留给 pan（不 stopPropagation 让其冒泡到 viewport）。
  *
- * <p>帽子里现在有触发类型 select + 参数控件（H2）：pointerdown 落在表单元素上时不应启动
+ * <p>帽子里有触发类型 select + 参数控件：pointerdown 落在表单元素上时不应启动
  * 移堆（否则点下拉 / 输入框就把整堆拖走）。照 BlockNode.onBlockPointerDown 范式，跳过
  * input/textarea/select/button/contentEditable 目标。</p>
  */
@@ -96,7 +96,7 @@ function onStackClick(): void {
     if (edit.selectedRuleId !== props.rule.id) edit.selectRule(props.rule.id);
 }
 
-/** 触发器定义；未知 type → null（兜底退灰色条）。H2 起标题文案改由 select 当前 option 承载。 */
+/** 触发器定义；未知 type → null（兜底退灰色条）。标题文案由 select 当前 option 承载。 */
 const triggerDef = computed(() => TRIGGER_DEFS[props.rule.trigger.type] ?? null);
 
 /** 触发器帽子色条（peach；无 def 退灰）。 */
@@ -105,7 +105,7 @@ const triggerColor = computed(() =>
 );
 
 /**
- * 触发器标量参数字段（H2：换成 {@link BlockParamInput} 真控件）。触发器字段都是标量
+ * 触发器标量参数字段（由 {@link BlockParamInput} 渲染）。触发器字段都是标量
  * （variableChange→fullName / timer→intervalSeconds / playerNear→rangeBlocks），无
  * statements/condition，故整张 fields 表直接喂控件。playerJoin/playerKill/wallReady 为空。
  */
@@ -210,7 +210,7 @@ const hatStyle = computed(() => {
         <span class="hc-hat-name">{{ rule.name }}</span>
         <span v-if="!rule.enabled" class="hc-hat-disabled">{{ t.script.close }}</span>
       </div>
-      <!-- H2：可编辑触发器 —— 触发类型 select + 当前类型参数控件（lock 时 disabled） -->
+      <!-- 可编辑触发器 —— 触发类型 select + 当前类型参数控件（lock 时 disabled） -->
       <div class="hc-hat-row hc-hat-trigger">
         <label class="hc-hat-trigger-kind">
           <span class="hc-param-label">{{ t.script.triggerKindLabel }}</span>
@@ -302,7 +302,7 @@ const hatStyle = computed(() => {
         inset 0 1px 0 color-mix(in srgb, #fff 34%, transparent);
     user-select: none;
     cursor: grab;
-    /* H：试跑高亮描边 / 发光 + hover 上浮一起过渡 */
+    /* 试跑高亮描边 / 发光 + hover 上浮一起过渡 */
     transition: box-shadow 0.12s ease, background-color 0.12s ease, filter 0.12s ease, transform 0.1s ease;
 }
 
@@ -344,7 +344,7 @@ const hatStyle = computed(() => {
 .hc-hat-trigger {
     margin-top: 4px;
 }
-/* H2：触发类型 select（label + 下拉），胶囊白底浮在帽面上 */
+/* 触发类型 select（label + 下拉），胶囊白底浮在帽面上 */
 .hc-hat-trigger-kind {
     display: inline-flex;
     align-items: center;
@@ -368,7 +368,7 @@ const hatStyle = computed(() => {
     opacity: 0.55;
     cursor: not-allowed;
 }
-/* H2：触发参数控件（BlockParamInput）——胶囊样式由控件自身承载，这里只排版 */
+/* 触发参数控件（BlockParamInput）——胶囊样式由控件自身承载，这里只排版 */
 .hc-hat-param {
     display: inline-flex;
     align-items: center;

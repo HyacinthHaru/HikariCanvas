@@ -13,7 +13,6 @@ const props = defineProps<{
 }>();
 
 const visible = ref(false);
-const triggerRef = ref<HTMLElement | null>(null);
 const top = ref(0);
 const left = ref(0);
 const computedPlacement = ref<'top' | 'bottom' | 'left' | 'right'>('bottom');
@@ -44,9 +43,9 @@ function position(el: HTMLElement, placement: 'top' | 'bottom' | 'left' | 'right
     }
 }
 
-function show(ev: MouseEvent) {
+function show(ev?: MouseEvent | FocusEvent) {
     if (showTimer) window.clearTimeout(showTimer);
-    const target = ev.currentTarget as HTMLElement;
+    const target = (ev?.currentTarget as HTMLElement | null) ?? null;
     showTimer = window.setTimeout(() => {
         if (!target) return;
         // 尊重 placement prop（默认 bottom）。视口边界自动翻转留待后续。
@@ -91,7 +90,6 @@ onUnmounted(() => {
 
 <template>
   <span
-    ref="triggerRef"
     class="inline-flex"
     @mouseenter="show"
     @mouseleave="hide"
@@ -122,13 +120,12 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* M24-B：用 Catppuccin surface tones 做 tooltip，避免硬编码 #18181b / #1f2937。
-   两个 flavor（latte 浅 + frappe/macchiato 深）通过 CSS 变量自适应。 */
+/* 用 Catppuccin surface tones 做 tooltip，通过 CSS 变量在各主题 flavor 下自适应。 */
 .hc-tooltip {
     position: fixed;
     z-index: 100;
     pointer-events: none;
-    /* transform 由 :style 按 placement 动态注入（P3-110）；此处不再写死 translateX(-50%) */
+    /* transform 由 :style 按 placement 动态注入 */
     padding: 0.35rem 0.6rem;
     font-size: 11px;
     line-height: 1.3;
@@ -136,7 +133,7 @@ onUnmounted(() => {
     background: var(--ctp-surface0);
     color: var(--foreground);
     border: 1px solid var(--ctp-surface1);
-    /* P3-110：改 normal + overflow-wrap，让 max-width:280px 对长文本生效（原 nowrap 使其失效横向溢出） */
+    /* normal + overflow-wrap 让 max-width:280px 对长文本生效 */
     white-space: normal;
     overflow-wrap: anywhere;
     max-width: 280px;

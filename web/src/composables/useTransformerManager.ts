@@ -7,13 +7,13 @@ import { scalePathD } from '@/render/pathScale';
 import { useLockGuard } from './useLockGuard';
 
 interface TransformEvt { target: {
-    x: () => number; y: () => number;
-    width: () => number; height: () => number;
-    scaleX: () => number; scaleY: () => number;
-    rotation: () => number;
-    scaleX(v: number): void; scaleY(v: number): void;
-    width(v: number): void; height(v: number): void;
-    rotation(v: number): void;
+    x(): number;
+    y(): number;
+    width(): number; width(v: number): void;
+    height(): number; height(v: number): void;
+    scaleX(): number; scaleX(v: number): void;
+    scaleY(): number; scaleY(v: number): void;
+    rotation(): number; rotation(v: number): void;
 } }
 
 function normalizeRotation(deg: number): number {

@@ -15,10 +15,9 @@ import VariablePicker from '@/components/variables/VariablePicker.vue';
 import VariableChipEditor from '@/components/variables/VariableChipEditor.vue';
 import TextElementVariableHints from '@/components/variables/TextElementVariableHints.vue';
 import { layoutText, charAdvance, ASCENT_RATIO } from '@/render/TextLayout';
-import { ensureLoaded as ensureFontLoaded } from '@/render/FontLoader';
+import { ensureLoaded as ensureFontLoaded, loadFontList, type FontInfo } from '@/render/FontLoader';
 import { useI18n } from '@/i18n';
 import { useProjectStore } from '@/stores/project';
-import { getWsClient } from '@/network/wsClient';
 import {
     MAX_FONT_SIZE, MAX_GLOW_RADIUS, MAX_LETTER_SPACING, MAX_LINE_HEIGHT, MAX_SHADOW_OFFSET,
     MAX_STROKE_WIDTH, MAX_TEXT_LEN, MIN_LETTER_SPACING, MIN_LINE_HEIGHT,
@@ -26,29 +25,10 @@ import {
 } from '@/constants/elementLimits';
 import type { TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
 
-// 字体下拉动态化 —— fetch /api/font/list 而非读硬编码 FONT_META 白名单。
-// 内置 + 用户字体都来自后端，displayName / source 分组在 UI 区分。
-interface FontInfo {
-    id: string;
-    displayName: string;
-    source: 'builtin' | 'user';
-    format: 'ttf' | 'otf';
-    pixelated: boolean;
-    nativeSize: number;
-}
-
 const availableFonts = ref<FontInfo[]>([]);
 
 onMounted(async () => {
-    try {
-        const resp = await fetch('/api/font/list');
-        if (resp.ok) {
-            const data = await resp.json();
-            availableFonts.value = data.fonts ?? [];
-        }
-    } catch (e) {
-        console.warn('[TextElementSection] /api/font/list failed:', e);
-    }
+    availableFonts.value = await loadFontList();
 });
 
 const builtInFonts = computed(() => availableFonts.value.filter((f) => f.source === 'builtin'));
@@ -66,81 +46,30 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const project = useProjectStore();
-const ws = getWsClient();
 
 // ---------- chip 编辑器 + 变量 picker 集成 ----------
 // Notion-style chip 编辑器替代了原先的 textarea：占位符 ${var:X} 渲染为 pill 而非字面字符串。
-// chip editor 内部以 lexical core 自包装；本组件作为 caller 只负责 picker 弹出 / chip 改绑定。
+// chip editor 内部以 lexical core 自包装；本组件负责通过"插入变量"按钮弹出 picker 插入 chip。
 const chipEditorRef = ref<InstanceType<typeof VariableChipEditor> | null>(null);
 const pickerOpen = ref(false);
-/** picker 触发上下文：插入新 chip / 改已有 chip 的 rawName。 */
-type PickerMode =
-    | { kind: 'insertNew' }
-    | { kind: 'replaceChip'; oldRawName: string };
-const pickerMode = ref<PickerMode>({ kind: 'insertNew' });
 
 function openPickerFromButton() {
-    pickerMode.value = { kind: 'insertNew' };
     pickerOpen.value = true;
-}
-
-function onChipEditorInsertRequest() {
-    pickerMode.value = { kind: 'insertNew' };
-    pickerOpen.value = true;
-}
-
-function onChipEditorEditRequest(payload: { rawName: string; fallback: string | null }) {
-    pickerMode.value = { kind: 'replaceChip', oldRawName: payload.rawName };
-    pickerOpen.value = true;
-}
-
-/**
- * 点击红色 (error) chip → 弹 native confirm "是否立即创建？"。
- * 仅支持 user 域补创（短名无 / 或 user/X）；其他 namespace（system / scoreboard /
- * papi / plugin / schedule）由对应 Provider 自动注册，不在编辑器手动路径。
- */
-function onChipEditorCreateRequest(payload: { rawName: string }) {
-    if (typeof window === 'undefined') return;
-    const ok = window.confirm(
-        `${t.value.variables.chipError.notFound.replace('{name}', payload.rawName)}\n` +
-        `${t.value.variables.chipError.createConfirm}`,
-    );
-    if (!ok) return;
-    const trimmed = payload.rawName.trim();
-    let userKey: string;
-    if (trimmed.startsWith('user/')) userKey = trimmed.substring('user/'.length);
-    else if (trimmed.indexOf('/') < 0 && trimmed.indexOf('.') < 0) userKey = trimmed;
-    else {
-        window.alert(t.value.variables.chipError.onlyUserCanCreate);
-        return;
-    }
-    ws.send('variable.create', {
-        name: userKey,
-        type: 'STRING',
-        defaultValue: '',
-    });
 }
 
 function onPickerSelect(shortName: string) {
     const editor = chipEditorRef.value;
     if (!editor) {
         pickerOpen.value = false;
-        pickerMode.value = { kind: 'insertNew' };
         return;
     }
-    if (pickerMode.value.kind === 'replaceChip') {
-        editor.replaceVariableChip(pickerMode.value.oldRawName, shortName, null);
-    } else {
-        editor.insertVariableChip(shortName, null);
-    }
+    editor.insertVariableChip(shortName, null);
     pickerOpen.value = false;
-    pickerMode.value = { kind: 'insertNew' };
     editor.focus();
 }
 
 function onPickerClose() {
     pickerOpen.value = false;
-    pickerMode.value = { kind: 'insertNew' };
 }
 
 /**
@@ -271,17 +200,10 @@ function patchGlow(partial: Partial<Glow>) {
     </summary>
     <div class="pt-1.5 space-y-2">
       <div class="hc-text-row">
-        <!--
-          0.4.2 bugfix（Bug B 第 6 次修，2026-05-21）：把外层 <label> 改为 <div>。
-          HTML <label> 的 click delegation：点击 label 内任何位置 → 浏览器自动转发 click
-          给 label 内首个 control（"插入变量"按钮也在 label 内）→ 直接触发 openPickerFromButton
-          → 弹 picker。这是用户报"点击文本框就弹 picker"的真根因——之前 5 次都查错路径
-          （chip click / detect / dirtyLeaves / dblclick 全无关）。
-          chip editor 内 contenteditable 本身已经处理 focus，不需要 label 关联。
-        -->
+        <!-- 外层用 div 而非 label，避免点击文本区触发内部按钮的 label click 委托 -->
         <div class="flex flex-col gap-0.5">
           <span class="text-xs text-[color:var(--muted-foreground)] flex items-center justify-between">
-            <span>text</span>
+            <span>{{ t.properties.textContent }}</span>
             <Tooltip :text="t.variables.picker.insertButtonTooltip">
               <button
                 type="button"
@@ -303,9 +225,6 @@ function patchGlow(partial: Partial<Glow>) {
             :multi-line="true"
             :disabled="locked"
             @update:text="onTextChipUpdate"
-            @insert-variable-request="onChipEditorInsertRequest"
-            @edit-variable-request="onChipEditorEditRequest"
-            @create-variable-request="onChipEditorCreateRequest"
           />
         </div>
         <!-- VariablePicker popover -->
@@ -450,17 +369,17 @@ function patchGlow(partial: Partial<Glow>) {
       <!-- stroke -->
       <div>
         <label class="flex items-center justify-between">
-          <span>stroke</span>
+          <span>{{ t.properties.stroke }}</span>
           <input type="checkbox" :checked="!!textEffects().stroke" @change="toggleStroke">
         </label>
         <div v-if="textEffects().stroke" class="grid grid-cols-2 gap-2 pt-1.5">
           <label class="flex flex-col gap-0.5">
-            <span class="text-xs text-[color:var(--muted-foreground)]">width</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.strokeWidth }}</span>
             <input type="number" min="0" :max="MAX_STROKE_WIDTH" class="hc-input" :value="textEffects().stroke!.width"
                    @input="(e) => patchStroke({ width: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
-            <span class="text-xs text-[color:var(--muted-foreground)]">color</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.strokeColor }}</span>
             <ColorInput :model-value="textEffects().stroke!.color"
                         @update:model-value="(v) => patchStroke({ color: v })" />
           </label>
@@ -469,24 +388,24 @@ function patchGlow(partial: Partial<Glow>) {
       <!-- shadow -->
       <div>
         <label class="flex items-center justify-between">
-          <span>shadow</span>
+          <span>{{ t.properties.shadow }}</span>
           <input type="checkbox" :checked="!!textEffects().shadow" @change="toggleShadow">
         </label>
         <div v-if="textEffects().shadow" class="grid grid-cols-3 gap-2 pt-1.5">
           <label class="flex flex-col gap-0.5">
-            <span class="text-xs text-[color:var(--muted-foreground)]">dx</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.shadowDx }}</span>
             <input type="number" :min="-MAX_SHADOW_OFFSET" :max="MAX_SHADOW_OFFSET" class="hc-input"
                    :value="textEffects().shadow!.dx"
                    @input="(e) => patchShadow({ dx: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
-            <span class="text-xs text-[color:var(--muted-foreground)]">dy</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.shadowDy }}</span>
             <input type="number" :min="-MAX_SHADOW_OFFSET" :max="MAX_SHADOW_OFFSET" class="hc-input"
                    :value="textEffects().shadow!.dy"
                    @input="(e) => patchShadow({ dy: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
-            <span class="text-xs text-[color:var(--muted-foreground)]">color</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.shadowColor }}</span>
             <ColorInput :model-value="textEffects().shadow!.color"
                         @update:model-value="(v) => patchShadow({ color: v })" />
           </label>
@@ -495,17 +414,17 @@ function patchGlow(partial: Partial<Glow>) {
       <!-- glow -->
       <div>
         <label class="flex items-center justify-between">
-          <span>glow</span>
+          <span>{{ t.properties.glow }}</span>
           <input type="checkbox" :checked="!!textEffects().glow" @change="toggleGlow">
         </label>
         <div v-if="textEffects().glow" class="grid grid-cols-2 gap-2 pt-1.5">
           <label class="flex flex-col gap-0.5">
-            <span class="text-xs text-[color:var(--muted-foreground)]">radius</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.glowRadius }}</span>
             <input type="number" min="0" :max="MAX_GLOW_RADIUS" class="hc-input" :value="textEffects().glow!.radius"
                    @input="(e) => patchGlow({ radius: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
-            <span class="text-xs text-[color:var(--muted-foreground)]">color</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.glowColor }}</span>
             <ColorInput :model-value="textEffects().glow!.color"
                         @update:model-value="(v) => patchGlow({ color: v })" />
           </label>
@@ -516,35 +435,7 @@ function patchGlow(partial: Partial<Glow>) {
 </template>
 
 <style scoped>
-.hc-field-label {
-    font-size: 10px;
-    color: var(--muted-foreground);
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-}
-.hc-input {
-    width: 100%;
-    padding: 0.25rem 0.375rem;
-    font-size: 0.75rem;
-    line-height: 1rem;
-    border-radius: 4px;
-    background: var(--background);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-}
-.hc-input:focus {
-    outline: none;
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
-}
-textarea.hc-input {
-    min-height: 2.5rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    resize: none;
-}
-
-/* P2-H：text 区 + VariablePicker popover 包装 */
+/* text 区 + VariablePicker popover 包装 */
 .hc-text-row {
     position: relative;
     display: flex;

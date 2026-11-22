@@ -1,15 +1,11 @@
 <script setup lang="ts">
 /**
- * 让插件接管 / 取消绑定对话框（简化版）。
+ * 变量插件绑定状态对话框。
  *
- * <p>Plugin Push API 落地前，没有可绑定的插件可枚举。当前简化版：</p>
  * <ul>
- *   <li>未绑：显示 empty state 提示 "插件推送 API 启用后此处显示插件列表"；</li>
- *   <li>已绑（即 {@link Variable.source} 非 manual / null）：显示当前绑定 + "取消绑定" 按钮。</li>
+ *   <li>已绑定外部插件（{@link Variable.source} 非空且非 manual / system / papi）：展示当前绑定插件名并提供「取消绑定」操作（{@code wsClient.sendVariableBind(fullName, null)}）。</li>
+ *   <li>未绑定：展示空状态提示。</li>
  * </ul>
- * 取消绑定走 {@code wsClient.sendVariableBind(fullName, null)}。
- *
- * <p>后续整体替换为插件列表 picker。</p>
  */
 import { computed, ref } from 'vue';
 import { X, Link2 } from 'lucide-vue-next';

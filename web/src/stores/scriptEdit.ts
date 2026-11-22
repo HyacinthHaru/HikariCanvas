@@ -115,21 +115,22 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         activeElementBinding.value = null;
     }
 
+    const scripts = useScriptStore();
+    const project = useProjectStore();
+    const net = useNetworkStore();
+    const ui = useUiStore();
+
     /**
      * 对当前 workingCopy 跑前端 validator 镜像得所有错误（空数组 = 合法）。
      * 无 workingCopy → 空数组。UI（ScriptEditorOverlay）读它显红字 banner；{@link doSave}
      * 在 send 前也读它——有错则<b>不 send 且保留 dirty</b>（防"拖完保存才被后端打回"）。
      */
     const validationErrors = computed<ValidationError[]>(() =>
-        workingCopy.value ? validateRule(workingCopy.value) : [],
+        workingCopy.value ? validateRule(workingCopy.value, ui.locale) : [],
     );
 
     /** 防抖 save 的 timer 句柄（自实现，便于 flushSave 立即触发 + 测试 fake timer 控制）。 */
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const scripts = useScriptStore();
-    const project = useProjectStore();
-    const net = useNetworkStore();
 
     // ---------- 选规则 / 关闭 ----------
 
@@ -274,7 +275,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
             selectRule(newId);
             return newId;
         } catch (e) {
-            net.lastError = `新建规则失败：${e instanceof Error ? e.message : String(e)}`;
+            net.lastError = messages[ui.locale].script.createRuleError(e instanceof Error ? e.message : String(e));
             return null;
         }
     }
@@ -374,7 +375,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
             dirty.value = false;
         }
         getWsClient().sendScriptDelete(ruleId).catch((e) => {
-            net.lastError = `删除规则失败：${e instanceof Error ? e.message : String(e)}`;
+            net.lastError = messages[ui.locale].script.deleteRuleError(e instanceof Error ? e.message : String(e));
         });
     }
 
@@ -434,7 +435,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
             if (now && selectedRuleId.value === ruleId && now.enabled === enabled) {
                 workingCopy.value = { ...now, enabled: before };
             }
-            net.lastError = `切换开关失败：${e instanceof Error ? e.message : String(e)}`;
+            net.lastError = messages[ui.locale].script.toggleRuleError(e instanceof Error ? e.message : String(e));
         });
     }
 
@@ -625,7 +626,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
                 if (selectedRuleId.value === ruleId) {
                     // 还在这条规则上：照旧标回脏，下次 scheduleSave / flush 自然重试。
                     dirty.value = true;
-                    net.lastError = `自动保存失败：${detail}`;
+                    net.lastError = messages[ui.locale].script.autoSaveError(detail);
                     return;
                 }
                 // 已经切走：不能碰当前规则的 dirty（那是另一条规则的状态）。把快照留下，

@@ -29,7 +29,7 @@ const unlocked = computed(() => walls.value.filter(w => w.publishedAt == null));
  * 画布清单是匿名端点，但后端只吐**裁过字段**的公开投影
  * （`WallRepo.PublicSummary`：wallId / alias / 尺寸 / 锁状态 / 更新时间）。
  *
- * <p>作者名、世界、精确坐标、朝向 0.9.17 起不再下发——本页是 pre-auth 落地页，
+ * <p>作者名、世界、精确坐标、朝向不在匿名端点下发——本页是 pre-auth 落地页，
  * 天然没有 sessionId 没法鉴权，而公网反代是文档明确支持的部署形态且反代层不做鉴权。
  * 那四类字段合起来就是一张「谁在哪画了什么、朝向如何」的藏宝图，不能匿名公开。
  * 要看完整信息走游戏内 `/canvas list`。</p>
@@ -278,8 +278,7 @@ function previewUrl(w: WallSummary): string {
 </template>
 
 <style scoped>
-/* M24-B：M3 surface elevation——hover 不再用 box-shadow + translateY 营造浮动
-   AI 审美，而是改用 surface 色调加深（var(--accent) ≈ surface1）+ border 高亮。 */
+/* 卡片采用 M3 surface 色调加深（var(--accent)）与边框高亮表达悬停态。 */
 .hc-wall-card {
     border: 1px solid var(--border);
     border-radius: var(--radius);

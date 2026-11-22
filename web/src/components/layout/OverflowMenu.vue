@@ -6,7 +6,7 @@ import Tooltip from '@/components/ui/Tooltip.vue';
 import { useI18n } from '@/i18n';
 
 /**
- * 0.7.4：TopBar 溢出菜单。
+ * TopBar 溢出菜单。
  *
  * 用法：当右侧容器空间不够展示全部按钮时，低频按钮折叠到此 … popover 中。
  * popover 里纵向列出项（图标 + 文字标签），比纯图标更易认。

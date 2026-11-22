@@ -1036,3 +1036,28 @@ describe('validateRule — 整数字段（前端镜像后端 requireInt）', () 
         expect(errs.some((e) => e.message === '重复次数必须是整数（不能带小数）')).toBe(true);
     });
 });
+
+// ---------- 英文 locale 校验文案 ----------
+
+describe('validateRule — en locale', () => {
+    it('returns English validation messages without CJK characters', () => {
+        const errs = validateRule(
+            rule({
+                name: '',
+                trigger: { type: 'timer', intervalSeconds: 1.5 },
+                actions: [
+                    { type: 'wait', ms: 10 },
+                    { type: 'repeat', count: 2.5, body: [] },
+                ],
+            }),
+            'en',
+        );
+        expect(errs.length).toBeGreaterThanOrEqual(4);
+        for (const e of errs) {
+            expect(e.message).not.toMatch(/[\u3400-\u9fff\uf900-\ufaff]/);
+        }
+        expect(errs.some((e) => e.message === 'Rule name cannot be empty')).toBe(true);
+        expect(errs.some((e) => e.message === 'Interval (s) must be an integer (no decimals)')).toBe(true);
+        expect(errs.some((e) => e.message === 'Repeat count must be an integer (no decimals)')).toBe(true);
+    });
+});

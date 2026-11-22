@@ -3,7 +3,11 @@ import { computed } from 'vue';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
-import { Wifi, WifiOff, Loader2, ShieldAlert, MousePointer2, Move, Lock, Unlock } from 'lucide-vue-next';
+import {
+    Wifi, WifiOff, Loader2, ShieldAlert,
+    MousePointer2, Move, Hand, Minus, MoveRight, Circle, Star, Brush, PaintBucket,
+    Lock, Unlock,
+} from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 
@@ -39,10 +43,32 @@ const statusLabel = computed(() => {
 const noticeText = computed(() =>
     net.status === 'error' ? null : net.lastError);
 
-// lock-state：published 砍 → locked / unlocked
 const wallStateLabel = computed(() => {
     if (project.isLocked) return t.value.status.locked;
     return t.value.status.unlocked;
+});
+
+const activeToolMeta = computed(() => {
+    switch (ui.activeTool) {
+        case 'select':
+            return { icon: MousePointer2, tip: t.value.tools.selectTool, label: t.value.status.toolSelect };
+        case 'move':
+            return { icon: Move, tip: t.value.tools.moveTool, label: t.value.status.toolMove };
+        case 'hand':
+            return { icon: Hand, tip: t.value.tools.handTool, label: t.value.status.toolHand };
+        case 'line':
+            return { icon: Minus, tip: t.value.tools.lineTool, label: t.value.status.toolLine };
+        case 'arrow':
+            return { icon: MoveRight, tip: t.value.tools.arrowTool, label: t.value.status.toolArrow };
+        case 'circle':
+            return { icon: Circle, tip: t.value.tools.circleTool, label: t.value.status.toolCircle };
+        case 'star':
+            return { icon: Star, tip: t.value.tools.starTool, label: t.value.status.toolStar };
+        case 'brush':
+            return { icon: Brush, tip: t.value.tools.brushTool, label: t.value.status.toolBrush };
+        case 'paint-bucket':
+            return { icon: PaintBucket, tip: t.value.tools.paintBucketTool, label: t.value.status.toolPaintBucket };
+    }
 });
 </script>
 
@@ -58,11 +84,10 @@ const wallStateLabel = computed(() => {
           {{ statusLabel }}
         </span>
       </Tooltip>
-      <Tooltip :text="ui.activeTool === 'select' ? t.tools.selectTool : t.tools.moveTool">
+      <Tooltip :text="activeToolMeta.tip">
         <span class="flex items-center gap-1">
-          <MousePointer2 v-if="ui.activeTool === 'select'" class="size-3" />
-          <Move v-else class="size-3" />
-          {{ ui.activeTool === 'select' ? t.status.toolSelect : t.status.toolMove }}
+          <component :is="activeToolMeta.icon" class="size-3" />
+          {{ activeToolMeta.label }}
         </span>
       </Tooltip>
       <span v-if="net.wallSize" class="flex items-center gap-1">
@@ -84,7 +109,7 @@ const wallStateLabel = computed(() => {
     </div>
     <div class="flex items-center gap-3">
       <span v-if="project.state">
-        {{ t.status.elements(project.state.elements.length, project.state.version) }}
+        {{ t.status.elements(project.allElements.length, project.state.version) }}
       </span>
       <Tooltip v-if="net.sessionId" :text="t.status.sessionFull(net.sessionId)">
         <span class="font-mono opacity-70">{{ t.status.session(net.sessionId) }}</span>

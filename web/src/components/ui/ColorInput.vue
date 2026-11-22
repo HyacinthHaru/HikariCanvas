@@ -152,7 +152,7 @@ function toggle() {
     <button
       type="button"
       class="hc-color-trigger"
-      :title="`${t.tooltips.colorPicker}（${modelValue}）`"
+      :title="`${t.tooltips.colorPicker} (${modelValue})`"
       @click="toggle"
     >
       <span class="hc-swatch-outer hc-checkerboard">
@@ -305,8 +305,7 @@ function toggle() {
     white-space: nowrap;
 }
 
-/* M24-B：棋盘格背景从硬编码 #ccc 改为 Catppuccin surface2（在 Latte / Frappé / Macchiato
-   三个 flavor 下都能与背景区分；alpha 透明时露出）。 */
+/* 棋盘格采用 Catppuccin surface2，在各主题 flavor 下均与背景区分，半透明时透出。 */
 .hc-checkerboard {
     background-image:
         linear-gradient(45deg, var(--ctp-surface2) 25%, transparent 25%, transparent 75%, var(--ctp-surface2) 75%),

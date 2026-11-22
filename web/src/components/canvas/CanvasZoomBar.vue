@@ -166,7 +166,7 @@ function cancelZoomEdit() {
     border-color: var(--ring);
     box-shadow: 0 0 0 1px var(--ring);
 }
-/* 0.7.4：导航快捷键提示——小字、半透明，不挡操作区 */
+/* 导航快捷键提示——小字、半透明，不挡操作区 */
 .hc-nav-hint {
     font-size: 0.65rem;
     white-space: nowrap;

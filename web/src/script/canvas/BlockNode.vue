@@ -17,13 +17,12 @@
  * <p>块根挂 {@code data-block-path}（= props.path）——供测量插槽矩形、按
  * trace blockId 高亮定位。lock 态（project.isLocked）下拖拽 / 交互按 lock 守卫禁用。</p>
  */
-import { computed, inject } from 'vue';
+import { computed, inject, ref } from 'vue';
 import { Crosshair } from 'lucide-vue-next';
-import type { ScriptAction } from '@/types/protocol';
+import type { Easing, ScriptAction } from '@/types/protocol';
 import { useI18n } from '@/i18n';
 import { useProjectStore } from '@/stores/project';
 import { useScriptEditStore } from '@/stores/scriptEdit';
-import { ref } from 'vue';
 import { defFor, FRIENDLY_ELEMENT_DEFS, type FieldDef } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES } from './dragInjection';
@@ -32,7 +31,6 @@ import { highlightKey, resultColorVar, type HighlightMap } from './traceHighligh
 import BlockParamInput, { type CommandValue } from '../params/BlockParamInput.vue';
 import ConditionBuilder from '../params/ConditionBuilder.vue';
 import EasingCurveEditor from '@/components/timeline/EasingCurveEditor.vue';
-import type { Easing } from '@/types/protocol';
 
 const props = defineProps<{
     /** 本块对应的动作（含 if）。 */
@@ -47,7 +45,7 @@ const edit = useScriptEditStore();
 /** 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
 const dragHandles = inject(BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES);
 /**
- * H 阶段试跑高亮（overlay provide；单独 mount 时走空 map 兜底——查不到高亮，静态渲染）。
+ * 试跑高亮（overlay provide；单独 mount 时走空 map 兜底——查不到高亮，静态渲染）。
  * 用常量空 ref 作默认值，避免每个未注入场景都新建 ref。
  */
 const EMPTY_HIGHLIGHT: HighlightInject = {
@@ -231,7 +229,7 @@ const locked = computed(() => project.isLocked);
 /** 是否 runCommand 块（command 复合字段特殊处理：templateId + params 合一控件）。 */
 const isRunCommand = computed(() => props.action.type === 'runCommand');
 
-// ---------- H：试跑高亮（按本块 path 查高亮 map）----------
+// ---------- 试跑高亮（按本块 path 查高亮 map）----------
 
 /** 本块在高亮 map 里的 key（规则 id + path）；没有规则上下文时为 null = 永远查不到。 */
 const ownHighlightKey = computed(() =>
@@ -564,7 +562,7 @@ const needSelectTitle = computed(() =>
       aria-hidden="true"
     />
 
-    <!-- 头部：标题 + 标量参数槽（F：真表单控件 BlockParamInput） -->
+    <!-- 头部：标题 + 标量参数槽（BlockParamInput） -->
     <div class="hc-block-head">
       <span class="hc-block-title">{{ title }}</span>
 
@@ -811,7 +809,7 @@ const needSelectTitle = computed(() =>
     padding: var(--bn-py-t) var(--bn-px) var(--bn-py-b) var(--bn-px);
     user-select: none;
     cursor: grab;
-    /* H：试跑高亮 + hover 上浮一起过渡 */
+    /* 试跑高亮 + hover 上浮一起过渡 */
     transition: box-shadow 0.12s ease, background-color 0.12s ease, filter 0.12s ease, transform 0.1s ease;
 }
 
@@ -862,7 +860,7 @@ const needSelectTitle = computed(() =>
         0 1px 0 color-mix(in srgb, var(--hc-block-color, var(--border)) 60%, #000),
         0 0 3px color-mix(in srgb, #000 12%, transparent);
 }
-/* F：参数控件（BlockParamInput）外壳——不再加浅底块，胶囊样式由控件自身承载；
+/* 参数控件（BlockParamInput）外壳——不再加浅底块，胶囊样式由控件自身承载；
  * 这里只保证内联排版 + 不撑破块宽。元素字段壳里还含一个「从预览点选」小按钮，留点间距。 */
 .hc-block-param-input {
     display: inline-flex;
@@ -921,12 +919,6 @@ const needSelectTitle = computed(() =>
 /* 块面上的字段标签（如 if 条件 / then / else 前缀）走块前景色的柔和版 */
 .hc-param-label {
     color: var(--hc-block-fg-soft);
-    white-space: nowrap;
-}
-.hc-param-value {
-    color: var(--hc-block-fg);
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
 }
 

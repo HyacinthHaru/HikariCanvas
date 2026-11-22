@@ -8,7 +8,7 @@
  * fullName → 读 {@link useVariableStore} mirror 的 currentValue（响应 state.patch 实时更新）+
  * {@link useVariableAliasStore} 的别名（优先显示别名，与 chip 编辑器同口径）。</p>
  *
- * <p><b>常驻面板，非 popover</b>（记忆 reference_variablepicker_reuse 的教训）：absolute 浮在画布右下角，
+ * <p><b>常驻面板，非 popover</b>：absolute 浮在画布右下角，
  * 不挂 onClickOutside，点画布 / 拖积木都不会误关。只有用户点折叠按钮才收起；折叠态记 localStorage。
  * 未选规则 / 规则无变量 → 各自空状态文案。无 workingCopy 时面板仍显示（提示先选规则），不闪烁。</p>
  *
@@ -118,7 +118,7 @@ const hasVars = computed(() => rows.value.length > 0);
 /** 行内 ±1 写回变量（发 variable.set）。失败设 lastError；乐观本地值由行组件松手后同步纠正。 */
 function onSet(fullName: string, value: string): void {
     getWsClient().sendVariableSet(fullName, value).catch((e) => {
-        net.lastError = `改变量失败：${e instanceof Error ? e.message : String(e)}`;
+        net.lastError = t.value.script.varWatch.setFailed(e instanceof Error ? e.message : String(e));
     });
 }
 </script>
@@ -242,42 +242,5 @@ function onSet(fullName: string, value: string): void {
     display: flex;
     flex-direction: column;
     gap: 1px;
-}
-.hc-var-watch-row {
-    display: flex;
-    align-items: baseline;
-    gap: 0.3125rem;
-    padding: 0.1875rem 0.375rem;
-    border-radius: var(--radius-sm, 5px);
-    font-size: 0.75rem;
-    line-height: 1.3;
-}
-.hc-var-watch-row:hover {
-    background: var(--accent);
-}
-.hc-var-watch-name {
-    color: var(--ctp-mauve, var(--primary));
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 55%;
-    flex-shrink: 0;
-}
-.hc-var-watch-eq {
-    color: var(--muted-foreground);
-    flex-shrink: 0;
-}
-.hc-var-watch-val {
-    color: var(--foreground);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-}
-/* 缺失（store 查不到）：值用柔和橙提示"还没有这个变量 / 尚未推送"。 */
-.hc-var-watch-row-missing .hc-var-watch-val {
-    color: var(--ctp-peach, var(--muted-foreground));
-    font-style: italic;
 }
 </style>

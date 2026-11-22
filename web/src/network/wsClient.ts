@@ -1,12 +1,19 @@
 import type {
+    Easing,
     Envelope,
-    ReadyPayload,
     ErrorPayload,
+    KfValue,
+    LoopMode,
+    PatchOp,
+    ReadyPayload,
+    ScriptRule,
+    ScriptTracePayload,
     StatePatchPayload,
     StateSnapshotPayload,
-    PatchOp,
-    ScriptTracePayload,
+    TriggerConfig,
 } from '@/types/protocol';
+import type { AutoTimetableOptions, RailLine, RailRun, RailStation, WallRailBinding } from '@/types/rail';
+import type { ScheduleEntryAck, SchedulePrecision, WallSchedule } from '@/types/schedule';
 import type { Variable, VariablePatch, VarType } from '@/types/variable';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -26,7 +33,7 @@ import { messages } from '@/i18n/messages';
  */
 function localizeErrorCode(code: string, fallbackMessage?: string): string {
     const ui = useUiStore();
-    const errs = messages[ui.locale]?.errors as Record<string, string> | undefined;
+    const errs = messages[ui.locale]?.errors as Record<string, unknown> | undefined;
     if (errs && typeof errs[code] === 'string') return errs[code];
     if (errs && typeof errs.UNKNOWN === 'string') {
         // 兜底文案 + 附原 code，便于排查 / 反馈。未映射 code 时优先展示
@@ -180,7 +187,7 @@ export class WsClient {
             return;
         }
         if (!token) {
-            net.setConnectionError('no token; open editor via /canvas confirm in-game');
+            net.setConnectionError(localizeErrorCode('TOKEN_MISSING'));
             net.pushLog('err', net.lastError!);
             return;
         }
@@ -333,9 +340,9 @@ export class WsClient {
     // 5 个 op 都走 ack 通道；ScheduleStore mirror 由各方法返回的 payload 自己更新。
 
     /** {@code schedule.list}：查当前 wall 的完整时刻表。返 ack payload {schedule: WallSchedule|null}。 */
-    sendScheduleList(): Promise<{ schedule: import('@/types/schedule').WallSchedule | null }> {
+    sendScheduleList(): Promise<{ schedule: WallSchedule | null }> {
         return this.sendWithAck('schedule.list', {}, 8000)
-                .then((p) => p as { schedule: import('@/types/schedule').WallSchedule | null });
+                .then((p) => p as { schedule: WallSchedule | null });
     }
 
     /**
@@ -344,32 +351,32 @@ export class WsClient {
      */
     sendScheduleUpsert(
         stationName: string | null,
-        precision?: import('@/types/schedule').SchedulePrecision,
-    ): Promise<{ stationName: string | null; precision?: import('@/types/schedule').SchedulePrecision }> {
+        precision?: SchedulePrecision,
+    ): Promise<{ stationName: string | null; precision?: SchedulePrecision }> {
         const payload: { stationName: string | null; precision?: string } = { stationName };
         if (precision != null) payload.precision = precision;
         return this.sendWithAck('schedule.upsert', payload)
                 .then((p) => p as {
                     stationName: string | null;
-                    precision?: import('@/types/schedule').SchedulePrecision;
+                    precision?: SchedulePrecision;
                 });
     }
 
     /** {@code schedule.entry.add}：添加时刻表条目；返新生成的 id + 字段回填。 */
     sendScheduleEntryAdd(
         departureTime: string, destination: string | null, sortOrder: number,
-    ): Promise<import('@/types/schedule').ScheduleEntryAck> {
+    ): Promise<ScheduleEntryAck> {
         return this.sendWithAck('schedule.entry.add', { departureTime, destination, sortOrder })
-                .then((p) => p as import('@/types/schedule').ScheduleEntryAck);
+                .then((p) => p as ScheduleEntryAck);
     }
 
     /** {@code schedule.entry.update}：按 id 改条目。 */
     sendScheduleEntryUpdate(
         id: number, departureTime: string, destination: string | null, sortOrder: number,
-    ): Promise<import('@/types/schedule').ScheduleEntryAck> {
+    ): Promise<ScheduleEntryAck> {
         return this.sendWithAck('schedule.entry.update', {
             id, departureTime, destination, sortOrder,
-        }).then((p) => p as import('@/types/schedule').ScheduleEntryAck);
+        }).then((p) => p as ScheduleEntryAck);
     }
 
     /** {@code schedule.entry.delete}：按 id 删条目。 */
@@ -381,9 +388,9 @@ export class WsClient {
     // ---------- 铁路网络（协议见 docs/dynamic-data.md §18.7）----------
 
     /** 列所有线路（含 owner / color 等元数据）。 */
-    sendRailLineList(): Promise<{ lines: import('@/types/rail').RailLine[] }> {
+    sendRailLineList(): Promise<{ lines: RailLine[] }> {
         return this.sendWithAck('rail.line.list', {}, 8000)
-                .then((p) => p as { lines: import('@/types/rail').RailLine[] });
+                .then((p) => p as { lines: RailLine[] });
     }
 
     /**
@@ -391,9 +398,9 @@ export class WsClient {
      * 前端 RailNetworkModal.selectLine 用此避免 N+1 请求。
      */
     sendRailLineDetail(lineId: string): Promise<{
-        line: import('@/types/rail').RailLine;
-        stations: import('@/types/rail').RailStation[];
-        runs: import('@/types/rail').RailRun[];
+        line: RailLine;
+        stations: RailStation[];
+        runs: RailRun[];
         timetableByRun: Record<string, Array<{
             stationId: string;
             arrival?: string;
@@ -403,9 +410,9 @@ export class WsClient {
     }> {
         return this.sendWithAck('rail.line.detail', { lineId }, 8000)
                 .then((p) => p as {
-                    line: import('@/types/rail').RailLine;
-                    stations: import('@/types/rail').RailStation[];
-                    runs: import('@/types/rail').RailRun[];
+                    line: RailLine;
+                    stations: RailStation[];
+                    runs: RailRun[];
                     timetableByRun: Record<string, Array<{
                         stationId: string; arrival?: string;
                         departure?: string; stopsHere: boolean;
@@ -414,16 +421,16 @@ export class WsClient {
     }
 
     sendRailLineCreate(name: string, code: string | null, color: string | null):
-            Promise<{ lineId: string; line: import('@/types/rail').RailLine }> {
+            Promise<{ lineId: string; line: RailLine }> {
         return this.sendWithAck('rail.line.create', { name, code, color })
-                .then((p) => p as { lineId: string; line: import('@/types/rail').RailLine });
+                .then((p) => p as { lineId: string; line: RailLine });
     }
 
     sendRailLineUpdate(lineId: string, patch: Partial<{ name: string; code: string | null;
                                                         color: string | null }>):
-            Promise<{ line: import('@/types/rail').RailLine }> {
+            Promise<{ line: RailLine }> {
         return this.sendWithAck('rail.line.update', { lineId, ...patch })
-                .then((p) => p as { line: import('@/types/rail').RailLine });
+                .then((p) => p as { line: RailLine });
     }
 
     sendRailLineDelete(lineId: string): Promise<{ deleted: number }> {
@@ -433,18 +440,18 @@ export class WsClient {
 
     sendRailStationAdd(lineId: string, name: string, code: string | null,
                        sortOrder: number | null, isTerminus: boolean):
-            Promise<{ stationId: string; station: import('@/types/rail').RailStation }> {
+            Promise<{ stationId: string; station: RailStation }> {
         return this.sendWithAck('rail.station.add',
                 { lineId, name, code, sortOrder, isTerminus })
                 .then((p) => p as { stationId: string;
-                                    station: import('@/types/rail').RailStation });
+                                    station: RailStation });
     }
 
     sendRailStationUpdate(stationId: string, patch: Partial<{
         name: string; code: string | null; sortOrder: number; isTerminus: boolean;
-    }>): Promise<{ station: import('@/types/rail').RailStation }> {
+    }>): Promise<{ station: RailStation }> {
         return this.sendWithAck('rail.station.update', { stationId, ...patch })
-                .then((p) => p as { station: import('@/types/rail').RailStation });
+                .then((p) => p as { station: RailStation });
     }
 
     sendRailStationDelete(stationId: string): Promise<{ deleted: number }> {
@@ -461,19 +468,19 @@ export class WsClient {
         startStationId?: string | null;
         endStationId?: string | null;
         notes?: string | null;
-        generateOptions?: import('@/types/rail').AutoTimetableOptions;
-    }): Promise<{ runId: string; run: import('@/types/rail').RailRun }> {
+        generateOptions?: AutoTimetableOptions;
+    }): Promise<{ runId: string; run: RailRun }> {
         return this.sendWithAck('rail.run.create', payload)
-                .then((p) => p as { runId: string; run: import('@/types/rail').RailRun });
+                .then((p) => p as { runId: string; run: RailRun });
     }
 
     sendRailRunUpdate(runId: string, patch: Partial<{
         runNumber: string; direction: 'up' | 'down'; serviceType: string;
         cars: number | null; startStationId: string | null; endStationId: string | null;
         notes: string | null;
-    }>): Promise<{ run: import('@/types/rail').RailRun }> {
+    }>): Promise<{ run: RailRun }> {
         return this.sendWithAck('rail.run.update', { runId, ...patch })
-                .then((p) => p as { run: import('@/types/rail').RailRun });
+                .then((p) => p as { run: RailRun });
     }
 
     sendRailRunDelete(runId: string): Promise<{ deleted: number }> {
@@ -495,9 +502,9 @@ export class WsClient {
         lineId?: string | null;
         stationId?: string | null;
         direction?: 'up' | 'down' | 'both';
-    }): Promise<{ binding: import('@/types/rail').WallRailBinding }> {
+    }): Promise<{ binding: WallRailBinding }> {
         return this.sendWithAck('rail.wall.bind', payload)
-                .then((p) => p as { binding: import('@/types/rail').WallRailBinding });
+                .then((p) => p as { binding: WallRailBinding });
     }
 
     // ---------- 时间轴 / 关键帧（协议契约见 docs/protocol.md §5.12 / §5.13）----------
@@ -522,8 +529,8 @@ export class WsClient {
         name: string,
         durationMs: number,
         fps: number,
-        loopMode: import('@/types/protocol').LoopMode,
-        trigger: import('@/types/protocol').TriggerConfig,
+        loopMode: LoopMode,
+        trigger: TriggerConfig,
     ): Promise<void> {
         return this.sendWithAck('timeline.create',
             { name, durationMs, fps, loopMode, trigger }).then(() => undefined);
@@ -540,8 +547,8 @@ export class WsClient {
             name: string;
             durationMs: number;
             fps: number;
-            loopMode: import('@/types/protocol').LoopMode;
-            trigger: import('@/types/protocol').TriggerConfig;
+            loopMode: LoopMode;
+            trigger: TriggerConfig;
         }>,
     ): Promise<void> {
         return this.sendWithAck('timeline.update', { timelineId, patch }).then(() => undefined);
@@ -586,8 +593,8 @@ export class WsClient {
         elementId: string,
         property: string,
         timeMs: number,
-        value: import('@/types/protocol').KfValue,
-        easing: import('@/types/protocol').Easing,
+        value: KfValue,
+        easing: Easing,
         coalesceKey?: string,
     ): Promise<void> {
         const payload: Record<string, unknown> = { timelineId, elementId, property, timeMs, value, easing };
@@ -604,8 +611,8 @@ export class WsClient {
         keyframeId: string,
         patch: Partial<{
             timeMs: number;
-            value: import('@/types/protocol').KfValue;
-            easing: import('@/types/protocol').Easing;
+            value: KfValue;
+            easing: Easing;
         }>,
         coalesceKey?: string,
     ): Promise<void> {
@@ -643,7 +650,7 @@ export class WsClient {
      * {@code script.create}：新建脚本规则。{@code id / wallId} 服务端权威，payload 的
      * rule 不带这两个字段；新 rule（含 id）经 state.patch 回下发。
      */
-    sendScriptCreate(rule: Omit<import('@/types/protocol').ScriptRule, 'id' | 'wallId'>): Promise<void> {
+    sendScriptCreate(rule: Omit<ScriptRule, 'id' | 'wallId'>): Promise<void> {
         return this.sendWithAck('script.create', { rule }).then(() => undefined);
     }
 
@@ -653,7 +660,7 @@ export class WsClient {
      */
     sendScriptUpdate(
         ruleId: string,
-        rule: Omit<import('@/types/protocol').ScriptRule, 'id' | 'wallId'>,
+        rule: Omit<ScriptRule, 'id' | 'wallId'>,
     ): Promise<void> {
         return this.sendWithAck('script.update', { ruleId, rule }).then(() => undefined);
     }
@@ -681,18 +688,11 @@ export class WsClient {
     // ---------- 内部 ----------
 
     private sendAuth(token: string): void {
-        // 发新字段 client_v；旧字段 clientProtocolVersion 同步发以兼容回滚
-        // 到旧服务端 jar 的情形（旧后端不识别 client_v，识别 clientProtocolVersion）。
-        // 新后端优先读 client_v；范围检查通过 → ready 回 accepted_v。
-        //
-        // 携带编辑器 UI 语言（用于后端按编辑器语言渲染脚本校验报错等外发文案）。
-        // ui.locale 是 2 字母（'zh' / 'en'），这里映射成 game locale id 形态（'zh_cn' / 'en_us'），
-        // 与命令路径（player.getLocale() 返回 'zh_cn'）对齐 → 后端 Messages.resolveLocaleId 统一处理。
-        // auth payload 后端按 Object → Map 松散解析（非严格 record 字段），旧后端多这个键也静默忽略。
+        // 携带业务协议版本 client_v 与编辑器 UI 语言（映射为 game locale id，如 'zh_cn' / 'en_us'，
+        // 供后端 Messages.resolveLocaleId 统一处理并按编辑器语言渲染校验报错等外发文案）。
         this.send('auth', {
             token,
             client_v: CLIENT_V,
-            clientProtocolVersion: CLIENT_V,
             locale: uiLocaleToGameId(useUiStore().locale),
         });
     }
@@ -830,7 +830,7 @@ export class WsClient {
         // 旧后端不发 accepted_v → undefined → 沿用 v2 默认（信任 server）。
         const acceptedV = payload.accepted_v;
         if (typeof acceptedV === 'number' && acceptedV !== CLIENT_V) {
-            net.setConnectionError(`协议版本不兼容 (server accepted_v=${acceptedV}, client=${CLIENT_V})；请升级`);
+            net.setConnectionError(messages[ui.locale].errors.PROTOCOL_MISMATCH_DETAIL(acceptedV, CLIENT_V));
             net.pushLog('err', `protocol version mismatch: accepted_v=${acceptedV} client_v=${CLIENT_V}`);
             this.stopped = true;
             try { this.ws?.close(4002, 'protocol_version_unsupported'); } catch { /* ignore */ }
@@ -889,7 +889,7 @@ export class WsClient {
         useScriptStore().initScripts(payload.scripts ?? []);
         // 铁路绑定快照（当前 wall 是否绑了线路）；用于 ScheduleManagerModal /
         // RailNetworkModal 一打开就显示绑定状态。null = 未绑定。
-        const railBinding = (payload as { railBinding?: import('@/types/rail').WallRailBinding | null })
+        const railBinding = (payload as { railBinding?: WallRailBinding | null })
             .railBinding;
         useRailStore().setBinding(railBinding ?? null);
         // rotate 过来的新 token 存 sessionStorage 供断线重连
@@ -1086,7 +1086,7 @@ export class WsClient {
         }
         const delay = RECONNECT_BACKOFF_S[this.reconnectAttempt] * 1000;
         this.reconnectAttempt += 1;
-        net.setConnectionError(`连接断开，${delay / 1000}s 后重试（第 ${this.reconnectAttempt} 次）`);
+        net.setConnectionError(messages[useUiStore().locale].status.reconnectingIn(delay / 1000, this.reconnectAttempt));
         net.pushLog('meta', `reconnect scheduled in ${delay}ms`);
         this.reconnectTimer = window.setTimeout(() => {
             this.reconnectTimer = null;
@@ -1243,7 +1243,7 @@ export function resolveWsUrl(): string {
 //   - replace /variables/<encoded>/currentValue value = 新值（string | null）
 //   - replace /variables/<encoded>/<field>      value = 单字段新值（type / defaultValue 等）
 //   - remove  /variables/<encoded>
-// 其他 path 形态不支持（B 任务限定 patch 形态），收到时静默忽略并 log。
+// 其他 path 形态不支持，收到时静默忽略并 log。
 
 function applyVariablePatches(ops: PatchOp[], serverClockOffsetMs = 0): void {
     const store = useVariableStore();
@@ -1294,7 +1294,7 @@ function applyVariablePatches(ops: PatchOp[], serverClockOffsetMs = 0): void {
                 net.pushLog('meta', `variable patch replace skipped: ${fullName} not in store`);
             }
         } else if (op.op === 'replace' && sub !== '') {
-            // 兜底：其他字段 replace（如 type / defaultValue）——B 任务暂未要求，但支持也无害
+            // 兜底：其他单字段 replace（如 type / defaultValue）
             const v = store.get(fullName);
             if (v) {
                 const next: Variable = { ...v };
@@ -1345,7 +1345,7 @@ function applyAliasPatches(ops: PatchOp[]): void {
 // 后端 ScriptOpDispatcher 发 path 形如 {@code /scripts/<encoded ruleId>}（RFC 6901 段编码，
 // 同变量 / 别名通道）。支持：add / replace 携完整 ScriptRule 对象（后端 create / update /
 // enable 统一发 add，replace 收下兼容）；remove 不携 value。其他形态不支持，
-// 收到时静默忽略并 log。导出供单测独立验证（applyAliasPatches 无独立测试的教训）。
+// 收到时静默忽略并 log。导出供单测独立验证。
 
 export function applyScriptPatches(ops: PatchOp[]): void {
     const store = useScriptStore();
@@ -1359,12 +1359,12 @@ export function applyScriptPatches(ops: PatchOp[]): void {
         // script 路径无子路径（仅 ruleId 编码段），直接整段 decode
         const ruleId = decodeJsonPointerToken(rest);
         // value 必须是携 string id 的普通对象；畸形对象 / 数组 / 缺 id 落 else 分支 log err
-        const v = op.value as Partial<import('@/types/protocol').ScriptRule> | null;
+        const v = op.value as Partial<ScriptRule> | null;
         if ((op.op === 'add' || op.op === 'replace')
                 && v && typeof v === 'object' && !Array.isArray(v) && typeof v.id === 'string') {
             // id 失配只可能是后端 bug：log 后仍按 value.id 收（可观测优先，不静默丢数据）
             if (v.id !== ruleId) net.pushLog('err', `script patch: id mismatch ${op.path} vs ${v.id}`);
-            store.upsert(v as import('@/types/protocol').ScriptRule);
+            store.upsert(v as ScriptRule);
         } else if (op.op === 'remove') {
             store.removeRule(ruleId);
         } else {

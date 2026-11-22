@@ -11,12 +11,10 @@ import { computed, reactive, ref, watch } from 'vue';
 import { X, Bookmark, Sparkles } from 'lucide-vue-next';
 import { useProjectStore } from '@/stores/project';
 import { useNetworkStore } from '@/stores/network';
-import { useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
 import type { TextElement } from '@/types/protocol';
 
-const ui = useUiStore();
 const project = useProjectStore();
 const net = useNetworkStore();
 const ws = getWsClient();
@@ -31,7 +29,7 @@ interface ParamRow {
     name: string;
     label: string;
     description: string;
-    // MVP-1：text 元素的字色/字号/字体也可标记为可填参数（独立于 keep）。
+    // text 元素的字色/字号/字体也可标记为可填参数（独立于 keep）。
     markColor: boolean;
     markFontSize: boolean;
     markFontId: boolean;
@@ -88,7 +86,7 @@ async function onSave() {
         return;
     }
     const textActions: Record<string, { action: string; name?: string; label?: string; description?: string }> = {};
-    // MVP-1：字段标记独立于 keep —— text 内容 drop 的行仍可参数化其字色/字号/字体。
+    // 字段标记独立于 keep —— text 内容 drop 的行仍可参数化其字色/字号/字体。
     const fieldMarks: Array<{ autoId: string; field: 'color' | 'fontSize' | 'fontId' }> = [];
     for (const row of paramRows) {
         textActions[row.autoId] = row.keep
@@ -223,7 +221,7 @@ function onClose() {
                          maxlength="128" />
                 </label>
               </div>
-              <!-- MVP-1：字段参数化 toggle（独立于 keep） -->
+              <!-- 字段参数化 toggle（独立于 keep） -->
               <div class="flex flex-wrap items-center gap-3 pl-3 pt-0.5">
                 <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.markFieldsLabel }}</span>
                 <label class="flex items-center gap-1 cursor-pointer text-xs">
@@ -259,21 +257,3 @@ function onClose() {
     </div>
   </div>
 </template>
-
-<style scoped>
-.hc-input {
-    width: 100%;
-    padding: 0.25rem 0.375rem;
-    font-size: 0.75rem;
-    line-height: 1rem;
-    border-radius: 4px;
-    background: var(--background);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-}
-.hc-input:focus {
-    outline: none;
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
-}
-</style>

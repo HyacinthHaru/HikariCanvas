@@ -3,7 +3,7 @@
  * 积木脚本编辑器全屏 overlay 容器。
  *
  * <p>fixed 全屏（z-index 60，高于时间轴 dock）。头部工具条 = 标题 + "新建规则" + 当前规则
- * 编辑控件（名称 / 启停 / 撤销重做 / 删除 / 试跑占位）+ zoom 显示 % + reset + 关闭。主体 =
+ * 编辑控件（名称 / 启停 / 撤销重做 / 试跑 / 删除）+ zoom 显示 % + reset + 关闭。主体 =
  * 左侧侧栏（<b>规则列表</b> + palette）+ 右侧 {@link BlockCanvas}。</p>
  *
  * <p><b>接通编辑模型（{@link useScriptEditStore}）</b>：点列表项 → selectRule；新建 →
@@ -187,7 +187,7 @@ const showLegend = computed(() => highlightResults.value.size > 0 || testing.val
 /** 头部 zoom 百分比显示（读 BlockCanvas 暴露的 zoom ref）。 */
 const zoomPct = computed(() => {
     const z = canvasRef.value?.zoom ?? 1;
-    return Math.round((typeof z === 'number' ? z : z.value ?? 1) * 100);
+    return Math.round(z * 100);
 });
 
 function resetView(): void {
@@ -558,7 +558,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
         </div>
 
         <!-- 中：拖宽分隔条（仅未折叠时显示）。只绑 @pointerdown——拖动期间的 move/up/cancel 由
-             onSplitterDown 在 window 上挂（Bug 2：松手在 window 一定收到，dragging 一定清）。 -->
+             onSplitterDown 在 window 上挂（松手在 window 一定收到，dragging 一定清）。 -->
         <div
           v-if="!ui.scriptPreviewCollapsed"
           class="hc-script-splitter"

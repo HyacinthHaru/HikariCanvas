@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest';
-import { mapFill, mapStroke, mapFillRule, mapOpacity } from '../fillMap';
+import { mapFill, mapStroke, mapFillRule } from '../fillMap';
 
 function makeEl(tag: string, attrs: Record<string, string>): Element {
     const doc = new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg"/>', 'image/svg+xml');

@@ -79,7 +79,6 @@ export function useLivePaint(opts: UseLivePaintOpts): UseLivePaintReturn {
                 const status = resp.type === 'ok'
                     ? `${resp.graph.gaps.length} gaps${resp.graph.degraded ? ' (degraded)' : ''}`
                     : `err: ${resp.message}`;
-                // eslint-disable-next-line no-console
                 console.log(
                     `[livepaint] graph built in ${elapsed.toFixed(1)}ms`
                     + ` (${ctx.elementCount} elements → ${status})`,
@@ -107,7 +106,7 @@ export function useLivePaint(opts: UseLivePaintOpts): UseLivePaintReturn {
         const requestId = ++nextRequestId;
         pendingRequestId = requestId;
         isBuilding.value = true;
-        const elements: import('@/types/protocol').Element[] = JSON.parse(JSON.stringify(opts.elements.value));
+        const elements: Element[] = JSON.parse(JSON.stringify(opts.elements.value));
         if (sentAt) sentAt.set(requestId, { startedAt: performance.now(), elementCount: elements.length });
         const req: LivePaintWorkerRequest = {
             type: 'build',

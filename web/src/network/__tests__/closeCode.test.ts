@@ -1,20 +1,14 @@
 /**
- * 0.7.3 ultrareview 批 A：onClose terminal 集合 + VERSION_MISMATCH 文案单测。
+ * onClose terminal 集合 + VERSION_MISMATCH 文案单测。
  *
  * <p>isTerminalCloseCode 是纯函数，node 环境即可跑（不依赖 Pinia / WebSocket）。
  * i18n 文案测试直接读 messages 表（同 localizeErrorCode 的 wsClient 内部逻辑）。</p>
- *
- * 覆盖项：
- * - A1：4002 进 terminal（不触发 scheduleReconnect）
- * - A2：4429 进 terminal（4008 不在 terminal）
- * - A3：VERSION_MISMATCH 文案表达"协议版本不兼容"而非状态同步
- * - 回归：1000 / 4001 仍在 terminal；1001 / 1006 / 1011 不在 terminal
  */
 import { describe, expect, it } from 'vitest';
 import { isTerminalCloseCode } from '../wsClient';
 import { messages } from '@/i18n/messages';
 
-// ---------- A1 + A2：terminal 集合 ----------
+// ---------- terminal 集合 ----------
 
 describe('isTerminalCloseCode', () => {
     // 终止态：重连无意义的 code
@@ -64,11 +58,11 @@ describe('isTerminalCloseCode', () => {
     });
 });
 
-// ---------- A3：VERSION_MISMATCH 文案语义 ----------
+// ---------- VERSION_MISMATCH 文案语义 ----------
 
 describe('messages VERSION_MISMATCH', () => {
-    it('中文文案表达"协议版本不兼容"（不是"画板被改动"）[A3]', () => {
-        const zh = (messages.zh.errors as Record<string, string>).VERSION_MISMATCH;
+    it('中文文案表达"协议版本不兼容"（不是"画板被改动"）', () => {
+        const zh = messages.zh.errors.VERSION_MISMATCH;
         // 不应含"状态同步"语义词
         expect(zh).not.toMatch(/改动/);
         expect(zh).not.toMatch(/同步/);
@@ -76,8 +70,8 @@ describe('messages VERSION_MISMATCH', () => {
         expect(zh).toMatch(/版本|升级/);
     });
 
-    it('英文文案表达"协议版本不兼容"（不是"wall was changed"）[A3]', () => {
-        const en = (messages.en.errors as Record<string, string>).VERSION_MISMATCH;
+    it('英文文案表达"协议版本不兼容"（不是"wall was changed"）', () => {
+        const en = messages.en.errors.VERSION_MISMATCH;
         // 不应含 wall 改动语义
         expect(en).not.toMatch(/changed/i);
         expect(en).not.toMatch(/syncing/i);

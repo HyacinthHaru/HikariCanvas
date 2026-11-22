@@ -48,10 +48,10 @@ const isCircle = computed(() => selected.value?.type === 'circle');
 const isShape = computed(() => selected.value?.type === 'shape');
 const isPath = computed(() => selected.value?.type === 'path');
 const isImage = computed(() => selected.value?.type === 'image');
-/** M11-D：几何元素族（支持 fill / dither）。text / icon / image 不在内。 */
+/** 几何元素族（支持 fill / dither）。text / icon / image 不在内。 */
 const isGeometric = computed(() => isRect.value || isCircle.value || isShape.value || isPath.value);
 
-/** M8-F：是否多选（>= 2）。multi 时隐藏单选 UI，显示批量操作提示。 */
+/** 是否多选（>= 2）。multi 时隐藏单选 UI，显示批量操作提示。 */
 const isMulti = computed(() => ui.selectedCount >= 2);
 
 /**
@@ -154,7 +154,7 @@ function deleteSelected() {
     ui.selectElement(null);
 }
 
-/** M8-F：批量删除多选元素，逐个发 element.delete op。锁定的跳过并说明跳了几个。 */
+/** 批量删除多选元素，逐个发 element.delete op。锁定的跳过并说明跳了几个。 */
 function deleteMultiSelected(): void {
     if (ui.selectedCount === 0) return;
     const ids = Array.from(ui.selectedIds);

@@ -4,7 +4,7 @@
  * 数学权威定义见 `docs/rendering.md §9.3`：算法（WebKit UnitBezier 系数形式 + 固定步数
  * 牛顿迭代 + 二分兜底）、常量（NEWTON_ITER / BISECT_MAX / EPS）、边界捷径与 EASE 预设
  * 控制点**两端写死相同**，由共享测试向量 `rendering-test/easing-vectors.json`（容差 1e-6）
- * 在两端 CI 各自校验。禁引第三方 easing 库（timeline.md D8）。
+ * 在两端 CI 各自校验。禁引第三方 easing 库（见 `docs/timeline.md`）。
  */
 import type { Easing } from '../types/protocol';
 

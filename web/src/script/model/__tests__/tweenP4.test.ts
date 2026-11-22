@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { isTweenBodySlotAllowed } from '../../canvas/useBlockDrag';
 import type { SlotRect } from '../dropTarget';
+import type { Easing } from '@/types/protocol';
 import { TWEENABLE_KINDS } from '../blockDefs';
 
 // ---------- 辅助 ----------
@@ -159,18 +160,17 @@ describe('easing cubicBezier 读写', () => {
 
     it('easing type 由 select 写入时应保留 bezier（cubicBezier 逻辑）', () => {
         // 模拟切到 cubicBezier：若有已有 bezier 则保留；若无则初始化为默认 ease。
-        const existingEasing = { type: 'easeInOut' as const };
+        const existingEasing: Easing = { type: 'easeInOut' };
         const defaultBezier: [number, number, number, number] = [0.25, 0.1, 0.25, 1];
-        const newEasing = { type: 'cubicBezier' as const, bezier: existingEasing.bezier ?? defaultBezier };
+        const newEasing: Easing = { type: 'cubicBezier', bezier: existingEasing.bezier ?? defaultBezier };
         expect(newEasing.type).toBe('cubicBezier');
         expect(newEasing.bezier).toEqual([0.25, 0.1, 0.25, 1]);
     });
 
     it('切回预设 easing 时应丢掉 bezier', () => {
-        const _cubic = { type: 'cubicBezier' as const, bezier: [0.1, 0.5, 0.9, 0.5] as [number, number, number, number] };
         // 切回 linear：只写 type，bezier 不保留。
-        const linear = { type: 'linear' as const };
+        const linear: Easing = { type: 'linear' };
         expect(linear.type).toBe('linear');
-        expect((linear as { bezier?: unknown }).bezier).toBeUndefined();
+        expect(linear.bezier).toBeUndefined();
     });
 });

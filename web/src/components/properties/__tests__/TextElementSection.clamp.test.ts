@@ -100,19 +100,19 @@ describe('TextElementSection — 越界输入钳位', () => {
 
     it('描边宽度夹到 [0, 128]（原来 parseInt(...)||0 放行负数）', async () => {
         const w = mountSection();
-        await typeInto(inputAfterLabel(w, 'width'), '-5');
+        await typeInto(inputAfterLabel(w, '描边粗细'), '-5');
         expect((emitOf(w, 'update').effects as { stroke: { width: number } }).stroke.width).toBe(0);
-        await typeInto(inputAfterLabel(w, 'width'), '9999');
+        await typeInto(inputAfterLabel(w, '描边粗细'), '9999');
         expect((emitOf(w, 'update').effects as { stroke: { width: number } }).stroke.width)
             .toBe(MAX_STROKE_WIDTH);
     });
 
     it('阴影偏移夹到 ±128、光晕半径夹到 [0, 64]', async () => {
         const w = mountSection();
-        await typeInto(inputAfterLabel(w, 'dx'), '9999');
+        await typeInto(inputAfterLabel(w, '横向偏移'), '9999');
         expect((emitOf(w, 'update').effects as { shadow: { dx: number } }).shadow.dx)
             .toBe(MAX_SHADOW_OFFSET);
-        await typeInto(inputAfterLabel(w, 'radius'), '9999');
+        await typeInto(inputAfterLabel(w, '发光半径'), '9999');
         expect((emitOf(w, 'update').effects as { glow: { radius: number } }).glow.radius)
             .toBe(MAX_GLOW_RADIUS);
     });

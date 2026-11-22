@@ -7,11 +7,11 @@
  * 本文件守两条：① 笔触不挂 Transformer；② 万一走到 onTransformEnd 也不发 w/h；
  * 外加一条通用的"几何没变就别发 op"。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ref } from 'vue';
 import { setActivePinia, createPinia } from 'pinia';
 
-const sendSpy = vi.fn(() => 'c-1');
+const sendSpy = vi.fn<(...args: unknown[]) => string>(() => 'c-1');
 vi.mock('@/network/wsClient', () => ({ getWsClient: () => ({ send: sendSpy }) }));
 
 import { useTransformerManager } from '../useTransformerManager';

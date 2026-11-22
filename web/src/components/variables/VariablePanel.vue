@@ -37,6 +37,7 @@ import { useI18n } from '@/i18n';
 import { getWsClient } from '@/network/wsClient';
 import type { Variable, VarType } from '@/types/variable';
 import { isUserNamespace, isUserGlobalNamespace } from '@/types/variable';
+import { displayName } from '@/variable/pickerLogic';
 import NewVariableDialog from './NewVariableDialog.vue';
 import VariableValueEditor from './VariableValueEditor.vue';
 import BindDialog from './BindDialog.vue';
@@ -69,7 +70,7 @@ const showValueEditor = ref<{ fullName: string; variable: Variable } | null>(nul
 const showBindDialog = ref<{ fullName: string; variable: Variable } | null>(null);
 /** 当前展开 "删除确认" popover 的 fullName；null = 没在确认。 */
 const confirmingDeleteFor = ref<string | null>(null);
-/** 0.4.2：当前 inline 改别名的 fullName；null = 没在改。 */
+/** 当前 inline 改别名的 fullName；null = 没在改。 */
 const editingAliasFor = ref<string | null>(null);
 const aliasDraft = ref('');
 const aliasError = ref<string | null>(null);
@@ -162,6 +163,63 @@ const globalVariables = computed<Array<{
     });
     return result;
 });
+
+interface ReadonlyVarEntry {
+    fullName: string;
+    display: string;
+    v: Variable;
+}
+
+/**
+ * 按 pickerLogic 同款 namespace 归类收集只读变量（plugin / system / papi），并支持搜索词与别名过滤。
+ */
+function collectReadonlyVars(kind: 'plugin' | 'system' | 'papi'): ReadonlyVarEntry[] {
+    const wallId = project.wallId;
+    const kw = searchKeyword.value.trim().toLowerCase();
+    const result: ReadonlyVarEntry[] = [];
+    for (const v of store.all) {
+        if (isUserNamespace(v.namespace) || isUserGlobalNamespace(v.namespace)) continue;
+        const bare = v.namespace.split(':')[0];
+        const group = bare === 'system' ? 'system' : bare === 'papi' ? 'papi' : 'plugin';
+        if (group !== kind) continue;
+        const fullName = `${v.namespace}/${v.key}`;
+        if (kw && !matchesKeyword(fullName, v, kw)) continue;
+        result.push({ fullName, display: displayName(v, wallId), v });
+    }
+    result.sort((a, b) => a.display.localeCompare(b.display));
+    return result;
+}
+
+const pluginVars = computed<ReadonlyVarEntry[]>(() => collectReadonlyVars('plugin'));
+const systemVars = computed<ReadonlyVarEntry[]>(() => collectReadonlyVars('system'));
+const papiVars = computed<ReadonlyVarEntry[]>(() => collectReadonlyVars('papi'));
+
+const readonlySections = computed(() => [
+    {
+        key: 'plugin' as const,
+        icon: Package,
+        iconClass: 'text-[color:var(--ctp-peach)]',
+        title: t.value.variables.groupPlugin,
+        empty: t.value.variables.emptyPlugin,
+        items: pluginVars.value,
+    },
+    {
+        key: 'system' as const,
+        icon: Globe,
+        iconClass: 'text-[color:var(--ctp-blue)]',
+        title: t.value.variables.groupSystem,
+        empty: t.value.variables.emptySystem,
+        items: systemVars.value,
+    },
+    {
+        key: 'papi' as const,
+        icon: Plug,
+        iconClass: 'text-[color:var(--ctp-green)]',
+        title: t.value.variables.groupPapi,
+        empty: t.value.variables.emptyPapi,
+        items: papiVars.value,
+    },
+]);
 
 // ---------- 行操作 ----------
 
@@ -766,56 +824,121 @@ function isHexColor(s: string | null): boolean {
         </div>
       </section>
 
-      <!-- 2) 由插件提供 -->
-      <section>
+      <!-- 2/3/4) 只读分组：由插件提供 / 系统 / PAPI -->
+      <section v-for="sec in readonlySections" :key="sec.key">
         <button
           class="w-full flex items-center gap-1 py-1 px-1 rounded hover:bg-[color:var(--accent)] text-left"
-          @click="toggleGroup('plugin')"
+          @click="toggleGroup(sec.key)"
         >
-          <ChevronDown v-if="!collapsed.plugin" class="size-3.5 text-[color:var(--muted-foreground)]" />
+          <ChevronDown v-if="!collapsed[sec.key]" class="size-3.5 text-[color:var(--muted-foreground)]" />
           <ChevronRight v-else class="size-3.5 text-[color:var(--muted-foreground)]" />
-          <Package class="size-3.5 text-[color:var(--ctp-peach)]" />
-          <span class="font-medium">{{ t.variables.groupPlugin }}</span>
+          <component :is="sec.icon" class="size-3.5" :class="sec.iconClass" />
+          <span class="font-medium">{{ sec.title }}</span>
+          <span class="ml-auto text-[color:var(--muted-foreground)] font-mono">{{ sec.items.length }}</span>
         </button>
-        <div v-if="!collapsed.plugin" class="mt-1 pl-2">
-          <div class="p-3 rounded-[var(--radius-sm)] bg-[color:var(--muted)] text-[color:var(--muted-foreground)] text-center text-xs">
-            {{ t.variables.emptyPlugin }}
+        <div v-if="!collapsed[sec.key]" class="mt-1 pl-2 space-y-1.5">
+          <div
+            v-if="sec.items.length === 0"
+            class="p-3 rounded-[var(--radius-sm)] bg-[color:var(--muted)] text-[color:var(--muted-foreground)] text-center text-xs"
+          >
+            {{ sec.empty }}
           </div>
-        </div>
-      </section>
+          <div
+            v-for="entry in sec.items"
+            :key="entry.fullName"
+            class="rounded-[var(--radius-sm)] border border-[color:var(--border)] bg-[color:var(--background)] p-2 space-y-1"
+          >
+            <!-- 第 1 行：变量显示名 + type chip + alias chip -->
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <span class="font-mono text-xs truncate" :title="entry.fullName">{{ entry.display }}</span>
+              <span
+                class="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider font-medium shrink-0"
+                :class="typeChipClass(entry.v.type)"
+              >{{ typeChipLabel(entry.v.type) }}</span>
+              <span
+                v-if="aliasStore.get(entry.fullName)"
+                class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-[color:var(--ctp-mauve)]/15 text-[color:var(--ctp-mauve)]"
+                :title="t.variables.aliasChipPrefix + ' ' + aliasStore.get(entry.fullName)"
+              >
+                <Tag class="size-2.5" />
+                <span class="truncate max-w-[120px]">{{ aliasStore.get(entry.fullName) }}</span>
+              </span>
+            </div>
 
-      <!-- 3) 系统 -->
-      <section>
-        <button
-          class="w-full flex items-center gap-1 py-1 px-1 rounded hover:bg-[color:var(--accent)] text-left"
-          @click="toggleGroup('system')"
-        >
-          <ChevronDown v-if="!collapsed.system" class="size-3.5 text-[color:var(--muted-foreground)]" />
-          <ChevronRight v-else class="size-3.5 text-[color:var(--muted-foreground)]" />
-          <Globe class="size-3.5 text-[color:var(--ctp-blue)]" />
-          <span class="font-medium">{{ t.variables.groupSystem }}</span>
-        </button>
-        <div v-if="!collapsed.system" class="mt-1 pl-2">
-          <div class="p-3 rounded-[var(--radius-sm)] bg-[color:var(--muted)] text-[color:var(--muted-foreground)] text-center text-xs">
-            {{ t.variables.emptySystem }}
-          </div>
-        </div>
-      </section>
+            <!-- 第 2 行：当前值 -->
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[color:var(--muted-foreground)]">
+              <span class="flex items-center gap-1">
+                <span>{{ t.variables.currentLabel }}:</span>
+                <span
+                  v-if="entry.v.type === 'COLOR' && isHexColor(entry.v.currentValue)"
+                  class="inline-block size-3 rounded border border-[color:var(--border)]"
+                  :style="{ backgroundColor: entry.v.currentValue ?? '#000' }"
+                ></span>
+                <span class="font-mono text-[color:var(--foreground)]">{{ currentValueText(entry.fullName, entry.v) }}</span>
+              </span>
+            </div>
 
-      <!-- 4) PAPI -->
-      <section>
-        <button
-          class="w-full flex items-center gap-1 py-1 px-1 rounded hover:bg-[color:var(--accent)] text-left"
-          @click="toggleGroup('papi')"
-        >
-          <ChevronDown v-if="!collapsed.papi" class="size-3.5 text-[color:var(--muted-foreground)]" />
-          <ChevronRight v-else class="size-3.5 text-[color:var(--muted-foreground)]" />
-          <Plug class="size-3.5 text-[color:var(--ctp-green)]" />
-          <span class="font-medium">{{ t.variables.groupPapi }}</span>
-        </button>
-        <div v-if="!collapsed.papi" class="mt-1 pl-2">
-          <div class="p-3 rounded-[var(--radius-sm)] bg-[color:var(--muted)] text-[color:var(--muted-foreground)] text-center text-xs">
-            {{ t.variables.emptyPapi }}
+            <!-- 第 3 行：别名编辑按钮 + 只读标 -->
+            <div
+              v-if="editingAliasFor !== entry.fullName"
+              class="flex items-center gap-1 pt-0.5"
+            >
+              <button
+                class="hc-btn flex items-center gap-1 px-1.5 py-0.5 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
+                :title="t.variables.actionEditAlias"
+                @click="openAliasEdit(entry.fullName)"
+              >
+                <Tag class="size-3" />
+              </button>
+              <span class="ml-auto text-[10px] text-[color:var(--muted-foreground)]">
+                {{ t.variables.actionReadonly }}
+              </span>
+            </div>
+
+            <!-- alias 编辑（inline） -->
+            <div
+              v-else
+              class="flex flex-col gap-1 p-2 rounded bg-[color:var(--accent)]/10 border border-[color:var(--accent)]/30"
+            >
+              <div class="flex items-center gap-1.5">
+                <Tag class="size-3 text-[color:var(--ctp-mauve)] shrink-0" />
+                <input
+                  type="text"
+                  class="hc-input flex-1"
+                  :placeholder="t.variables.dialogNewAliasPlaceholder"
+                  v-model="aliasDraft"
+                  :maxlength="ALIAS_MAX_LEN + 8"
+                  :disabled="aliasSubmitting"
+                  @keydown.enter.prevent="submitAliasEdit"
+                  @keydown.escape.stop.prevent="cancelAliasEdit"
+                />
+                <button
+                  class="hc-btn p-1 rounded border border-[color:var(--border)] text-[color:var(--ctp-green,var(--primary))] hover:bg-[color:var(--accent)] disabled:opacity-40"
+                  :title="t.variables.picker.aliasSaveButton"
+                  :disabled="aliasSubmitting"
+                  @click="submitAliasEdit"
+                >
+                  <Check class="size-3" />
+                </button>
+                <button
+                  class="hc-btn p-1 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
+                  :title="t.variables.picker.aliasClearButton"
+                  :disabled="aliasSubmitting"
+                  @click="clearAlias"
+                >
+                  <Eraser class="size-3" />
+                </button>
+                <button
+                  class="hc-btn p-1 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
+                  :title="t.variables.picker.aliasCancelButton"
+                  :disabled="aliasSubmitting"
+                  @click="cancelAliasEdit"
+                >
+                  <X class="size-3" />
+                </button>
+              </div>
+              <span v-if="aliasError" class="text-[color:var(--destructive)] text-[10px]">{{ aliasError }}</span>
+            </div>
           </div>
         </div>
       </section>
@@ -845,21 +968,3 @@ function isHexColor(s: string | null): boolean {
     />
   </div>
 </template>
-
-<style scoped>
-.hc-input {
-    width: 100%;
-    padding: 0.25rem 0.375rem;
-    font-size: 0.75rem;
-    line-height: 1rem;
-    border-radius: 4px;
-    background: var(--background);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-}
-.hc-input:focus {
-    outline: none;
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
-}
-</style>

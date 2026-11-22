@@ -10,7 +10,7 @@
  * <ol>
  *   <li>头：标题 + 关闭按钮 + 搜索框（debounce 200ms）</li>
  *   <li>tabs：7 个分类（all / FA solid / FA regular / FA brands / user / favorites / recent）</li>
- *   <li>主体：grid 8 列，可见 icon 走 IntersectionObserver lazy {@code ensureLoaded}，
+ *   <li>主体：grid 6 列，可见 icon 走 IntersectionObserver lazy {@code ensureLoaded}，
  *       占位 ? 直到 path d 就绪。无限滚动：触底 loadMore（offset += limit）。</li>
  *   <li>底：拖入提示</li>
  * </ol>
@@ -30,7 +30,6 @@ import { onClickOutside } from '@vueuse/core';
 import { X, Search, Loader2, Star, History, Image as ImageIcon } from 'lucide-vue-next';
 import { useProjectStore } from '@/stores/project';
 import { useNetworkStore } from '@/stores/network';
-import { useUiStore } from '@/stores/ui';
 import { useIconLibraryStore, type IconCategory } from '@/stores/iconLibrary';
 import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
@@ -53,7 +52,6 @@ interface ListResponse {
 
 const project = useProjectStore();
 const net = useNetworkStore();
-const ui = useUiStore();
 const lib = useIconLibraryStore();
 const ws = getWsClient();
 const { t } = useI18n();
@@ -72,7 +70,6 @@ const offset = ref(0);
 const total = ref(0);
 const loading = ref(false);
 const loadError = ref<string | null>(null);
-const focusedId = ref<string | null>(null);
 
 // 缓存 path d 命中情况触发 grid 重渲染（同 CanvasView 的 onIconLoaded 钩子）
 const pathCacheTick = ref(0);
@@ -220,11 +217,6 @@ function observeCell(el: Element | null): void {
     visibilityObserver.observe(el);
 }
 
-function unobserveCell(el: Element | null): void {
-    if (!el || !visibilityObserver) return;
-    visibilityObserver.unobserve(el);
-}
-
 // IconLoader 全局回调：任何 id 加载完都 tick 一下让 grid 重渲染
 const onLoaderHook = (_id: string) => { pathCacheTick.value++; };
 // onIconLoaded 返回 unsubscribe 闭包；onBeforeUnmount 调用注销，避免 IconLoader
@@ -256,9 +248,6 @@ onBeforeUnmount(() => {
         searchDebounceTimer = null;
     }
 });
-
-// 在 panel 内点击外侧不算关闭——通过显式关闭按钮 / Esc / Shapes 按钮 toggle 控制
-// 但需求里没明确说 click-outside 关；保持显式控制更符合 panel 习惯。
 
 // Esc 关闭
 function onPanelKeydown(e: KeyboardEvent): void {
@@ -362,7 +351,7 @@ onClickOutside(rootRef, (e) => {
     ref="rootRef"
     class="absolute top-0 left-0 bottom-0 z-30 w-[360px] flex flex-col bg-[color:var(--card)] border-r border-[color:var(--border)] shadow-md"
     role="dialog"
-    aria-label="Icon Library"
+    :aria-label="t.iconLibrary.title"
     @keydown="onPanelKeydown"
   >
     <!-- 头部：标题 + 关闭 -->
@@ -379,7 +368,7 @@ onClickOutside(rootRef, (e) => {
       <Tooltip text="Esc">
         <button
           class="p-1 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors text-[color:var(--muted-foreground)]"
-          aria-label="Close"
+          :aria-label="t.iconLibrary.closeAria"
           @click="lib.setOpen(false)"
         >
           <X class="size-4" />
@@ -431,7 +420,7 @@ onClickOutside(rootRef, (e) => {
         {{ t.iconLibrary.empty }}
       </p>
 
-      <!-- icon grid（8 列；窄屏自动减少） -->
+      <!-- icon grid（6 列） -->
       <div v-else class="grid grid-cols-6 gap-1 pt-1">
         <button
           v-for="cell in cells"
@@ -443,8 +432,6 @@ onClickOutside(rootRef, (e) => {
           class="hc-icon-cell group relative aspect-square flex items-center justify-center rounded-[var(--radius-sm)] border border-transparent hover:border-[color:var(--border)] hover:bg-[color:var(--accent)] focus:outline-none focus:ring-1 focus:ring-[color:var(--primary)] transition-colors"
           @click="onPick(cell.icon)"
           @dragstart="(ev) => onCellDragStart(ev, cell.icon)"
-          @focus="focusedId = cell.icon.id"
-          @blur="focusedId = focusedId === cell.icon.id ? null : focusedId"
         >
           <!-- icon SVG -->
           <svg

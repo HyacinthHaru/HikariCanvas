@@ -224,19 +224,21 @@ function groupOf(v: Variable, selfUuid: string | null): PickerGroup['id'] {
 }
 
 /**
- * 把 store 的所有变量按当前 wallId + keyword 分到 4 组。
+ * 把 store 的所有变量按当前 wallId + keyword 分到 6 组。
  *
  * <p>分组规则：</p>
  * <ul>
  *   <li>👤 mine：namespace = {@code user:<wallId>}（wallId 非空时；空时该组空）</li>
- *   <li>📦 plugin：namespace 不属于 user/system/papi</li>
- *   <li>🌐 system：namespace = {@code system}</li>
- *   <li>🔌 papi：namespace = {@code papi}</li>
+ *   <li>🌐 myGlobal：namespace = {@code userglobal} 且 {@code ownerUuid === selfUuid}</li>
+ *   <li>🌐 othersGlobal：namespace = {@code userglobal} 且非当前玩家创建</li>
+ *   <li>📦 plugin：namespace 不属于 user / userglobal / system / papi</li>
+ *   <li>🛰️ system：namespace = {@code system[:<wallId>]}</li>
+ *   <li>🔌 papi：namespace = {@code papi[:<wallId>]}</li>
  * </ul>
  *
- * <p>搜索：keyword（lowercase）模糊匹配 {@link Variable#key} 或 {@link Variable#namespace} 任一。</p>
+ * <p>搜索：keyword（lowercase）模糊匹配 {@code namespace/key} 或当前画板别名任一。</p>
  *
- * <p>返回顺序固定为 mine → plugin → system → papi。空组保留（UI 用 v-if 决定是否渲染标题）。</p>
+ * <p>返回顺序固定为 mine → myGlobal → othersGlobal → plugin → system → papi。空组保留（UI 用 v-if 决定是否渲染标题）。</p>
  */
 export function buildGroups(
     variables: Iterable<Variable>,

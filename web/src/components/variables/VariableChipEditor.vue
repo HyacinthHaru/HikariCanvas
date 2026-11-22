@@ -21,10 +21,7 @@
  *   <li>store 变化时更新 chip DOM 文本（alias / currentValue / fallback / "???"，stale 走 fallback 链）</li>
  * </ul>
  *
- * <p>picker 仅由外层"插入变量"按钮触发（外层调 {@link insertVariableChip} 经
- * defineExpose）；已移除 chip click 改绑定 / 错误态补创 / {@code ${}
- * 自动弹 picker 等内部触发路径。{@code insert/edit/createVariableRequest} 三个 emit 仍保留为
- * 对外契约（外层 TextElementSection / TextInlineEditor 监听），但当前无内部 emit 触发点。</p>
+ * <p>picker 仅由外层"插入变量"按钮触发（外层调 {@link insertVariableChip} 经 defineExpose）。</p>
  *
  * <h4>props 摘要</h4>
  * <ul>
@@ -90,19 +87,12 @@ const emit = defineEmits<{
     'update:text': [value: string];
     submit: [];
     cancel: [];
-    /** 用户输入了 ${ 或点了"插入变量"按钮 → 外层弹 VariablePicker。 */
-    insertVariableRequest: [anchor: HTMLElement];
-    /** 点击已有 chip → 外层弹 VariablePicker 改绑定。 */
-    editVariableRequest: [payload: { rawName: string; fallback: string | null; anchor: HTMLElement }];
-    /** P3.4：点击红色 (error) chip → 外层弹 "create" 确认对话框（变量缺失补创）。 */
-    createVariableRequest: [payload: { rawName: string; anchor: HTMLElement }];
 }>();
 
 const store = useVariableStore();
 const aliasStore = useVariableAliasStore();
 const { t } = useI18n();
 
-const rootRef = ref<HTMLDivElement | null>(null);
 const editableRef = ref<HTMLDivElement | null>(null);
 
 // ----------- tooltip 状态（hover chip 时显示） -----------
@@ -155,7 +145,7 @@ const tooltipDisplayValue = computed(() => {
 });
 const tooltipSource = computed(() => tooltipVariable.value?.source ?? null);
 const tooltipDeleted = computed(() => tooltipVariable.value == null);
-/** 0.4.2：tooltip 也展示别名（如有），让用户在 chip 上 hover 就能确认这块占位实际指向。 */
+/** tooltip 也展示别名（如有），让用户在 chip 上 hover 就能确认这块占位实际指向。 */
 const tooltipAlias = computed(() => aliasStore.get(tooltipFullName.value));
 
 // ----------- lexical editor 实例 -----------
@@ -174,7 +164,7 @@ let writingExternal = false;
  */
 let composing = false;
 
-/** 0.4.2 bugfix（Bug A）：Pinia store.$subscribe 返回的反订阅函数，onBeforeUnmount 调。 */
+/** Pinia store.$subscribe 返回的反订阅函数，onBeforeUnmount 调。 */
 const storeUnsubscribers: Array<() => void> = [];
 
 // ============================================================================
@@ -186,7 +176,6 @@ onMounted(() => {
     editor = createEditor({
         namespace: 'hc-chip-editor',
         onError: (err) => {
-            // eslint-disable-next-line no-console
             console.error('[VariableChipEditor]', err);
         },
         nodes: [VariablePlaceholderNode],
@@ -223,7 +212,6 @@ onMounted(() => {
                 if (newText !== props.text) {
                     emit('update:text', newText);
                 }
-                // ${} 自动弹 picker 已废弃（picker 仅由"插入变量"按钮触发，见顶部 JSDoc）。
             });
             // 文本变了 → store 仍然可能没变；刷一遍 chip 显示
             refreshAllChipDisplays();
@@ -424,10 +412,8 @@ function onEditableBlur() {
 // ============================================================================
 // IME composition 守卫（中文 / 日文 / 韩文输入法）
 // ============================================================================
-//
-// ${} 自动弹 picker 路径已废弃删除——picker 改由外层"插入变量"按钮触发（见顶部 JSDoc）。
 
-/** 0.4.2 bugfix（Bug 3）：IME composition 开始 → 屏蔽 emit 防中断。 */
+/** IME composition 开始 → 屏蔽 emit 防中断。 */
 function onCompositionStart() {
     composing = true;
 }
@@ -472,14 +458,10 @@ function insertVariableChip(rawName: string, fallback: string | null = null): vo
                 const text = node.getTextContent();
                 const offset = anchor.offset;
                 if (offset >= 2 && text.substring(offset - 2, offset) === '${') {
-                    // 删掉 caret 前的 ${
-                    const newText = text.substring(0, offset - 2) + text.substring(offset);
-                    // 用 lexical TextNode API 改文本（保持 selection）
-                    // 先 setSelection 到 [offset-2, offset]，然后 sel.removeText()
+                    // 先把 selection 设为 [offset-2, offset] 再删除 caret 前的 ${
                     sel.anchor.set(node.getKey(), offset - 2, 'text');
                     sel.focus.set(node.getKey(), offset, 'text');
                     sel.removeText();
-                    // newText var unused; lexical 内部已删
                 }
             }
         }
@@ -536,7 +518,6 @@ defineExpose({
 
 <template>
   <div
-    ref="rootRef"
     class="hc-chip-editor"
     :class="[rootClass, { 'hc-chip-editor-multi': multiLine, 'hc-chip-editor-disabled': disabled }]"
   >
@@ -568,7 +549,7 @@ defineExpose({
       >
         <div class="hc-tt-row">
           <span class="hc-tt-label">{{ t.variables.chipEditor?.tooltipRaw ?? 'Raw' }}:</span>
-          <code class="hc-tt-code">${'${var:'}{{ tooltipRawName }}{{ tooltipFallback != null ? `|fallback=${tooltipFallback}` : '' }}{{ '}' }}</code>
+          <code class="hc-tt-code">{{ '${var:' + tooltipRawName }}{{ tooltipFallback != null ? `|fallback=${tooltipFallback}` : '' }}{{ '}' }}</code>
         </div>
         <div class="hc-tt-row">
           <span class="hc-tt-label">{{ t.variables.chipEditor?.tooltipCurrent ?? 'Current' }}:</span>
@@ -594,11 +575,11 @@ defineExpose({
 
 <style>
 /* ============================================================================
-   chip pill 全局样式（unscoped）。
-   chip 由 lexical DecoratorNode createDOM 渲染，scoped 选择器无法命中（lexical
-   不带 data-v-xxx hash），所以挂在 unscoped block。
+   chip pill 与悬浮 tooltip 全局样式（unscoped）。
+   chip 由 lexical DecoratorNode createDOM 渲染，tooltip Teleport 到 body，
+   scoped 选择器均无法命中，统一收敛在此 unscoped 块。
 
-   设计要点（P3.1 + P3.2 + P3.3）：
+   设计要点：
    - **Catppuccin Mauve 直引**：`var(--ctp-mauve)` 通过 latte/frappe/macchiato
      三 flavor 自动切换；color-mix 仅做透明度调配（in srgb 与 token 体系一致）。
    - **字号 clamp 钳位**：`font-size` 走 `clamp(10px, 0.85em, 16px)` 防极小 /
@@ -606,7 +587,7 @@ defineExpose({
      计算的 0.6..1.2 比例）联动。
    - **multi-line 整体换行**：`display: inline-block` + `white-space: nowrap` →
      chip 自身不拆，但浏览器把它当一个单位参与父段落换行（line-break 不会切 chip 内部）。
-   - **dark 主题适配**：`.dark &` 提高 mauve 透明度，让 frappe / macchiato 下
+   - **dark 主题适配**：`.dark` 提高 mauve 透明度，让 frappe / macchiato 下
      pill 不至于太黯淡（mauve dark 色比 light 浅，需要更高 fill ratio）。
    ============================================================================ */
 .hc-var-chip {
@@ -626,7 +607,7 @@ defineExpose({
     -webkit-user-select: none;
     vertical-align: baseline;
     transition: background-color 120ms ease, border-color 120ms ease, transform 80ms ease;
-    /* P3.3：chip 内部不换行（整体不可拆），但允许参与父段落的换行流：父段 white-space
+    /* chip 内部不换行（整体不可拆），但允许参与父段落的换行流：父段 white-space
        是 pre-wrap，chip 作为 inline-block 是不可分单位 → 浏览器把 chip 看作一个"长字"，
        超宽时换到下一行而不切 chip。 */
     white-space: nowrap;
@@ -660,8 +641,7 @@ defineExpose({
     background-color: color-mix(in srgb, var(--ctp-mauve) 36%, transparent);
     border-color: color-mix(in srgb, var(--ctp-mauve) 58%, transparent);
 }
-/* error 态（变量缺失）→ destructive red + 删除线 + ⚠ 前缀（视觉提示；P3-108：chip click
-   补创路径已废弃，缺失提示另见 TextElementVariableHints 红色 banner） */
+/* error 态（变量缺失）→ destructive red + 删除线 + ⚠ 前缀（缺失提示另见 TextElementVariableHints） */
 .hc-var-chip.hc-chip-error {
     background-color: color-mix(in srgb, var(--ctp-red) 18%, transparent);
     color: var(--ctp-red);
@@ -682,49 +662,8 @@ defineExpose({
     background-color: color-mix(in srgb, var(--ctp-red) 24%, transparent);
     border-color: color-mix(in srgb, var(--ctp-red) 50%, transparent);
 }
-</style>
 
-<style scoped>
-.hc-chip-editor {
-    position: relative;
-    display: block;
-    width: 100%;
-}
-.hc-chip-editable {
-    width: 100%;
-    min-height: 2.5rem;
-    padding: 0.3rem 0.45rem;
-    font-size: 0.75rem;
-    line-height: 1.4;
-    border-radius: 4px;
-    background: var(--background);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    outline: none;
-    white-space: pre-wrap;
-    word-break: break-word;
-    cursor: text;
-    overflow-y: auto;
-}
-.hc-chip-editable:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
-}
-.hc-chip-editor-disabled .hc-chip-editable {
-    background: color-mix(in oklab, var(--muted) 40%, var(--background));
-    color: var(--muted-foreground);
-    cursor: not-allowed;
-}
-/* lexical 段落之间不要有 default margin */
-.hc-chip-editable :deep(p) {
-    margin: 0;
-    padding: 0;
-}
-
-/* tooltip（Teleport 到 body，所以 scoped 命中不到——挂全局选择器） */
-</style>
-
-<style>
+/* tooltip（Teleport 到 body） */
 .hc-chip-tooltip {
     position: fixed;
     z-index: 9999;
@@ -784,5 +723,43 @@ defineExpose({
     border-top: 1px dashed var(--border);
     color: var(--destructive, #d20f39);
     font-size: 10px;
+}
+</style>
+
+<style scoped>
+.hc-chip-editor {
+    position: relative;
+    display: block;
+    width: 100%;
+}
+.hc-chip-editable {
+    width: 100%;
+    min-height: 2.5rem;
+    padding: 0.3rem 0.45rem;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    border-radius: 4px;
+    background: var(--background);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    outline: none;
+    white-space: pre-wrap;
+    word-break: break-word;
+    cursor: text;
+    overflow-y: auto;
+}
+.hc-chip-editable:focus {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 1px var(--ring);
+}
+.hc-chip-editor-disabled .hc-chip-editable {
+    background: color-mix(in oklab, var(--muted) 40%, var(--background));
+    color: var(--muted-foreground);
+    cursor: not-allowed;
+}
+/* lexical 段落之间不要有 default margin */
+.hc-chip-editable :deep(p) {
+    margin: 0;
+    padding: 0;
 }
 </style>

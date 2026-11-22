@@ -79,7 +79,7 @@ export const useVariableStore = defineStore('variables', () => {
 
     /**
      * 当前 wall 可用的 user 变量 key 集合（给 VariablePicker / TextElementVariableHints 用）。
-     * 返 fullName 列表（含 {@code user:<wallId>/} 前缀）。供 H 任务的 picker 引用，免再扫一遍 store。
+     * 返 fullName 列表（含 {@code user:<wallId>/} 前缀）。
      */
     const availableUserKeys = computed<string[]>(() => {
         const result: string[] = [];
