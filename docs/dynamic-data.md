@@ -325,9 +325,9 @@ public class BedWarsPlugin extends JavaPlugin {
             return;
         }
 
-        // 2. 注册 namespace（首参 this = Plugin 实例，用于 ACL spoof 防御）
+        // 2. 注册 namespace（首参 this = Plugin 实例，用于跨插件命名空间隔离）
         canvas.registerNamespace(this, "bedwars", new NamespaceInfo(
-            "BedWars 比赛数据", "BedWarsPlugin", getDescription().getVersion()));
+            "BedWars 比赛数据", "BedWarsPlugin", getPluginMeta().getVersion()));
 
         // 3. 声明可用 key（让编辑器自动补全显示）
         canvas.declareKey(this, "bedwars", "match_a.red_score", VarType.NUMBER, "红队当前分数");

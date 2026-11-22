@@ -499,9 +499,7 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 > `HttpAccessControlTest` 对该 record 的字段集合做**逐字相等**断言——将来给它加字段会直接红，
 > 逼加的人先想清楚这个字段能不能匿名公开。
 
-> **画布尺寸上限（`limits.canvas-max-maps`）没有 bypass 节点。** 早期表里的 `canvas.admin.bypass-limit`
-> 全仓零引用（定义了从没接线），服主收权限以为封了功能其实照用，已从 `paper-plugin.yml` 与本表移除。
-> 要放宽尺寸就改 `limits.canvas-max-maps` 本身。
+> **画布尺寸上限（`limits.canvas-max-maps`）不设绕过权限**：所有新建画布统一受该配置约束，如需放宽请直接调整 `limits.canvas-max-maps`。
 
 任何检查失败 → 返回 `PERMISSION_DENIED` + 审计记录。
 

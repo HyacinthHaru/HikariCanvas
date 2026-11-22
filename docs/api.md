@@ -1,54 +1,47 @@
-# HikariCanvas Plugin Push API
+# HikariCanvas 外部插件接入 API
 
-> 让外部插件（铁路 / PvP / 商店 / ...）实时向 HikariCanvas wall 推送动态变量。
-> 接口稳定性：**稳定**（遵循语义化版本，详见 §11）。
+`HikariCanvasAPI` 允许其他 Paper 插件（小游戏、经济、铁道车控、领地等）向招牌实时推送动态变量。玩家只需在网页编辑器里插入对应的 `${var:命名空间/键名}` 占位符，游戏内的招牌就会随你的插件数据自动刷新。
 
----
-
-## 1. 概览
-
-`HikariCanvasAPI` 是 HikariCanvas 提供的外部插件动态接入接口，让外部插件可以：
-
-- 注册一个 **namespace**（如 `bedwars` / `railway`）
-- 声明可用变量 **key**（编辑器 Variable Picker 会自动补全）
-- 推送变量当前值（HikariCanvas 渲染时自动替换 `${var:bedwars/red_score}` 等占位符）
-- 玩家编辑器中拖拽 `${var:...}` 占位符到 wall 文本 → wall 自动跟随变量值实时刷新
-
-**数据流**：
-
-```
-你的插件 → HikariCanvasAPI.setVariable(...)
-         → PushRateLimiter（per-plugin 100/s + 全局 1000/s）
-         → VariableStore（线程安全 mirror）
-         → wall dirty marker（倒排索引）
-         → ProjectionThrottler tick（200ms 合并）
-         → wall canvas 重画 + 投影
-```
-
-整个过程：
-
-- **异步**：不在 server tick 主线程做重活
-- **错误隔离**：你的插件抛异常 / 推非法值不影响 HikariCanvas 本身
-- **限流防御**：防 bug 插件刷爆，per-plugin 100/s + 全局 1000/s + 10s 全局熔断
-- **零开销 fallback**：未安装 HikariCanvas 时，你的插件可 graceful skip
+> **接口稳定性承诺**：`ac.haru.hikaricanvas.api.*` 在 `1.x` 大版本周期内保持向后兼容（详见 [第 11 节](#11-稳定性与向后兼容承诺)）。底层架构与协议细节见 [动态数据接入设计](dynamic-data.md)。
 
 ---
 
-## 2. 快速开始
+## 1. 工作机制概览
 
-### 2.1 添加依赖（Gradle）
+外部插件接入只需要做三件事：
+1. 在 `onEnable` 中注册属于自己插件的**命名空间**（如 `bedwars`）；
+2. 声明可供玩家选择的**变量键名与说明**（方便玩家在网页编辑器的变量选择器里直接搜索点选）；
+3. 在数据变化或定时任务中调用 `setVariable` / `setVariables` 推送最新字符串值。
+
+**内部流转路径**：
+
+```text
+你的插件调用 HikariCanvasAPI.setVariable(...)
+  → 推送速率限流器（单插件 100 次/秒，全局 1000 次/秒）
+  → 内存变量仓库（线程安全，O(1) 写入）
+  → 标记引用了该变量的画板为待重绘
+  → 投影节流器合并刷新（约 200ms 窗口内多次修改只重画一次）
+  → 后台渲染并向周围玩家推送地图画面
+```
+
+整条链路具备四个特点：
+- **不卡主线程**：你可以在主线程或任意异步线程调用 `setVariable`，重绘均在后台线程合并完成；
+- **故障隔离**：参数超长或超频会被安全拦截并打印警告，不会拖崩 HikariCanvas 或你的插件；
+- **命名空间防冒充**：每个命名空间与注册它的 `Plugin` 实例绑定，其他插件无法篡改你的变量；
+- **软依赖友好**：服务器未安装 HikariCanvas 时，你的插件可以正常启动并跳过推送逻辑。
+
+---
+
+## 2. 快速上手
+
+### 2.1 配置 Gradle 依赖与 `paper-plugin.yml`
 
 `build.gradle.kts`：
 
 ```kotlin
-repositories {
-    // HikariCanvas 当前只发布到 Maven Local / GitHub Packages；
-    // 如未发布，把 HikariCanvas-<version>.jar 放到 libs/ 目录引用
-}
-
 dependencies {
-    compileOnly(files("libs/HikariCanvas-1.0.0.jar")) // 替换为你实际使用的版本
-    // 或 compileOnly("ac.haru:hikari-canvas:1.0.0")
+    // 将下载的 HikariCanvas jar 放入项目的 libs/ 目录仅作编译期引用（切勿打包进你的插件 jar）
+    compileOnly(files("libs/HikariCanvas-1.0.0.jar"))
 }
 ```
 
@@ -57,47 +50,31 @@ dependencies {
 ```yaml
 name: BedWarsPlugin
 main: com.example.BedWarsPlugin
-version: 1.0.0
+version: '1.0.0'
 api-version: '1.21'
 
 dependencies:
   server:
     HikariCanvas:
-      load: BEFORE       # 让 HikariCanvas 先启动
-      required: false    # false = 你的插件可独立装；true = 强依赖
+      load: BEFORE       # 确保 HikariCanvas 先于你的插件完成启动注册
+      required: false    # false = 软依赖（未装 HikariCanvas 也能独立运行）；true = 硬依赖
       join-classpath: true
 ```
 
-> **load 顺序**：填 `BEFORE` 让 HikariCanvas 在你的 onEnable 之前先 onEnable。这样你 `Bukkit.getServicesManager().load(HikariCanvasAPI.class)` 一定能拿到非 null。
+### 2.2 获取 API 实例
 
-### 2.2 拿 API 实例（两种方式）
-
-**方式 A：Bukkit ServicesManager（推荐，零编译耦合）**
+推荐通过 Bukkit 的 `ServicesManager` 获取，只依赖公开稳定的 `ac.haru.hikaricanvas.api.*` 包，不与插件主类产生编译耦合：
 
 ```java
 import ac.haru.hikaricanvas.api.HikariCanvasAPI;
 import org.bukkit.Bukkit;
 
-HikariCanvasAPI api = Bukkit.getServicesManager().load(HikariCanvasAPI.class);
-if (api == null) {
-    // HikariCanvas 未装 / 未启动 → 选择 fallback 或 disable 自身功能
-    getLogger().info("HikariCanvas not found; dynamic display disabled");
+HikariCanvasAPI canvas = Bukkit.getServicesManager().load(HikariCanvasAPI.class);
+if (canvas == null) {
+    getLogger().info("未检测到 HikariCanvas，已跳过动态招牌接入");
     return;
 }
 ```
-
-**方式 B：getAPI() 方法**
-
-```java
-import ac.haru.hikaricanvas.HikariCanvas;     // 注意：需 import 主类，编译耦合
-import ac.haru.hikaricanvas.api.HikariCanvasAPI;
-import org.bukkit.Bukkit;
-
-HikariCanvas plugin = (HikariCanvas) Bukkit.getPluginManager().getPlugin("HikariCanvas");
-HikariCanvasAPI api = plugin.getAPI();
-```
-
-**优先选方式 A**：方式 B 要求你 `import ac.haru.hikaricanvas.HikariCanvas`，未来 HikariCanvas 主类重构会破坏你的编译；方式 A 只依赖 `ac.haru.hikaricanvas.api.*` 包，该包受 shadowJar relocate exclude 保护，路径稳定。
 
 ### 2.3 完整接入示例
 
@@ -114,7 +91,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.time.Duration;
 
-public class BedWarsPlugin extends JavaPlugin implements Listener {
+public final class BedWarsPlugin extends JavaPlugin implements Listener {
 
     private static final String NS = "bedwars";
     private HikariCanvasAPI canvas;
@@ -123,175 +100,120 @@ public class BedWarsPlugin extends JavaPlugin implements Listener {
     public void onEnable() {
         canvas = Bukkit.getServicesManager().load(HikariCanvasAPI.class);
         if (canvas == null) {
-            getLogger().info("HikariCanvas not found; score display disabled");
+            getLogger().info("未检测到 HikariCanvas，已跳过比分屏推送");
             return;
         }
 
-        // 1. 注册 namespace（每个插件 onEnable 调一次即可，幂等）
+        // 1. 注册命名空间（同一插件重复调用幂等）
         canvas.registerNamespace(this, NS, new NamespaceInfo(
-                "BedWars 比赛数据",
-                "BedWarsPlugin",
-                getDescription().getVersion()));
+                "起床战争比赛数据",
+                getPluginMeta().getName(),
+                getPluginMeta().getVersion()));
 
-        // 2. 声明可用 key（编辑器 Variable Picker 显示）
-        canvas.declareKey(this, NS, "match_a.red_score", VarType.NUMBER, "红队比分");
-        canvas.declareKey(this, NS, "match_a.blue_score", VarType.NUMBER, "蓝队比分");
-        canvas.declareKey(this, NS, "match_a.mvp", VarType.STRING, "MVP 玩家名");
+        // 2. 声明可用变量键名（玩家在网页编辑器输入 ${ 时即可看到分组与中文说明）
+        canvas.declareKey(this, NS, "match_a.red_score", VarType.NUMBER, "A 场红队比分");
+        canvas.declareKey(this, NS, "match_a.blue_score", VarType.NUMBER, "A 场蓝队比分");
+        canvas.declareKey(this, NS, "match_a.mvp", VarType.STRING, "本场 MVP 玩家名");
 
         Bukkit.getPluginManager().registerEvents(this, this);
     }
 
-    // 3. 事件触发推送
+    // 3. 在业务事件或定时任务中推送最新值
     @EventHandler
-    public void onPlayerKill(MatchKillEvent ev) {
+    public void onScoreUpdate(MatchScoreEvent event) {
         if (canvas == null) return;
         canvas.setVariable(this, NS, "match_a.red_score",
-                String.valueOf(ev.matchRedScore()),
-                Duration.ofMinutes(5));  // TTL：5 分钟无更新视为比赛结束
+                String.valueOf(event.redScore()),
+                Duration.ofMinutes(5)); // 5 分钟未更新则自动过期走兜底值
     }
 
     @Override
     public void onDisable() {
-        // 不需要手动 unregister——HikariCanvas 自动监听 PluginDisableEvent
-        // cached value 保留 30s 让 wall 显示旧值不闪屏，之后才清
+        // 无需手动清理：HikariCanvas 会自动监听 PluginDisableEvent 回收命名空间，
+        // 并将旧缓存值保留 30 秒缓冲，避免插件热重载期间招牌闪烁成 "???"。
     }
 }
 ```
 
-玩家在编辑器 textarea 输入：
+接入完成后，玩家在网页编辑器的文本输入框中输入：
 
-```
-红队: ${var:bedwars/match_a.red_score} 蓝队: ${var:bedwars/match_a.blue_score}
-MVP: ${var:bedwars/match_a.mvp}
+```text
+红队：${var:bedwars/match_a.red_score}  蓝队：${var:bedwars/match_a.blue_score}
+全场最佳：${var:bedwars/match_a.mvp|fallback=虚位以待}
 ```
 
-wall 实时显示当前比分。
+游戏内的招牌就会随比赛进程自动更新。
 
 ---
 
-## 3. API 接口完整参考
+## 3. 接口详细参考
 
-### 3.1 `registerNamespace`
+### 3.1 `registerNamespace` —— 注册命名空间
 
 ```java
 void registerNamespace(Plugin plugin, String namespace, NamespaceInfo info);
 ```
 
-**参数**：
-
 | 参数 | 类型 | 说明 |
-|---|---|---|
-| `plugin` | `Plugin` | 调用方 plugin 实例。**用于 ACL spoof 防御** + plugin disable 时自动清理 |
-| `namespace` | `String` | 必须匹配 `[a-zA-Z_][a-zA-Z0-9_]{0,31}`（首字符字母或 `_`，长度 ≤ 32） |
-| `info` | `NamespaceInfo` | 元信息（`displayName` / `pluginName` / `version`，全部非空） |
+| --- | --- | --- |
+| `plugin` | `Plugin` | 调用方插件实例（用于校验归属权及插件卸载时自动清理） |
+| `namespace` | `String` | 命名空间标识，须匹配 `^[a-zA-Z_][a-zA-Z0-9_]{0,31}$`（字母或下划线开头，1–32 位） |
+| `info` | `NamespaceInfo` | 展示名称、插件名与版本号（均不可为空） |
 
-**抛**：
+- **异常**：格式不合法或撞上系统保留命名空间时抛 `IllegalArgumentException`；已被其他插件占用时抛 `NamespaceConflictException`。
+- **幂等性**：同一插件实例重复注册同一命名空间会更新 `info` 元信息，保留首次注册时间。
 
-- `IllegalArgumentException`: namespace 格式非法 / 与**保留 namespace** 冲突
-- `NamespaceConflictException`: namespace 已被**另一**插件注册
-
-**幂等**：同 plugin 重复注册同 namespace OK，会覆盖 `info`，但保留首次注册的 `registeredAt`。
-
-**示例**：
-
-```java
-canvas.registerNamespace(this, "bedwars", new NamespaceInfo(
-        "BedWars 比赛数据", "BedWarsPlugin", "1.2.0"));
-```
-
-### 3.2 `declareKey`
+### 3.2 `declareKey` —— 声明变量元数据
 
 ```java
 void declareKey(Plugin plugin, String namespace, String key, VarType type, @Nullable String hint);
 ```
 
-**参数**：
-
 | 参数 | 类型 | 说明 |
-|---|---|---|
-| `plugin` | `Plugin` | ACL 校验，必须与 `registerNamespace` 时一致 |
-| `namespace` | `String` | 必须先 `registerNamespace` |
-| `key` | `String` | 必须匹配 `[a-zA-Z0-9_.-]+`，最长 64 字符 |
-| `type` | `VarType` | `STRING` / `NUMBER` / `BOOLEAN` / `COLOR` |
-| `hint` | `String?` | 编辑器 Variable Picker 显示的描述（可空） |
+| --- | --- | --- |
+| `plugin` | `Plugin` | 必须与注册该命名空间时的插件实例一致 |
+| `namespace` | `String` | 已注册的命名空间 |
+| `key` | `String` | 变量键名，须匹配 `^[a-zA-Z0-9_.-]+$`，最长 64 个字符 |
+| `type` | `VarType` | `STRING`、`NUMBER`、`BOOLEAN` 或 `COLOR` |
+| `hint` | `@Nullable String` | 显示在编辑器变量选择器旁的说明文字（可传 `null`） |
 
-**抛**：
+- **说明**：`declareKey` 只登记键名和提示信息供网页编辑器补全展示，**不会写入变量值**；即使你还没调用过 `setVariable`，玩家也能先在编辑器里选到这个键并排好版。
+- **异常**：未注册命名空间或跨插件调用时抛 `PluginNamespaceException`。
 
-- `PluginNamespaceException(NAMESPACE_NOT_REGISTERED)`: 没先 `registerNamespace` 直接 declareKey
-- `PluginNamespaceException(NAMESPACE_ACL_DENIED)`: namespace 属于其他插件
-
-**注意**：
-
-- **`declareKey` 不写值** —— 仅声明 key 对编辑器可见。`setVariable` 才是写值。
-- 同 key 重复 declare 会覆盖 `type` 与 `hint`。
-- 玩家在 textarea 输入 `${` 时，Variable Picker 从 `GET /api/variable/list-all-namespaces` 拉数据，显示分组（即使没 push 任何 value 也能列出 key）。
-
-**示例**：
-
-```java
-canvas.declareKey(this, "bedwars", "match_a.red_score", VarType.NUMBER, "红队比分（整数）");
-canvas.declareKey(this, "bedwars", "match_a.mvp", VarType.STRING, "MVP 玩家名");
-```
-
-### 3.3 `setVariable`
+### 3.3 `setVariable` —— 推送单个变量值
 
 ```java
 void setVariable(Plugin plugin, String namespace, String key, String value, @Nullable Duration ttl);
 ```
 
-**参数**：
-
 | 参数 | 类型 | 说明 |
-|---|---|---|
-| `plugin` | `Plugin` | ACL 校验 |
-| `namespace` | `String` | 已 `registerNamespace` 的 namespace |
-| `key` | `String` | `[a-zA-Z0-9_.-]+`，最长 64 char |
-| `value` | `String` | 字符串值（非 null；空串合法）；最长 **4096** 字符 |
-| `ttl` | `Duration?` | `null` = 沿用变量原 TTL；`Duration.ZERO` = 永久；`> 0` 必须 ≥ **100ms**（小于自动 clamp） |
+| --- | --- | --- |
+| `plugin` | `Plugin` | 归属插件实例 |
+| `namespace` | `String` | 已注册的命名空间 |
+| `key` | `String` | 变量键名（未提前 `declareKey` 也可直接写入，默认按 `STRING` 处理） |
+| `value` | `String` | 变量字符串值（不可为 `null`，允许空字符串 `""`，最长 **4096** 字符） |
+| `ttl` | `@Nullable Duration` | 有效期：`Duration.ZERO` 表示永久有效；传 `null` 表示沿用该变量上一次的 TTL；正数最小 `100ms`（低于 `100ms` 自动按 `100ms` 计） |
 
-**抛**（仅 ACL 错误抛；其他错误内部 log + drop）：
-
-- `PluginNamespaceException(NAMESPACE_NOT_REGISTERED)`
-- `PluginNamespaceException(NAMESPACE_ACL_DENIED)`
-
-**静默 drop**（不抛异常 / 调用方无感知）：
-
-- 限流命中（log WARN）
-- `value` 长度超 4096（log WARN）
-- `ttl < 100ms`（自动 clamp 到 100ms）
-- 内部未知异常（log SEVERE，HikariCanvas 自身不受影响）
-
-**返回**：`void`
-
-**自动 create**：变量不存在时自动创建，类型取 `declareKey` 声明，未声明则默认 `STRING`。
-
-**示例**：
+- **异常与容错**：仅在命名空间未注册或越权时抛 `PluginNamespaceException`（及 `value == null` 时抛 `NullPointerException`）；触发限流、值超长 4096 字符或键名格式不合法时，内部记录警告日志并静默丢弃本次写入，不中断调用方业务。
 
 ```java
-// 5 分钟 TTL
+// 5 分钟有效期
 canvas.setVariable(this, "bedwars", "match_a.red_score", "5", Duration.ofMinutes(5));
 
-// 永久
-canvas.setVariable(this, "bedwars", "match_a.mvp", "Notch", Duration.ZERO);
+// 永久有效（直到下次覆盖或插件卸载）
+canvas.setVariable(this, "bedwars", "match_a.mvp", "Steve", Duration.ZERO);
 
-// 沿用原 TTL（不传）
+// 沿用上一次设定的有效期
 canvas.setVariable(this, "bedwars", "match_a.red_score", "6", null);
 ```
 
-### 3.4 `setVariables`
+### 3.4 `setVariables` —— 批量推送多个变量
 
 ```java
 void setVariables(Plugin plugin, String namespace, Map<String, VariableUpdate> updates);
 ```
 
-批量推送。**性能上优于循环调 `setVariable`**：
-
-- 内部 dirty wall merge（一次性 mark 所有受影响 wall）
-- 一次 ACL check（而非每条都校验）
-
-**限流计费**：按 `updates.size()` 计 token（10 条 update 占用 10 个 token）。
-
-**示例**：
+需要同时更新同一命名空间下的多个键时，优先使用 `setVariables` 而非循环调用 `setVariable`：内部只做一次权限校验，并将受影响的画板一次性合并标记重绘。限流配额按 `updates.size()` 条数扣减。
 
 ```java
 import ac.haru.hikaricanvas.api.VariableUpdate;
@@ -300,321 +222,166 @@ import java.util.Map;
 canvas.setVariables(this, "bedwars", Map.of(
     "match_a.red_score",  new VariableUpdate("5", Duration.ofMinutes(5)),
     "match_a.blue_score", new VariableUpdate("3", Duration.ofMinutes(5)),
-    "match_a.mvp",        new VariableUpdate("Notch", null)
+    "match_a.mvp",        new VariableUpdate("Steve", null)
 ));
 ```
 
-**抛**：同 `setVariable` 的 ACL 异常。空 map 合法（noop）。
-
-### 3.5 `unsetVariable`
+### 3.5 `unsetVariable` —— 移除单个变量
 
 ```java
 void unsetVariable(Plugin plugin, String namespace, String key);
 ```
 
-删除单个变量（**不删 namespace 本身**）。
+移除单个变量值（保留命名空间本身）。移除后，画板上引用该变量的文字会按兜底顺序回退（见 [6.2 节](#62-缺值兜底顺序)）；若变量原本不存在则静默返回。
 
-引用该变量的 wall 文本走 fallback 链：cached → `${var:X|fallback=...}` → `Variable.default` → `"???"`（详见 §6.2）。
+---
 
-**抛**：
+## 4. 命名空间隔离与保留名
 
-- ACL 异常同上
+### 4.1 系统保留命名空间（禁止外部插件注册）
 
-**静默**：变量不存在时静默返回（不抛 `VariableException`）。
+| 保留名 | 系统用途 |
+| --- | --- |
+| `user` | 玩家单画布私有变量（`user:<wallId>`） |
+| `userglobal` | 玩家跨画布共享的全局用户变量 |
+| `system` | 服务器与画板系统自动变量 |
+| `papi` | PlaceholderAPI 桥接命名空间 |
+| `scoreboard` | Bukkit 原版计分板桥接命名空间 |
+| `schedule` | 内置列车时刻表与铁路网络命名空间 |
 
-**示例**：
+尝试注册以上名称会直接抛出 `IllegalArgumentException`。命名空间名称只允许英文字母、数字和下划线（不含连字符 `-` 或冒号 `:`），推荐使用简短小写名称（如 `bedwars` 或加上团队前缀 `myteam_bedwars`）。
+
+### 4.2 跨插件隔离规则
+
+命名空间在运行期与注册它的 `Plugin` 实例严格绑定：
+- 插件 A 尝试向插件 B 注册的命名空间写值或删值 → 抛出 `PluginNamespaceException(NAMESPACE_ACL_DENIED)`；
+- 插件 A 尝试抢注已被插件 B 占用的同名命名空间 → 抛出 `NamespaceConflictException`。
+
+---
+
+## 5. 插件生命周期与重启行为
+
+- **插件卸载或热重载**：HikariCanvas 监听 `PluginDisableEvent`。当你的插件卸载时，命名空间会立即释放（以便重载后的新实例重新注册），但已写入的变量缓存值会**保留 30 秒宽限期**——只要你的插件在 30 秒内完成重载并推入新值，游戏里的招牌全程不会闪烁成 `???`。因此你在 `onDisable` 中不需要手动清理任何变量。
+- **服务器重启**：外部插件推送的变量全部存储在内存中，**不落盘写入 SQLite**。服务器重启后，由你的插件在 `onEnable` 中重新注册命名空间并推送首帧数据即可。
+- **应对 HikariCanvas 重启**：如果服主使用插件管理工具单独重载了 HikariCanvas，你可以监听 `PluginEnableEvent`，当启用插件名为 `"HikariCanvas"` 时重新获取服务实例并执行一次初始化注册：
 
 ```java
-canvas.unsetVariable(this, "bedwars", "match_a.mvp");
+@EventHandler
+public void onPluginEnable(PluginEnableEvent event) {
+    if ("HikariCanvas".equals(event.getPlugin().getName())) {
+        canvas = Bukkit.getServicesManager().load(HikariCanvasAPI.class);
+        if (canvas != null) {
+            initCanvasVariables();
+        }
+    }
+}
 ```
 
 ---
 
-## 4. namespace ACL & 保留 namespace
+## 6. 占位符解析与线程模型
 
-### 4.1 保留 namespace（外部插件禁注册）
+### 6.1 编辑器引用格式
 
-| Namespace | 用途 |
-|---|---|
-| `user` / `user:<wallId>` | 玩家用户变量（per-wall） |
-| `userglobal` | 全服共享用户变量（仅玩家通过编辑器创建，外部插件禁推） |
-| `system` / `system:<wallId>` | 系统变量（`server.time` / `wall.alias` 等） |
-| `papi` | PlaceholderAPI 桥接 |
-| `scoreboard` | Bukkit 记分板 |
-| `schedule` / `schedule:<wallId>` | 内置 Manual Schedule（兜底列车功能） |
+```text
+${var:bedwars/match_a.red_score}          引用外部插件变量（命名空间/键名）
+${var:bedwars/match_a.red_score|fallback=0}  指定数据缺失或过期时的兜底文字
+```
 
-注册保留 namespace → 抛 `IllegalArgumentException`。
+### 6.2 缺值兜底顺序
 
-> **注意**：namespace 正则为 `^[a-zA-Z_][a-zA-Z0-9_]{0,31}$` —— 只允许字母 / 数字 / 下划线，1-32 字符；`:` `-` 都不允许（HikariCanvas 内部 `<ns>:<wallId>` 形态另行拼接）。
+渲染画布时按以下优先级依次取值：
+1. 变量存在且未超过 TTL 有效期 → 使用最新推送值；
+2. 占位符内写了 `|fallback=xxx` → 使用 `xxx`；
+3. 变量自身定义了默认值 → 使用默认值；
+4. 以上均无 → 显示 `"???"`。
 
-### 4.2 ACL spoof 防御
+### 6.3 刷新合并与线程安全
 
-`PluginNamespaceRegistry` 用 `ConcurrentHashMap.putIfAbsent` 做原子注册：
-
-- 插件 A 推 plugin B 的 namespace → `PluginNamespaceException(NAMESPACE_ACL_DENIED)`
-- 重复注册同 namespace 但不同 plugin → `NamespaceConflictException`
-- 同 plugin 重复注册同 namespace → **幂等覆盖** `info`，保留 `registeredAt`
-
-### 4.3 namespace 命名建议
-
-- **小写**：`bedwars` ✓，`BedWars` 也合法但不推荐
-- **简洁**：`bedwars` ✓，`my_bedwars_plugin_v2` 嫌长
-- **加前缀防撞**：多插件作者同时建议 `myorg_bedwars`（如 `hyacinth_bedwars`）
-- **保留 namespace**：仅六个（见 §4.1），社区可视情况扩展
+- **高频推送自动合并**：即使你的插件在 1 毫秒内连续更新同一变量 50 次，每次调用只是 O(1) 改写内存值并打上重绘标记；后台投影节流器会按帧率周期取最新值只重绘 1 次，不会造成渲染风暴。
+- **任意线程可调**：`VariableStore` 内部完全线程安全，无需套 `Bukkit.getScheduler().runTask(...)` 切回主线程，直接在异步数据库回调或网络线程中调用 `setVariable` 反而更省主线程开销。
 
 ---
 
-## 5. 生命周期 & 清理
+## 7. 速率限制与推送建议
 
-### 5.1 自动清理
-
-`PluginDisableEvent` 触发 HikariCanvas 内部 listener：
-
-1. **立即** unregister namespace（释放给其他插件可注册）
-2. **立即** 移除该插件的 `PluginNamespaceProvider`（停止 declaredKeys 暴露给编辑器 Picker）
-3. **30s 后** purge VariableStore 内该 namespace 所有变量数据
-
-**为什么 30s 延迟？** 让 plugin reload 窗口（plugin disable → enable 之间通常 ≤ 30s）内 wall 仍显示 cached value，不闪屏。reload 完成后立刻 push 新值即可。
-
-### 5.2 手动 unregister？
-
-**不需要**。`onDisable` 你不需要做任何 cleanup。
-
-但如果你想运行时清空一组变量（不卸载插件），可循环调 `unsetVariable`。
-
-### 5.3 服务器重启
-
-HikariCanvas 重启 / reload 后，**所有 plugin / system / PAPI / scoreboard 变量丢失**（不持久化）。你的插件 `onEnable` 重新 `registerNamespace` + `declareKey` + 第一次 push 即可恢复。
-
-只有 `user/*` namespace（玩家用户变量）持久化到 DB，重启自动恢复。
-
----
-
-## 6. 渲染 / 变量解析
-
-### 6.1 引用语法
-
-文本字段（如 `TextElement.text`）含占位符：
-
-```
-${var:bedwars/match_a.red_score}              第三方插件变量（namespace/key）
-${var:user/red_score}                         玩家单画布用户变量
-${var:userglobal/red_score}                   玩家全局用户变量
-${var:system/server.time}                     全局系统变量（须带 system/ 前缀）
-${var:wall.alias}                             单画布系统变量
-${var:papi/%player_name%}                     PAPI placeholder（斜杠或点号分隔）
-
-# fallback 语法
-${var:bedwars/score|fallback=0}               变量不存在 / 过期时显示 0
-```
-
-### 6.2 fallback 链
-
-变量取值优先级（从高到低）：
-
-1. **cached_value** 存在且非空 → 用 cached_value
-2. cached_value 为空 / null → 用 `${var:X|fallback=...}` 语法里的 fallback
-3. 无 fallback → 用 `Variable.default`
-4. default 也无 → 用 `"???"`（系统兜底，让用户看出来变量配错了）
-
-### 6.3 wall dirty 合并（性能）
-
-```
-插件 1ms 内连推 100 次（同一变量） →
-  1. setVariable 调用 100 次 → 每次写 VariableStore（O(1)）
-  2. 每次 mark wall dirty（O(1)）
-  3. 但 ProjectionThrottler 200ms 才 tick 一次
-  4. 200ms 间隔最终只重画 1 次（取最新值）
-```
-
-push 频率不影响渲染负担 —— push 是廉价的写操作，重画在 throttler 端合并。
-
-### 6.4 线程模型
-
-- **变量 resolve 不在 MC 主线程跑** —— `ProjectionThrottler` 直接读 cached value（O(1)）
-- 你的 `setVariable` 调用可在任意线程（main / async 都行）—— `VariableStore` 内部线程安全
-- 不需要 `Bukkit.getScheduler().runTask(...)` 包裹
-
----
-
-## 7. 限流
-
-### 7.1 默认限制（config.yml 可调）
+`config.yml` 默认对外部插件推送设有两级限流保护（服主修改后可通过 `/canvas var reload` 热生效）：
 
 ```yaml
 dynamic:
   push-rate-limit:
-    per-plugin-per-second: 100
-    global-per-second: 1000
-    global-circuit-break-ms: 10000
+    per-plugin-per-second: 100     # 单插件每秒最多推送条数
+    global-per-second: 1000        # 全服所有插件合计每秒上限
+    global-circuit-break-ms: 10000 # 触发全局上限后的熔断保护毫秒数
 ```
 
-### 7.2 触限行为
-
-| 场景 | 行为 |
-|---|---|
-| per-plugin 超 100/s | drop tail（每秒最多 1 次 WARN log，避日志爆炸） |
-| 全局超 1000/s | 触发**保护期** 10s，期间所有 push reject（log WARN）|
-| 保护期结束 | 自动恢复，下次 push 正常 |
-
-**调用方无感知**：限流不抛异常，仅 log。如果你的插件需要严格 push 成功保证，请控制 push 频率或自己加重试。
-
-### 7.3 最佳实践
-
-- **事件型推送**（PlayerKill / 商品购买）：低频，几乎不会触限
-- **定时推送**：合理间隔（每 5s / 30s），避免每 tick push（20/s × N 个变量很快触限）
-- **批量推送**：用 `setVariables` 一次性推 N 个 key（按 entry 计费但**一次 ACL check** + 一次 wall dirty 合并）
-- **去重**：如果值没变就别 push（节省 limit 配额 + 减少 wall 重画概率）
+- **超限表现**：不抛异常、不踢出注册资格，仅丢弃超出配额的写入并按每秒最多 1 条的频率打印警告日志，窗口过后自动恢复。
+- **实用建议**：
+  1. **值未变化时不重复推送**：在插件侧做一次旧值比对，数值变了再调 `setVariable`，既省配额又避免无谓重绘；
+  2. **定时轮询选合理间隔**：倒计时、排行榜等按 1 秒、5 秒或 30 秒推送即可，不要挂在每 tick（每秒 20 次 × 多个键很容易撞上限）；
+  3. **多键同更用 `setVariables`**：一次调用完成整组状态更新；
+  4. **TTL 设为推送间隔的 2–3 倍**：例如每 10 秒推送一次的数据，TTL 可设为 30 秒，防止偶发一次抖动就让画面跳回 `???`。
 
 ---
 
-## 8. 错误码 / 异常表
+## 8. 异常汇总与调用模板
 
-### 8.1 抛给调用方的异常
+### 8.1 会抛出的运行时异常
 
-| 异常 | 何时抛 | 处理建议 |
-|---|---|---|
-| `IllegalArgumentException` | namespace 格式非法 / 保留 ns / null 参数 | **立即修代码**，不能 catch 忽略 |
-| `NamespaceConflictException` | 重复注册不同 plugin | 选另一个 namespace 名（建议加 plugin name 前缀） |
-| `PluginNamespaceException(NAMESPACE_NOT_REGISTERED)` | 未 `registerNamespace` 直接 `setVariable` / `declareKey` / `unsetVariable` | `onEnable` 先调 `registerNamespace` |
-| `PluginNamespaceException(NAMESPACE_ACL_DENIED)` | 推别人的 namespace | 用自己的 namespace |
+| 异常类型 | 触发原因 | 处理方式 |
+| --- | --- | --- |
+| `IllegalArgumentException` | 命名空间格式非法、使用了保留命名空间，或必填参数为空 | 检查并修正代码中的命名与传参 |
+| `NamespaceConflictException` | 命名空间已被服内另一款插件注册 | 更换命名空间名称（建议加上插件前缀） |
+| `PluginNamespaceException`（`NAMESPACE_NOT_REGISTERED`） | 尚未调用 `registerNamespace` 就直接声明键或写值 | 确保 `onEnable` 先完成命名空间注册 |
+| `PluginNamespaceException`（`NAMESPACE_ACL_DENIED`） | 尝试操作其他插件注册的命名空间 | 仅操作本插件自己注册的命名空间 |
 
-所有异常都是 `RuntimeException`，不要求声明 `throws`。
-
-### 8.2 静默 drop（不抛异常 / 仅 log）
-
-- 限流触发（log WARN，每秒最多 1 条）
-- `ttl < 100ms`（自动 clamp 到 100ms）
-- `value` 长度 > 4096（log WARN + drop 该次写）
-- `key` 格式非法（log WARN + drop）
-- `value == null`（NullPointerException 仍会抛——校验你的代码）
-- 内部未知 Exception（log SEVERE + drop，HikariCanvas 自身不受影响）
-
-### 8.3 防御性编程模板
+### 8.2 推荐封装写法
 
 ```java
-public void onScoreChanged(int newScore) {
-    if (canvas == null) return;  // HikariCanvas 未装
+public void pushRedScore(int score) {
+    if (canvas == null) return;
     try {
-        canvas.setVariable(this, NS, "red_score",
-                String.valueOf(newScore),
+        canvas.setVariable(this, NS, "match_a.red_score",
+                String.valueOf(score),
                 Duration.ofMinutes(5));
-    } catch (RuntimeException e) {
-        // 仅 ACL 异常会到这里；其他错误已静默
-        getLogger().warning("Failed to push variable: " + e.getMessage());
+    } catch (RuntimeException ex) {
+        getLogger().warning("推送招牌变量失败: " + ex.getMessage());
     }
 }
 ```
 
 ---
 
-## 9. 完整示例插件
+## 9. 可运行示例工程
 
-参见仓库 `examples/` 目录：
-
-- **`examples/demo-train-plugin/`** — 定时器范型（每 5s 推 ETA）
-- **`examples/demo-score-plugin/`** — 事件 + 命令范型
-
-每个示例附 README + 完整 build.gradle.kts + paper-plugin.yml。
+仓库 [`examples/`](../examples/README.md) 目录内置了两个可直接编译测试的独立 Paper 插件工程：
+- **`examples/demo-train-plugin/`** —— 定时推送示例（每 5 秒计算并批量更新两条线路的发车时间与倒计时）
+- **`examples/demo-score-plugin/`** —— 事件与命令驱动示例（监听玩家进服事件并通过 `/demoscore` 命令实时加减红蓝队比分）
 
 ---
 
-## 10. FAQ
+## 10. 常见问题（FAQ）
 
-### Q: 我的插件不依赖 HikariCanvas 也能装吗？
-
-A: 用 §2.2 方式 A（`ServicesManager.load` 返 null 时 graceful 处理）。`paper-plugin.yml` 写 `required: false`。这样 HikariCanvas 没装时你的插件正常启动，只是失去动态显示功能。
-
-### Q: 重启服务器后我的变量值是什么？
-
-A: 插件 / 系统 / PAPI / scoreboard namespace 的变量**不持久化**，重启后空。等你的插件下一次 push 才有值。这是 Push 模式的自然属性（详见 `docs/dynamic-data.md §8.2`）。
-
-引用方在 push 完成前走 fallback 链显示占位。
-
-### Q: 我能让玩家在编辑器看到我声明的 key 吗？
-
-A: 是。`declareKey(...)` 把 key 加入 namespace 的 declared 列表，前端 Variable Picker 从 `GET /api/variable/list-all-namespaces` 拉取后按 namespace 分组显示（即使还没 push 任何 value）。`hint` 字段会显示在 key 旁边作说明。
-
-### Q: TTL 怎么选？
-
-A:
-
-| 更新频率 | 建议 TTL |
-|---|---|
-| 高频（每秒 / sub-second） | `30s` |
-| 中频（每分钟） | `5min` |
-| 低频（玩家事件触发） | `Duration.ZERO`（永久，直到下次更新） |
-| 一次性公告 | `Duration.ofHours(1)` 之类 |
-
-**TTL 不是"几时该 push"**，而是"过期后 cached 失效，render 走 fallback"。如果你能保证定时推，TTL 设为 push 间隔的 2-3 倍即可（避免一次 push 失败 + 下次还没到时 cached 误过期）。
-
-### Q: 不同 plugin 的 namespace 能同名 key 吗？
-
-A: 是。`bedwars/red_score` 和 `railway/red_score` 完全独立（不同 namespace）。同 namespace 内同 key 后写覆盖前写。
-
-### Q: 我能查询某个变量当前值吗？
-
-A: **不提供** `getVariable` 方法 —— HikariCanvas 设计为单向 Push（你推 → HC 显示），双向同步会引入 race condition + 缓存一致性问题。
-
-如果你需要业务侧也用变量值，请在你自己的插件里维护一份镜像（push 时同时写自己的内存）。
-
-### Q: 我能让 wall 显示的变量值带颜色 / 格式化吗？
-
-A: `${var:...}` 占位符仅做**纯字符串替换**。颜色、字体与字号由所在的 `TextElement` 统一控制；如需让变量值与周围文字呈现不同样式，拆成独立的 `TextElement` 即可。
-
-### Q: 我可以用 PAPI placeholder 而非自己写 plugin 吗？
-
-A: 可以。任何 `${var:papi/%placeholder%}` 会自动桥接到 PlaceholderAPI（前提是服务器装了 PAPI）。详见 `docs/dynamic-data.md §7.2`。
-
-但如果你的数据来源是自己的插件，写 Push API 比期望玩家装 PAPI + 你的 PAPI 扩展更可靠（少一层依赖 + 编辑器自动补全更友好）。
-
-### Q: 推送频率太高会被封吗？
-
-A: 不会"封"，但会被限流（详见 §7）。日志会有 WARN，调用方静默。你不会被踢出 server / 失去注册资格，调整频率即可。
-
-### Q: 我能在 async 线程调 setVariable 吗？
-
-A: 可以。`VariableStore` 线程安全。事实上推荐 async 调（不阻塞 server tick）。
-
-### Q: HikariCanvas 重启 / reload 期间我的 push 会怎样？
-
-A: 如果 HikariCanvas plugin 处于 disabled 状态，`Bukkit.getServicesManager().load(...)` 返 null，你的 push 不会发生（如果你按 §8.3 模板做 null check）。
-
-HC enable 完成后，你需要重新 `registerNamespace` + push 第一次。**建议**监听 `PluginEnableEvent` 检测 HikariCanvas 重新启用并重新初始化。
-
-```java
-@EventHandler
-public void onPluginEnable(PluginEnableEvent ev) {
-    if ("HikariCanvas".equals(ev.getPlugin().getName())) {
-        canvas = Bukkit.getServicesManager().load(HikariCanvasAPI.class);
-        if (canvas != null) initRegistration();
-    }
-}
-```
+- **问：为什么不提供 `getVariable` 读取接口？**
+  答：`HikariCanvasAPI` 定位是纯粹的单向展示通道（业务插件产出数据 → 画布负责渲染展示）。如果允许双向读写，多个插件并发读写同一状态会引入竞态与缓存一致性问题。业务侧需要读取状态时，请直接读你自己插件内部维护的数据。
+- **问：推送的字符串里能塞 `§a` 或 `<red>` 颜色代码吗？**
+  答：变量占位符只做纯文本替换，字体的颜色、字号、描边和渐变统一由画布上该文本元素的样式决定。如果想让数字和前缀文字用不同颜色或字号，在画布上拆成两个独立的文本元素排在一起即可。
+- **问：单插件最多能注册多少个变量键？**
+  答：单个外部插件命名空间最多保存 **1000** 个不同的键（防动态拼接随机键名撑爆内存）。如果业务有房间号之类的临时键，房间销毁时记得调用 `unsetVariable` 清理。
 
 ---
 
 ## 11. 稳定性与向后兼容承诺
 
-- **语义化版本（`1.x`）**：`HikariCanvasAPI` 在 `1.x` 系列内保持接口冻结——新能力只通过追加方法提供，现有方法签名与行为保持向后兼容。
-- **包路径**：`ac.haru.hikaricanvas.api.*` 是公开 SPI 包，受 shadowJar relocate `exclude` 保护，跨版本路径稳定。
-- **`VarType` enum**：新增类型只走末尾追加（不重排顺序 / 不删除现有值）。
-- **版本公告**：如有跨主版本（如 `2.0.0`）的破坏性变更，将在 [GitHub Releases](https://github.com/HyacinthHaru/HikariCanvas/releases) 发布说明中明确标注迁移方案。
+- **`1.x` 接口冻结**：在 `1.x` 版本线内，`HikariCanvasAPI` 现有方法签名与行为保持向后兼容，新增能力仅通过追加新方法或默认方法提供。
+- **包路径固定**：`ac.haru.hikaricanvas.api.*` 在打包配置中显式排除重定位（relocate），外部插件无需担心跨小版本升级时类路径变动。
+- **枚举追加兼容**：`VarType` 未来若扩充新类型，仅在末尾追加，不改变既有枚举值名称。
 
 ---
 
-## 12. 参考文档
+## 12. 相关文档
 
-- `docs/dynamic-data.md` —— 动态数据与变量系统设计契约（§4 是本 API 的设计源）
-- `docs/protocol.md` —— WebSocket 协议（编辑器与后端的通讯，与本 API 无直接关系）
-- `docs/architecture.md §13` —— 动态画板架构纪律
-- `docs/security.md` —— 权限节点 + 审计日志
-- `examples/demo-train-plugin/` / `examples/demo-score-plugin/` —— 可运行示例插件
-
----
-
-## 13. 反馈 & 贡献
-
-- 仓库：https://github.com/HyacinthHaru/HikariCanvas
-- Issue：欢迎提 bug / feature request
-- API 设计讨论：在 `docs/dynamic-data.md` 上下文里讨论，避免直接改 `api.md`（本文件追随 dynamic-data.md 演进）
+- [示例插件说明](../examples/README.md) —— 编译与运行两个官方接入示例
+- [变量与铁路教程](variables.md) —— 玩家在编辑器中使用变量与后台 `/canvas var` 命令说明
+- [动态数据接入设计](dynamic-data.md) —— 变量系统底层架构与限流设计契约
+- [系统架构](architecture.md) —— 插件整体模块划分与动态画板机制
