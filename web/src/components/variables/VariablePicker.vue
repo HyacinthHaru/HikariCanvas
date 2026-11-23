@@ -132,6 +132,51 @@ function isDynamic(namespace: string): boolean {
     return isDynamicNamespace(metadata.value, namespace);
 }
 
+function bareNamespace(namespace: string): string {
+    return namespace.split(':')[0];
+}
+
+/**
+ * 命名空间展示名：内置命名空间优先走 i18n `t.variables.builtinNamespaces`，
+ * 第三方插件命名空间保留后端下发的 `displayName`，缺失则回退短名。
+ */
+function namespaceTitle(namespace: string): string {
+    const bare = bareNamespace(namespace);
+    const builtins = t.value.variables.builtinNamespaces;
+    if (bare in builtins) {
+        return builtins[bare as keyof typeof builtins];
+    }
+    const meta = metadata.value.find((m) => m.namespace === namespace || bareNamespace(m.namespace) === bare);
+    if (meta?.displayName) return meta.displayName;
+    return bare;
+}
+
+function isFirstOfPluginNamespace(items: Variable[], idx: number): boolean {
+    if (idx === 0) return true;
+    return bareNamespace(items[idx - 1].namespace) !== bareNamespace(items[idx].namespace);
+}
+
+function varTypeLabel(type: Variable['type']): string {
+    switch (type) {
+        case 'STRING': return t.value.variables.typeString;
+        case 'NUMBER': return t.value.variables.typeNumber;
+        case 'BOOLEAN': return t.value.variables.typeBoolean;
+        case 'COLOR': return t.value.variables.typeColor;
+        default: return type;
+    }
+}
+
+function localizeWsError(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === 'ack_timeout') return t.value.errors.TIMEOUT;
+    if (msg === 'send_failed' || msg === 'connection closed before ack') {
+        return t.value.errors.CONNECTION_CLOSED;
+    }
+    const errs = t.value.errors as Record<string, unknown>;
+    if (typeof errs[msg] === 'string') return errs[msg] as string;
+    return msg;
+}
+
 function onKeyDown(ev: KeyboardEvent) {
     // 在 alias 编辑态下，键盘事件由 input 自己处理，不应触发 picker 导航
     if (editingFullName.value != null) return;
@@ -238,7 +283,7 @@ async function submitAliasEdit(ev?: Event) {
         editingFullName.value = null;
         editingDraft.value = '';
     } catch (err) {
-        editingError.value = (err as Error).message;
+        editingError.value = localizeWsError(err);
     } finally {
         editingSubmitting.value = false;
     }
@@ -255,7 +300,7 @@ async function clearAlias(ev?: Event) {
         editingFullName.value = null;
         editingDraft.value = '';
     } catch (err) {
-        editingError.value = (err as Error).message;
+        editingError.value = localizeWsError(err);
     } finally {
         editingSubmitting.value = false;
     }
@@ -301,6 +346,12 @@ async function clearAlias(ev?: Event) {
               <td colspan="4" class="hc-vp-group-title">{{ groupTitleMap[group.id] }}</td>
             </tr>
             <template v-for="(v, vi) in group.items" :key="`${v.namespace}/${v.key}`">
+              <tr
+                v-if="group.id === 'plugin' && isFirstOfPluginNamespace(group.items, vi)"
+                class="hc-vp-ns-row"
+              >
+                <td colspan="4" class="hc-vp-ns-title">{{ namespaceTitle(v.namespace) }}</td>
+              </tr>
               <!-- 普通行 -->
               <tr
                 v-if="editingFullName !== variableFullName(v)"
@@ -322,14 +373,14 @@ async function clearAlias(ev?: Event) {
                 </td>
                 <td class="hc-vp-cell hc-vp-name-cell">
                   <div class="hc-vp-name-inner">
-                    <span class="hc-vp-name" :title="`${v.namespace}/${v.key}`">{{ shortName(v) }}</span>
+                    <span class="hc-vp-name" :title="`${namespaceTitle(v.namespace)} · ${v.namespace}/${v.key}`">{{ shortName(v) }}</span>
                     <span class="hc-vp-meta">
                       <span
                         v-if="isDynamic(v.namespace)"
                         class="hc-vp-chip hc-vp-chip-dynamic"
                         :title="t.variables.picker.dynamicHint"
-                      >dyn</span>
-                      <span class="hc-vp-chip hc-vp-chip-type">{{ v.type }}</span>
+                      >{{ t.variables.pickerDynamicBadge }}</span>
+                      <span class="hc-vp-chip hc-vp-chip-type">{{ varTypeLabel(v.type) }}</span>
                     </span>
                   </div>
                 </td>
@@ -489,6 +540,14 @@ async function clearAlias(ev?: Event) {
     color: var(--muted-foreground);
     background: color-mix(in srgb, var(--muted) 35%, transparent);
     border-top: 1px solid var(--border);
+}
+
+.hc-vp-ns-row td {
+    padding: 2px 10px;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    background: color-mix(in srgb, var(--muted) 18%, transparent);
 }
 
 .hc-vp-row {

@@ -252,7 +252,7 @@ function dropLocalNumber(fullName: string) {
 function currentValueText(fullName: string, v: Variable): string {
     const local = localNumbers.value[fullName];
     if (local !== undefined) return String(local);
-    return v.currentValue ?? '∅';
+    return v.currentValue ?? '—';
 }
 
 // 服务端把新值推回来之后交回权威值——但必须等这个变量没有在途请求才撤，否则会拿滞后的
@@ -336,6 +336,17 @@ function cancelAliasEdit() {
     aliasSubmitting.value = false;
 }
 
+function localizeWsError(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === 'ack_timeout') return t.value.errors.TIMEOUT;
+    if (msg === 'send_failed' || msg === 'connection closed before ack') {
+        return t.value.errors.CONNECTION_CLOSED;
+    }
+    const errs = t.value.errors as Record<string, unknown>;
+    if (typeof errs[msg] === 'string') return errs[msg] as string;
+    return msg;
+}
+
 async function submitAliasEdit() {
     const fullName = editingAliasFor.value;
     if (fullName == null) return;
@@ -354,7 +365,7 @@ async function submitAliasEdit() {
         await ws.sendVariableAliasSet(fullName, trimmed);
         cancelAliasEdit();
     } catch (err) {
-        aliasError.value = (err as Error).message;
+        aliasError.value = localizeWsError(err);
     } finally {
         aliasSubmitting.value = false;
     }
@@ -369,7 +380,7 @@ async function clearAlias() {
         await ws.sendVariableAliasClear(fullName);
         cancelAliasEdit();
     } catch (err) {
-        aliasError.value = (err as Error).message;
+        aliasError.value = localizeWsError(err);
     } finally {
         aliasSubmitting.value = false;
     }
@@ -498,7 +509,7 @@ function isHexColor(s: string | null): boolean {
                   class="inline-block size-3 rounded border border-[color:var(--border)]"
                   :style="{ backgroundColor: entry.v.defaultValue ?? '#000' }"
                 ></span>
-                <span class="font-mono">{{ entry.v.defaultValue ?? '∅' }}</span>
+                <span class="font-mono">{{ entry.v.defaultValue ?? '—' }}</span>
               </span>
             </div>
 
@@ -699,7 +710,7 @@ function isHexColor(s: string | null): boolean {
                   class="inline-block size-3 rounded border border-[color:var(--border)]"
                   :style="{ backgroundColor: entry.v.defaultValue ?? '#000' }"
                 ></span>
-                <span class="font-mono">{{ entry.v.defaultValue ?? '∅' }}</span>
+                <span class="font-mono">{{ entry.v.defaultValue ?? '—' }}</span>
               </span>
             </div>
 

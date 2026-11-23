@@ -16,3 +16,19 @@ export function useI18n(): { t: ComputedRef<Messages> } {
     const t = computed<Messages>(() => messages[ui.locale]);
     return { t };
 }
+
+/**
+ * 把传输层哨兵异常（`ack_timeout` / `send_failed` / `connection closed before ack`）
+ * 转为当前界面语言的用户友好提示；已是业务文案的 Error 原样返回其 message。
+ */
+export function formatUiError(err: unknown): string {
+    const t = messages[useUiStore().locale];
+    const raw = err instanceof Error ? err.message : String(err ?? '');
+    if (raw === 'ack_timeout') {
+        return t.errors.TIMEOUT;
+    }
+    if (raw === 'send_failed' || raw === 'connection closed before ack') {
+        return t.errors.CONNECTION_CLOSED;
+    }
+    return raw || t.errors.UNKNOWN;
+}

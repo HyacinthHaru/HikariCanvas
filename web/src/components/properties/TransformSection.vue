@@ -101,7 +101,7 @@ function onOpacityChange(): void {
     <div class="grid grid-cols-2 gap-2 pt-1.5">
       <label class="flex flex-col gap-0.5">
         <span class="hc-field-label">
-          x
+          {{ t.properties.posX }}
           <Tooltip :text="t.properties.positionTip">
             <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
           </Tooltip>
@@ -111,7 +111,7 @@ function onOpacityChange(): void {
       </label>
       <label class="flex flex-col gap-0.5">
         <span class="hc-field-label">
-          y
+          {{ t.properties.posY }}
           <Tooltip :text="t.properties.positionTip">
             <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
           </Tooltip>
@@ -121,7 +121,7 @@ function onOpacityChange(): void {
       </label>
       <label class="flex flex-col gap-0.5">
         <span class="hc-field-label">
-          w
+          {{ t.properties.width }}
           <Tooltip :text="isBrush ? t.properties.brushSizeReadonlyTip : t.properties.sizeTip">
             <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
           </Tooltip>
@@ -132,7 +132,7 @@ function onOpacityChange(): void {
       </label>
       <label class="flex flex-col gap-0.5">
         <span class="hc-field-label">
-          h
+          {{ t.properties.height }}
           <Tooltip :text="isBrush ? t.properties.brushSizeReadonlyTip : t.properties.sizeTip">
             <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
           </Tooltip>
@@ -192,10 +192,10 @@ function onOpacityChange(): void {
           </Tooltip>
         </span>
         <select class="hc-input opacity-60 cursor-not-allowed" :value="element.blendMode ?? 'normal'" disabled>
-          <option value="normal">normal</option>
-          <option value="multiply">multiply</option>
-          <option value="screen">screen</option>
-          <option value="overlay">overlay</option>
+          <option value="normal">{{ t.layerPanel.blendModeOptions.normal }}</option>
+          <option value="multiply">{{ t.layerPanel.blendModeOptions.multiply }}</option>
+          <option value="screen">{{ t.layerPanel.blendModeOptions.screen }}</option>
+          <option value="overlay">{{ t.layerPanel.blendModeOptions.overlay }}</option>
         </select>
       </label>
       <label class="flex flex-col gap-0.5">

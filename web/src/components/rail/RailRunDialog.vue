@@ -76,6 +76,17 @@ const copySubmitting = ref(false);
 const error = ref<string | null>(null);
 const submitting = ref(false);
 
+function localizeWsError(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === 'ack_timeout') return t.value.errors.TIMEOUT;
+    if (msg === 'send_failed' || msg === 'connection closed before ack') {
+        return t.value.errors.CONNECTION_CLOSED;
+    }
+    const errs = t.value.errors as Record<string, unknown>;
+    if (typeof errs[msg] === 'string') return errs[msg] as string;
+    return msg;
+}
+
 onMounted(() => {
     syncDraftFromStore();
 });
@@ -144,7 +155,7 @@ async function saveBasic() {
         });
         rail.setRun(updated);
     } catch (e) {
-        error.value = (e as Error).message;
+        error.value = localizeWsError(e);
         net.pushLog('err', `rail.run.update rejected: ${(e as Error).message}`);
     } finally {
         submitting.value = false;
@@ -172,7 +183,7 @@ async function saveTimetable() {
         // 已落盘：草稿与 store 一致，解除保护（保存失败则保持脏，内容留着让用户重试）
         timetableDirty.value = false;
     } catch (e) {
-        error.value = (e as Error).message;
+        error.value = localizeWsError(e);
         net.pushLog('err', `rail.run.timetable.set rejected: ${(e as Error).message}`);
     } finally {
         submitting.value = false;
@@ -277,7 +288,7 @@ async function runAutoGenerate() {
         timetableDirty.value = false;
         showAutoGenerate.value = false;
     } catch (e) {
-        error.value = (e as Error).message;
+        error.value = localizeWsError(e);
     } finally {
         submitting.value = false;
     }
@@ -337,7 +348,7 @@ async function submitCopy() {
         // 切换到新车次的详情对话框 — 但这里关掉当前 dialog 让用户回主 modal 看新车次
         emit('close');
     } catch (e) {
-        error.value = (e as Error).message;
+        error.value = localizeWsError(e);
         net.pushLog('err', `rail run copy rejected: ${(e as Error).message}`);
     } finally {
         copySubmitting.value = false;
@@ -426,6 +437,8 @@ function isValidTime(v: string): boolean {
                      maxlength="32" :placeholder="t.rail.serviceTypeCustomPlaceholder" />
               <button type="button"
                       class="hc-btn px-2 py-1 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
+                      :title="t.rail.serviceType"
+                      :aria-label="t.rail.serviceType"
                       @click="exitCustomMode">↺</button>
             </div>
           </label>

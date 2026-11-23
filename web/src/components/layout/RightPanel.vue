@@ -224,7 +224,7 @@ function deleteMultiSelected(): void {
         <!-- 基本信息 -->
         <div class="flex items-center justify-between">
           <span class="text-[color:var(--muted-foreground)]">{{ t.properties.type }}</span>
-          <span class="font-mono">{{ selected.type }}</span>
+          <span class="font-mono">{{ t.elementTypes[selected.type as keyof typeof t.elementTypes] ?? selected.type }}</span>
         </div>
         <div class="flex items-center justify-between">
           <span class="text-[color:var(--muted-foreground)]">{{ t.properties.id }}</span>

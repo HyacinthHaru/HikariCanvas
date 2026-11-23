@@ -1,5 +1,7 @@
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
+import { useUiStore } from '@/stores/ui';
+import { messages } from '@/i18n/messages';
 import type { ImportWarningDto } from '@/types/canvasFile';
 
 export interface ImportOutcome {
@@ -32,7 +34,11 @@ export function useProjectImport() {
         try {
             resp = await fetch('/api/project/import', { method: 'POST', body: fd });
         } catch {
-            return { ok: false, errorCode: 'NETWORK', errorMessage: 'network error' };
+            return {
+                ok: false,
+                errorCode: 'NETWORK',
+                errorMessage: messages[useUiStore().locale].common.networkError,
+            };
         }
         const body = await resp.json().catch(() => ({} as Record<string, unknown>));
         if (!resp.ok) {

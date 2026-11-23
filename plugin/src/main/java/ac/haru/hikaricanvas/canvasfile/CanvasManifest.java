@@ -18,7 +18,7 @@ public record CanvasManifest(int spec, String kind, long createdAt, String name,
         try {
             n = MAPPER.readTree(json);
         } catch (Exception e) {
-            throw new CanvasImportException("IMPORT_MALFORMED", "manifest 解析失败: " + e.getMessage());
+            throw new CanvasImportException("IMPORT_MALFORMED", "工程元数据格式错误，无法读取 manifest.json");
         }
         if (n == null || !n.isObject()) throw new CanvasImportException("IMPORT_MALFORMED", "manifest 非对象");
         int spec = n.path("spec").asInt(0);

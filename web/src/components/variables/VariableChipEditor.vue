@@ -144,6 +144,12 @@ const tooltipDisplayValue = computed(() => {
     return UNRESOLVED;
 });
 const tooltipSource = computed(() => tooltipVariable.value?.source ?? null);
+const tooltipSourceLabel = computed(() => {
+    const src = tooltipSource.value;
+    if (!src) return null;
+    const labels = t.value.variables.sourceLabels;
+    return labels[src as keyof typeof labels] ?? src;
+});
 const tooltipDeleted = computed(() => tooltipVariable.value == null);
 /** tooltip 也展示别名（如有），让用户在 chip 上 hover 就能确认这块占位实际指向。 */
 const tooltipAlias = computed(() => aliasStore.get(tooltipFullName.value));
@@ -548,11 +554,11 @@ defineExpose({
         role="tooltip"
       >
         <div class="hc-tt-row">
-          <span class="hc-tt-label">{{ t.variables.chipEditor?.tooltipRaw ?? 'Raw' }}:</span>
+          <span class="hc-tt-label">{{ t.variables.chipEditor.tooltipRaw }}:</span>
           <code class="hc-tt-code">{{ '${var:' + tooltipRawName }}{{ tooltipFallback != null ? `|fallback=${tooltipFallback}` : '' }}{{ '}' }}</code>
         </div>
         <div class="hc-tt-row">
-          <span class="hc-tt-label">{{ t.variables.chipEditor?.tooltipCurrent ?? 'Current' }}:</span>
+          <span class="hc-tt-label">{{ t.variables.chipEditor.tooltipCurrent }}:</span>
           <span class="hc-tt-value" :class="{ 'hc-tt-deleted': tooltipDeleted }">
             {{ tooltipDisplayValue }}
           </span>
@@ -561,12 +567,12 @@ defineExpose({
           <span class="hc-tt-label">{{ t.variables.aliasChipPrefix }}</span>
           <span class="hc-tt-value">{{ tooltipAlias }}</span>
         </div>
-        <div v-if="tooltipSource" class="hc-tt-row">
-          <span class="hc-tt-label">{{ t.variables.chipEditor?.tooltipSource ?? 'Source' }}:</span>
-          <span class="hc-tt-value">{{ tooltipSource }}</span>
+        <div v-if="tooltipSourceLabel" class="hc-tt-row">
+          <span class="hc-tt-label">{{ t.variables.chipEditor.tooltipSource }}:</span>
+          <span class="hc-tt-value">{{ tooltipSourceLabel }}</span>
         </div>
         <div v-if="tooltipDeleted" class="hc-tt-warning">
-          {{ t.variables.chipEditor?.tooltipDeleted ?? 'Variable not found — will render as "???"' }}
+          {{ t.variables.chipEditor.tooltipDeleted }}
         </div>
       </div>
     </Teleport>

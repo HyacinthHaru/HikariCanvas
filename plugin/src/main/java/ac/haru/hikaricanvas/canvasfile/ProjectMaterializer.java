@@ -8,6 +8,7 @@ import ac.haru.hikaricanvas.state.Keyframe;
 import ac.haru.hikaricanvas.state.Layer;
 import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.state.Timeline;
+import ac.haru.hikaricanvas.state.ValidationException;
 
 import java.util.HashSet;
 import java.util.List;
@@ -91,7 +92,7 @@ public final class ProjectMaterializer {
             // （越界直接抛 IllegalArgumentException → 下方 catch 归类 IMPORT_MALFORMED）。
             state = MAPPER.readValue(projectJson, ProjectState.class);
         } catch (Exception e) {
-            throw new CanvasImportException("IMPORT_MALFORMED", "project.json 解析失败: " + e.getMessage());
+            throw new CanvasImportException("IMPORT_MALFORMED", "画布数据格式无效，无法解析 project.json");
         }
         if (state.canvas().widthMaps() > sessionWallW || state.canvas().heightMaps() > sessionWallH) {
             throw new CanvasImportException("IMPORT_SIZE_MISMATCH",
@@ -105,9 +106,11 @@ public final class ProjectMaterializer {
                     ElementValidator.validateElementForTemplateApply(el);  // 不信任任何元素数值
                 }
             }
+        } catch (ValidationException e) {
+            throw new CanvasImportException("IMPORT_MALFORMED", "元素属性不合法: " + e.getMessage());
         } catch (RuntimeException e) {
-            // ValidationException(extends RuntimeException) 与任何其它运行期异常一律归 MALFORMED
-            throw new CanvasImportException("IMPORT_MALFORMED", "元素校验失败: " + e.getMessage());
+            // 任何其它运行期异常一律脱敏归类 MALFORMED，不外泄内部异常消息
+            throw new CanvasImportException("IMPORT_MALFORMED", "画布元素数据校验未通过");
         }
         return state;
     }

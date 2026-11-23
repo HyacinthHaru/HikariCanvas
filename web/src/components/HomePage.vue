@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue';
-import { Lock, Pencil, Clock, Tag, ImageOff, RefreshCw, Sparkles, Star, User } from 'lucide-vue-next';
+import { Lock, Pencil, Clock, Tag, ImageOff, RefreshCw, Sparkles, Star, User, Languages } from 'lucide-vue-next';
+import { useUiStore } from '@/stores/ui';
 import { useI18n } from '@/i18n';
 
 interface WallSummary {
@@ -13,11 +14,17 @@ interface WallSummary {
     updatedAt: number;
 }
 
+const ui = useUiStore();
 const { t } = useI18n();
 const walls = ref<WallSummary[]>([]);
 const loading = ref(true);
 const refreshing = ref(false);
-const error = ref<string | null>(null);
+const wallsErrorKind = ref<'network' | 'server' | null>(null);
+const error = computed<string | null>(() => {
+    if (wallsErrorKind.value === 'server') return t.value.errors.INTERNAL_ERROR;
+    if (wallsErrorKind.value === 'network') return t.value.common.networkError;
+    return null;
+});
 const copiedId = ref<string | null>(null);
 let copiedTimer: number | null = null;
 
@@ -38,11 +45,14 @@ async function loadWalls(isManualRefresh = false) {
     if (isManualRefresh) refreshing.value = true;
     try {
         const r = await fetch('/api/walls');
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+            wallsErrorKind.value = r.status >= 500 ? 'server' : 'network';
+            return;
+        }
         walls.value = await r.json();
-        error.value = null;
-    } catch (e) {
-        error.value = (e as Error).message;
+        wallsErrorKind.value = null;
+    } catch {
+        wallsErrorKind.value = 'network';
     } finally {
         loading.value = false;
         refreshing.value = false;
@@ -65,16 +75,24 @@ interface TemplateRow {
 
 const templates = ref<TemplateRow[]>([]);
 const templatesLoading = ref(true);
-const templatesError = ref<string | null>(null);
+const templatesErrorKind = ref<'network' | 'server' | null>(null);
+const templatesError = computed<string | null>(() => {
+    if (templatesErrorKind.value === 'server') return t.value.errors.INTERNAL_ERROR;
+    if (templatesErrorKind.value === 'network') return t.value.common.networkError;
+    return null;
+});
 
 async function loadTemplates() {
     try {
         const r = await fetch('/api/templates');
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+            templatesErrorKind.value = r.status >= 500 ? 'server' : 'network';
+            return;
+        }
         templates.value = await r.json();
-        templatesError.value = null;
-    } catch (e) {
-        templatesError.value = (e as Error).message;
+        templatesErrorKind.value = null;
+    } catch {
+        templatesErrorKind.value = 'network';
     } finally {
         templatesLoading.value = false;
     }
@@ -129,6 +147,16 @@ function previewUrl(w: WallSummary): string {
           {{ t.home.heading }} · {{ t.home.subtitle }}<code class="px-1 py-0.5 rounded bg-[color:var(--secondary)] font-mono text-xs">{{ t.home.subtitleCmd }}</code>{{ t.home.subtitleSuffix }}
         </p>
       </div>
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs border border-[color:var(--border)] hover:bg-[color:var(--accent)] text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)] transition-colors"
+        :title="t.topbar.switchLocale"
+        :aria-label="t.topbar.switchLocale"
+        @click="ui.toggleLocale()"
+      >
+        <Languages class="size-3.5" />
+        <span>{{ t.topbar.switchLocale }}</span>
+      </button>
       <button
         class="p-2 rounded hover:bg-[color:var(--accent)] text-[color:var(--muted-foreground)] disabled:opacity-40"
         :disabled="refreshing"

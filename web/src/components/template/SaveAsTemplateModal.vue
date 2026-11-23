@@ -71,8 +71,31 @@ function refreshParams() {
 refreshParams();
 watch(() => project.state?.layers, refreshParams, { deep: false });
 
+const PARAM_ID_RE = /^[a-z][a-z0-9_]{0,31}$/;
+
+const keptNameCounts = computed(() => {
+    const counts = new Map<string, number>();
+    for (const r of paramRows) {
+        if (!r.keep) continue;
+        counts.set(r.name, (counts.get(r.name) ?? 0) + 1);
+    }
+    return counts;
+});
+
+function paramNameError(row: ParamRow): string | null {
+    if (!row.keep) return null;
+    if (!PARAM_ID_RE.test(row.name)) {
+        return t.value.workshop.paramIdInvalid;
+    }
+    if ((keptNameCounts.value.get(row.name) ?? 0) > 1) {
+        return t.value.workshop.paramIdDuplicate;
+    }
+    return null;
+}
+
+const paramsValid = computed(() => paramRows.every((r) => paramNameError(r) === null));
 const slugValid = computed(() => /^[a-z0-9][a-z0-9-]{1,31}$/.test(slug.value));
-const formValid = computed(() => slugValid.value && displayName.value.trim().length > 0);
+const formValid = computed(() => slugValid.value && displayName.value.trim().length > 0 && paramsValid.value);
 
 function validateSlugInput() {
     if (!slug.value) { slugError.value = null; return; }
@@ -115,7 +138,14 @@ async function onSave() {
             submitError.value = t.value.workshop.saveFailedGeneric;
         }
     } catch (e) {
-        submitError.value = (e as { message?: string }).message || t.value.workshop.saveFailedGeneric;
+        const msg = (e as { message?: string })?.message ?? '';
+        if (msg === 'ack_timeout') {
+            submitError.value = t.value.errors.TIMEOUT;
+        } else if (msg === 'send_failed' || msg === 'connection closed before ack') {
+            submitError.value = t.value.errors.CONNECTION_CLOSED;
+        } else {
+            submitError.value = msg || t.value.workshop.saveFailedGeneric;
+        }
     } finally {
         submitting.value = false;
     }
@@ -202,9 +232,13 @@ function onClose() {
                   <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.paramNameLabel }}</span>
                   <input type="text"
                          class="hc-input mt-0.5 font-mono text-xs"
+                         :class="paramNameError(row) ? 'border-[color:var(--destructive)]' : ''"
                          v-model="row.name"
                          maxlength="32"
                          pattern="^[a-z][a-z0-9_]{0,31}$" />
+                  <span v-if="paramNameError(row)" class="block mt-0.5 text-xs text-[color:var(--destructive)]">
+                    {{ paramNameError(row) }}
+                  </span>
                 </label>
                 <label class="block">
                   <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.paramLabelLabel }}</span>

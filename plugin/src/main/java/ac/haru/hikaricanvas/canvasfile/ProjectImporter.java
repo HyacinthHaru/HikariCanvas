@@ -245,7 +245,7 @@ public final class ProjectImporter {
         int skipped = requestedAssets - storedHashes.size();
         if (skipped > 0) {
             warnings.add(new ImportWarning("asset-quota",
-                    skipped + " image(s) skipped (quota full or undecodable)"));
+                    skipped + " image(s) skipped due to storage limit or invalid format"));
         }
 
         // 4.5) 重编码漂移修正：摄入按内容重算 hash，而元素引用的是导出方写在文件名里的那个。

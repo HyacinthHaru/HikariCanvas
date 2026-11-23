@@ -187,7 +187,7 @@ public final class ProjectImportHandler {
         return switch (code) {
             case "IMPORT_ZIP_TOO_LARGE" -> 413;
             case "IMPORT_SPEC_UNSUPPORTED", "IMPORT_SIZE_MISMATCH" -> 409;
-            case "IMPORT_BAD_ENTRY", "IMPORT_MALFORMED" -> 400;
+            case "IMPORT_BAD_ENTRY", "IMPORT_MALFORMED", "IMPORT_INVALID_PARAM" -> 400;
             default -> 400;
         };
     }

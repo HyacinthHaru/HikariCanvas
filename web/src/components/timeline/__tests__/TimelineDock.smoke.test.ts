@@ -27,6 +27,7 @@ vi.mock('@/network/wsClient', () => ({
 
 import TimelineDock from '../TimelineDock.vue';
 import EasingCurveEditor from '../EasingCurveEditor.vue';
+import { messages } from '@/i18n/messages';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
 import { useTimelineStore } from '@/stores/timeline';
@@ -81,8 +82,8 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
 
         const wrapper = mount(TimelineDock);
         await nextTick();
-        // elementLabel 是短形态 "1 · rect"（去 e- 前缀）——出现即证明 flatRows 接上了 ui.selectedIds
-        expect(wrapper.text()).toContain('· rect');
+        // elementLabel 是短形态 "1 · <本地化元素类型>"（去 e- 前缀）——出现即证明 flatRows 接上了 ui.selectedIds 且解包了 t.value.elementTypes
+        expect(wrapper.text()).toContain(`· ${messages.zh.elementTypes.rect}`);
     });
 
     it('展开元素 → 属性行渲染不崩，propertyLabel 正确解包 t.value.timeline', async () => {

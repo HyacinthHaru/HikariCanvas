@@ -33,16 +33,19 @@ import { messages } from '@/i18n/messages';
  */
 function localizeErrorCode(code: string, fallbackMessage?: string): string {
     const ui = useUiStore();
+    // 后端对 SCRIPT_INVALID 已按编辑器语言生成了具体到积木与字段的友好提示，优先采用。
+    if (code === 'SCRIPT_INVALID' && fallbackMessage && fallbackMessage.trim().length > 0) {
+        return fallbackMessage;
+    }
     const errs = messages[ui.locale]?.errors as Record<string, unknown> | undefined;
     if (errs && typeof errs[code] === 'string') return errs[code];
-    if (errs && typeof errs.UNKNOWN === 'string') {
-        // 兜底文案 + 附原 code，便于排查 / 反馈。未映射 code 时优先展示
-        // 服务端人类可读说明（fallbackMessage），而非把它丢弃。
-        return fallbackMessage
-            ? `${fallbackMessage}（${code}）`
-            : `${errs.UNKNOWN}（${code}）`;
+    if (fallbackMessage && fallbackMessage.trim().length > 0) {
+        return fallbackMessage;
     }
-    return fallbackMessage ?? code;
+    if (errs && typeof errs.UNKNOWN === 'string') {
+        return errs.UNKNOWN;
+    }
+    return code;
 }
 
 /**
@@ -1006,12 +1009,14 @@ export class WsClient {
         };
         // log 仍保留原文（含 server side detail），LogDrawer 显示给开发者；UI 状态走 friendly。
         net.pushLog('err', `${payload.code}: ${payload.message ?? friendly}`);
-        // sendWithAck 等的 promise → reject（携 friendly 给消费者展示）
+        // sendWithAck 等的 promise → reject（携 friendly 给消费者展示；code 挂在 err.code 上）
         if (errId && this.pendingAcks.has(errId)) {
             const pending = this.pendingAcks.get(errId)!;
             if (pending.timer) window.clearTimeout(pending.timer);
             this.pendingAcks.delete(errId);
-            pending.reject(new Error(`${payload.code}: ${friendly}`));
+            const err = new Error(friendly);
+            (err as Error & { code?: string }).code = payload.code;
+            pending.reject(err);
         }
     }
 

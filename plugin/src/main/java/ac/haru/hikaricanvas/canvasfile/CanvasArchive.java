@@ -51,7 +51,7 @@ public final class CanvasArchive {
         } catch (CanvasImportException e) {
             throw e;
         } catch (IOException e) {
-            throw new CanvasImportException("IMPORT_MALFORMED", "无法解析 zip: " + e.getMessage());
+            throw new CanvasImportException("IMPORT_MALFORMED", "工程文件已损坏或不是有效的 .canvas 压缩包");
         }
         if (!out.containsKey("manifest.json") || !out.containsKey("project.json")) {
             throw new CanvasImportException("IMPORT_MALFORMED", "缺少 manifest.json 或 project.json");

@@ -249,7 +249,7 @@ public final class TemplateExporter {
             paramsBytes = params.isEmpty() ? null : mapper.writeValueAsBytes(buildParamsArray(params));
             projectBytes = mapper.writeValueAsBytes(projectMap);
         } catch (IOException e) {
-            return new Result.Failed("SERIALIZE_FAILED", e.getMessage());
+            return new Result.Failed("SERIALIZE_FAILED", "Failed to serialize template data");
         }
 
         // 6) 自校验 roundtrip：用默认参数走一遍 applyPack 的解析链（校验 params + 替换 + materialize）
@@ -261,7 +261,7 @@ public final class TemplateExporter {
         try {
             packBytes = zipPack(manifestBytes, paramsBytes, projectBytes, assets, scriptsJson);
         } catch (IOException e) {
-            return new Result.Failed("SERIALIZE_FAILED", "zip: " + e.getMessage());
+            return new Result.Failed("SERIALIZE_FAILED", "Failed to package template archive");
         }
 
         String relPath = "user-templates/" + ownerUuid + "/" + slug + ".canvas";

@@ -34,17 +34,17 @@ export interface ThemePreset {
 export const PRESETS: ThemePreset[] = [
     {
         id: 'latte', flavor: 'latte', isDark: false,
-        nameZh: 'Catppuccin Latte', nameEn: 'Catppuccin Latte',
+        nameZh: '浅色（Latte）', nameEn: 'Light (Latte)',
         previewBase: 'hsl(220 23% 95%)', previewAccent: 'hsl(266 85% 58%)',
     },
     {
         id: 'frappe', flavor: 'frappe', isDark: true,
-        nameZh: 'Catppuccin Frappé', nameEn: 'Catppuccin Frappé',
+        nameZh: '柔和深色（Frappé）', nameEn: 'Soft Dark (Frappé)',
         previewBase: 'hsl(229 19% 23%)', previewAccent: 'hsl(277 59% 76%)',
     },
     {
         id: 'macchiato', flavor: 'macchiato', isDark: true,
-        nameZh: 'Catppuccin Macchiato', nameEn: 'Catppuccin Macchiato',
+        nameZh: '深色（Macchiato）', nameEn: 'Dark (Macchiato)',
         previewBase: 'hsl(232 23% 18%)', previewAccent: 'hsl(267 83% 80%)',
     },
 ];

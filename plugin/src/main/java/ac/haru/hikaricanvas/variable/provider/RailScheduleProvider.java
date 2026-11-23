@@ -158,33 +158,33 @@ public final class RailScheduleProvider implements VariableProvider {
         out.add(new DeclaredKey("next_run_number", VarType.STRING,
                 "[铁路网络] 下一班车次号（如 A01）", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_service_type", VarType.STRING,
-                "[铁路网络] 下一班服务类型 enum 值（local / express / section / limited / 自定义）",
+                "[铁路网络] 下一班车种代号（如 local、express）",
                 REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_service_type_text", VarType.STRING,
-                "[铁路网络] 下一班服务类型 i18n 友好文本（按 owner locale）", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下一班车种名称（如站站停、大站快车）", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_cars", VarType.STRING,
-                "[铁路网络] 下一班编组节数（null → 空字符串）", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下一班车厢编组节数", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_terminus", VarType.STRING,
                 "[铁路网络] 下一班终点站（区间车显示区间终点）", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_notes", VarType.STRING,
-                "[铁路网络] 下一班备注（如末班车 / 加开）", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下一班备注信息（如末班车、加开）", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_arrival", VarType.STRING,
-                "[铁路网络] 该站精确到达时刻（HH:mm:ss，从 timetable 读，非估算）", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下一班本站到达时间（HH:mm:ss）", REFRESH_INTERVAL_MS));
         // next2_*
         out.add(new DeclaredKey("next2_run_number", VarType.STRING,
                 "[铁路网络] 下下班车次号", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_service_type", VarType.STRING,
-                "[铁路网络] 下下班服务类型 enum", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班车种代号", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_service_type_text", VarType.STRING,
-                "[铁路网络] 下下班服务类型 i18n 文本", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班车种名称", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_cars", VarType.STRING,
-                "[铁路网络] 下下班编组节数", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班车厢编组节数", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_terminus", VarType.STRING,
                 "[铁路网络] 下下班终点站", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_notes", VarType.STRING,
-                "[铁路网络] 下下班备注", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班备注信息", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_arrival", VarType.STRING,
-                "[铁路网络] 下下班该站精确到达时刻", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班本站到达时间（HH:mm:ss）", REFRESH_INTERVAL_MS));
         return out;
     }
 

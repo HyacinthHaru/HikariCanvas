@@ -203,7 +203,7 @@ async function applyNow() {
         confirmStage.value = null;
         if (msg === 'ack_timeout') {
             lastError.value = t.value.templates.applyTimeout;
-        } else if (msg === 'send_failed') {
+        } else if (msg === 'send_failed' || msg === 'connection closed before ack') {
             lastError.value = t.value.templates.applyFailed;
         } else {
             // 服务端错误 envelope 的 code/message 拼接在 Error.message 里

@@ -8,6 +8,7 @@
  * mirror 值拉回、数值"抖动"。只读 / 非数值变量不显 stepper（只显值）。</p>
  */
 import { ref, watch } from 'vue';
+import { useI18n } from '@/i18n';
 import { useLongPressIncrement } from '@/composables/useLongPressIncrement';
 import { Minus, Plus } from 'lucide-vue-next';
 
@@ -22,6 +23,8 @@ const props = defineProps<{
     numValue: number;
 }>();
 const emit = defineEmits<{ (e: 'set', value: string): void }>();
+
+const { t } = useI18n();
 
 /** 乐观本地值：按压期本地累加，松手后同步 server 权威。 */
 const local = ref(props.numValue);
@@ -53,6 +56,7 @@ watch(
         type="button"
         class="hc-var-step"
         :class="{ 'hc-var-step-active': dec.isPressing.value }"
+        :title="t.variables.actionDec"
         aria-label="-1"
         @pointerdown="dec.onPointerDown"
         @pointerup="dec.onPointerUp"
@@ -65,6 +69,7 @@ watch(
         type="button"
         class="hc-var-step"
         :class="{ 'hc-var-step-active': inc.isPressing.value }"
+        :title="t.variables.actionInc"
         aria-label="+1"
         @pointerdown="inc.onPointerDown"
         @pointerup="inc.onPointerUp"

@@ -10,6 +10,7 @@ import { getAt, parsePath, removeAt, replaceAt } from '@/script/model/blockTree'
 import { parseBlockLayout, stringifyBlockLayout } from '@/script/model/serialize';
 import { validateRule, type ValidationError } from '@/script/model/validator';
 import { makeDefaultAction } from '@/script/model/blockDefs';
+import { formatUiError } from '@/i18n';
 import { messages } from '@/i18n/messages';
 
 function scriptMsg(key: keyof typeof messages['zh']['script']): string {
@@ -275,7 +276,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
             selectRule(newId);
             return newId;
         } catch (e) {
-            net.lastError = messages[ui.locale].script.createRuleError(e instanceof Error ? e.message : String(e));
+            net.lastError = messages[ui.locale].script.createRuleError(formatUiError(e));
             return null;
         }
     }
@@ -375,7 +376,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
             dirty.value = false;
         }
         getWsClient().sendScriptDelete(ruleId).catch((e) => {
-            net.lastError = messages[ui.locale].script.deleteRuleError(e instanceof Error ? e.message : String(e));
+            net.lastError = messages[ui.locale].script.deleteRuleError(formatUiError(e));
         });
     }
 
@@ -435,7 +436,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
             if (now && selectedRuleId.value === ruleId && now.enabled === enabled) {
                 workingCopy.value = { ...now, enabled: before };
             }
-            net.lastError = messages[ui.locale].script.toggleRuleError(e instanceof Error ? e.message : String(e));
+            net.lastError = messages[ui.locale].script.toggleRuleError(formatUiError(e));
         });
     }
 
@@ -622,7 +623,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
                 flushPendingSaves();
             })
             .catch((e) => {
-                const detail = e instanceof Error ? e.message : String(e);
+                const detail = formatUiError(e);
                 if (selectedRuleId.value === ruleId) {
                     // 还在这条规则上：照旧标回脏，下次 scheduleSave / flush 自然重试。
                     dirty.value = true;

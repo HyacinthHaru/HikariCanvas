@@ -507,7 +507,9 @@ function propertyLabel(p: string): string {
 }
 function elementLabel(row: FlatRow): string {
     const short = row.elementId.startsWith('e-') ? row.elementId.slice(2) : row.elementId;
-    return row.elementType ? `${short} · ${row.elementType}` : short;
+    if (!row.elementType) return short;
+    const typeLabel = t.value.elementTypes[row.elementType as keyof typeof t.value.elementTypes] ?? row.elementType;
+    return `${short} · ${typeLabel}`;
 }
 
 // ---------- 宽度测量 + 生命周期 ----------

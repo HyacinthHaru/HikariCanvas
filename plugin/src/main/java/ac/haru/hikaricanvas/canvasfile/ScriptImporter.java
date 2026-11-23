@@ -13,6 +13,7 @@ import ac.haru.hikaricanvas.script.engine.ConditionEvaluator;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -79,11 +80,11 @@ public final class ScriptImporter {
         try {
             root = MAPPER.readTree(scriptsJson);
         } catch (Exception e) {
-            warnings.add(new ImportWarning("script-invalid", "script data could not be parsed: " + rootMessage(e)));
+            warnings.add(new ImportWarning("script-invalid", "invalid script file format"));
             return warnings;
         }
         if (root == null || !root.isArray()) {
-            warnings.add(new ImportWarning("script-invalid", "script data is not a rule array"));
+            warnings.add(new ImportWarning("script-invalid", "invalid script rule list"));
             return warnings;
         }
 
@@ -98,11 +99,16 @@ public final class ScriptImporter {
             try {
                 rule = MAPPER.convertValue(ruleNode, ScriptRule.class);
             } catch (RuntimeException ex) {
-                warnings.add(new ImportWarning("script-invalid", "rule parse failed: " + rootMessage(ex)));
+                String ruleName = ruleNode != null && ruleNode.isObject()
+                        ? ruleNode.path("name").asText("").trim() : "";
+                String detail = ruleName.isEmpty()
+                        ? "unsupported trigger or block format"
+                        : "'" + ruleName + "' uses unsupported trigger or block format";
+                warnings.add(new ImportWarning("script-invalid", detail));
                 continue;
             }
             if (rule == null) {
-                warnings.add(new ImportWarning("script-invalid", "rule is empty"));
+                warnings.add(new ImportWarning("script-invalid", "empty script rule"));
                 continue;
             }
 
@@ -227,32 +233,22 @@ public final class ScriptImporter {
         }
     }
 
-    /** 取异常根因 message 首行（外发脱敏，照 dispatcher rootMessage 先例）。 */
-    private static String rootMessage(Throwable t) {
-        Throwable cur = t;
-        while (cur.getCause() != null && cur.getCause() != cur) {
-            cur = cur.getCause();
-        }
-        String msg = cur.getMessage();
-        if (msg == null) return cur.getClass().getSimpleName();
-        int nl = msg.indexOf('\n');
-        return nl >= 0 ? msg.substring(0, nl) : msg;
-    }
-
     /**
-     * 把 {@link ValidationError} 压成稳定的 detail 字符串
-     * （{@code key} 或 {@code key [k=v, ...]}），供 {@code script-invalid} 提示携带。
-     * 无 locale 渲染（导入路径无 session）——前端外层句子已本地化，detail 是稳定具体对象码。
+     * 把 {@link ValidationError} 转为可读的简短描述（驼峰 key 拆词 + 参数附注），
+     * 供 {@code script-invalid} 提示携带，避免直接暴露内部标识符或类路径。
      */
     private static String describeValidationError(ValidationError ve) {
-        if (ve.params().isEmpty()) return ve.key();
-        StringBuilder sb = new StringBuilder(ve.key()).append(" [");
+        String readableKey = ve.key()
+                .replaceAll("([a-z0-9])([A-Z])", "$1 $2")
+                .toLowerCase(Locale.ROOT);
+        if (ve.params().isEmpty()) return readableKey;
+        StringBuilder sb = new StringBuilder(readableKey).append(" (");
         boolean first = true;
         for (Map.Entry<String, String> e : ve.params().entrySet()) {
             if (!first) sb.append(", ");
             sb.append(e.getKey()).append('=').append(e.getValue());
             first = false;
         }
-        return sb.append(']').toString();
+        return sb.append(')').toString();
     }
 }

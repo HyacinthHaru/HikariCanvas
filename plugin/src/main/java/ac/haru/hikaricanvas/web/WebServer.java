@@ -777,9 +777,8 @@ public final class WebServer {
     private void servePalette(Context ctx) {
         InputStream in = getClass().getClassLoader().getResourceAsStream("palette.json");
         if (in == null) {
-            ctx.status(500).json(Map.of(
-                    "error", "palette.json missing from classpath",
-                    "hint", "run ./gradlew generatePalette"));
+            log.severe("palette.json missing from classpath (hint: run ./gradlew generatePalette)");
+            ctx.status(500).json(Map.of("error", "INTERNAL_ERROR"));
             return;
         }
         ctx.contentType("application/json; charset=utf-8");

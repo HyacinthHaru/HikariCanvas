@@ -91,22 +91,22 @@ public final class SystemVariableProvider implements VariableProvider {
 
     /** 全局变量 declared keys（启动期 + declaredKeys() 共用）。 */
     private static final List<SystemKey> GLOBAL_KEYS = List.of(
-            new SystemKey("server.time", VarType.STRING, "当前服务器本地时间 HH:mm", 60_000L),
-            new SystemKey("server.real_time", VarType.STRING, "当前 ISO 时间戳", 60_000L),
-            new SystemKey("server.tick", VarType.NUMBER, "服务器 tick 计数", 1_000L),
-            new SystemKey("server.online", VarType.NUMBER, "当前在线玩家数", 30_000L),
-            new SystemKey("server.online_list", VarType.STRING, "在线玩家名（逗号分隔）", 30_000L),
-            new SystemKey("server.motd", VarType.STRING, "服务器 MOTD", 3_600_000L),
-            new SystemKey("server.tps", VarType.NUMBER, "Paper TPS (1min avg)", 30_000L),
-            new SystemKey("server.name", VarType.STRING, "服务器名（config/hostname）", 3_600_000L)
+            new SystemKey("server.time", VarType.STRING, "服务器当前时间（HH:mm）", 60_000L),
+            new SystemKey("server.real_time", VarType.STRING, "服务器当前完整日期时间", 60_000L),
+            new SystemKey("server.tick", VarType.NUMBER, "服务器运行刻数（Tick）", 1_000L),
+            new SystemKey("server.online", VarType.NUMBER, "当前在线玩家人数", 30_000L),
+            new SystemKey("server.online_list", VarType.STRING, "当前在线玩家名单（逗号分隔）", 30_000L),
+            new SystemKey("server.motd", VarType.STRING, "服务器标语（MOTD）", 3_600_000L),
+            new SystemKey("server.tps", VarType.NUMBER, "服务器近 1 分钟平均 TPS", 30_000L),
+            new SystemKey("server.name", VarType.STRING, "服务器名称", 3_600_000L)
     );
 
     /** per-wall 变量 keys。 */
     private static final List<SystemKey> PER_WALL_KEYS = List.of(
-            new SystemKey("wall.id", VarType.STRING, "wall 短 ID（w-<8hex>）", 0L),
-            new SystemKey("wall.alias", VarType.STRING, "wall 玩家命名（可空）", 5_000L),
-            new SystemKey("wall.owner", VarType.STRING, "wall 创建者玩家名", 0L),
-            new SystemKey("wall.owner_uuid", VarType.STRING, "wall 创建者 UUID", 0L)
+            new SystemKey("wall.id", VarType.STRING, "画板唯一编号", 0L),
+            new SystemKey("wall.alias", VarType.STRING, "画板别名", 5_000L),
+            new SystemKey("wall.owner", VarType.STRING, "画板创建者名称", 0L),
+            new SystemKey("wall.owner_uuid", VarType.STRING, "画板创建者 UUID", 0L)
     );
 
     private final VariableStore store;
@@ -165,7 +165,7 @@ public final class SystemVariableProvider implements VariableProvider {
             all.add(new DeclaredKey(k.key, k.type, k.description, k.ttlMs));
         }
         for (SystemKey k : PER_WALL_KEYS) {
-            all.add(new DeclaredKey(k.key, k.type, k.description + "（per-wall）", k.ttlMs));
+            all.add(new DeclaredKey(k.key, k.type, k.description, k.ttlMs));
         }
         return all;
     }

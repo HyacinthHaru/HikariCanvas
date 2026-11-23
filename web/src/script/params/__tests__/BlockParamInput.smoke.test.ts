@@ -230,7 +230,7 @@ describe('BlockParamInput — timeline / element（store 数据源）', () => {
         const w = mountInput(field({ type: 'element', name: 'elementId' }), '', 'setElementProperty');
         const opts = w.findAll('option');
         expect(opts.length).toBe(3); // 占位 + 2 元素
-        expect(w.text()).toContain('rect · rect11');
+        expect(w.text()).toContain('矩形 · rect11');
         await w.find('select').setValue('e-circ22');
         expect(lastUpdate(w)).toBe('e-circ22');
     });

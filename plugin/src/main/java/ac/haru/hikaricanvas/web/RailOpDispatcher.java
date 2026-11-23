@@ -406,6 +406,11 @@ final class RailOpDispatcher {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", invalid));
             return;
         }
+        if (isRunNumberTaken(lineId, runNumber, null)) {
+            ctx.send(Envelope.error(in.id(), "RUN_NUMBER_TAKEN",
+                    "Run number already exists on this line"));
+            return;
+        }
         long now = System.currentTimeMillis();
         // do-while 唯一 id（冲突时追加 random 后缀并再次校验）
         String id = generateUniqueId("run-", cand -> dao.findRun(cand).isPresent());
@@ -426,9 +431,12 @@ final class RailOpDispatcher {
         RailRun run = new RailRun(id, lineId, runNumber, direction, serviceType,
                 cars, startId, endId, notes, now, now);
         if (!dao.upsertRun(run)) {
-            // 最常见是撞了 UNIQUE(line_id, run_number)：同线路已有这个车次号
-            ctx.send(Envelope.error(in.id(), "DB_FAILED",
-                    "run insert failed (duplicate run number on this line?)"));
+            if (isRunNumberTaken(lineId, runNumber, id)) {
+                ctx.send(Envelope.error(in.id(), "RUN_NUMBER_TAKEN",
+                        "Run number already exists on this line"));
+            } else {
+                ctx.send(Envelope.error(in.id(), "DB_FAILED", "Failed to save train run"));
+            }
             return;
         }
         if (autoEntries != null && !autoEntries.isEmpty() && !dao.replaceTimetable(id, autoEntries)) {
@@ -511,9 +519,16 @@ final class RailOpDispatcher {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", invalid));
             return;
         }
+        String effectiveRunNumber = runNumber == null ? existing.runNumber() : runNumber;
+        if (runNumber != null && !runNumber.equals(existing.runNumber())
+                && isRunNumberTaken(existing.lineId(), effectiveRunNumber, existing.id())) {
+            ctx.send(Envelope.error(in.id(), "RUN_NUMBER_TAKEN",
+                    "Run number already exists on this line"));
+            return;
+        }
         RailRun updated = new RailRun(
                 existing.id(), existing.lineId(),
-                runNumber == null ? existing.runNumber() : runNumber,
+                effectiveRunNumber,
                 direction == null ? existing.direction() : direction,
                 serviceType == null ? existing.serviceType() : serviceType,
                 cars == null ? existing.cars() : cars,
@@ -524,14 +539,28 @@ final class RailOpDispatcher {
                 notes == null ? existing.notes() : notes,
                 existing.createdAt(), System.currentTimeMillis());
         if (!dao.upsertRun(updated)) {
-            ctx.send(Envelope.error(in.id(), "DB_FAILED",
-                    "run update failed (duplicate run number on this line?)"));
+            if (isRunNumberTaken(existing.lineId(), effectiveRunNumber, existing.id())) {
+                ctx.send(Envelope.error(in.id(), "RUN_NUMBER_TAKEN",
+                        "Run number already exists on this line"));
+            } else {
+                ctx.send(Envelope.error(in.id(), "DB_FAILED", "Failed to update train run"));
+            }
             return;
         }
         audit(sessionId, s, "RAIL_RUN_UPDATE", Map.of("run_id", id));
         Map<String, Object> ack = new LinkedHashMap<>();
         ack.put("run", runToMap(updated));
         ctx.send(Envelope.of("ack", in.id(), ack));
+    }
+
+    /** 检查指定线路下是否已存在同名车次号（更新时可通过 excludeRunId 排除自身）。 */
+    private boolean isRunNumberTaken(String lineId, String runNumber, @Nullable String excludeRunId) {
+        if (lineId == null || runNumber == null) return false;
+        for (RailRun r : dao.listRunsByLine(lineId)) {
+            if (excludeRunId != null && excludeRunId.equals(r.id())) continue;
+            if (runNumber.equals(r.runNumber())) return true;
+        }
+        return false;
     }
 
     /**
@@ -593,8 +622,7 @@ final class RailOpDispatcher {
         List<RailTimetableEntry> parsed = parse.entries();
         if (!dao.replaceTimetable(runId, parsed)) {
             // 事务已回滚，旧时刻表还在；多半是某条 stationId 不存在
-            ctx.send(Envelope.error(in.id(), "DB_FAILED",
-                    "timetable write failed (unknown stationId?)"));
+            ctx.send(Envelope.error(in.id(), "DB_FAILED", "Failed to save timetable"));
             return;
         }
         audit(sessionId, s, "RAIL_TIMETABLE_SET",

@@ -67,8 +67,11 @@ async function onSubmit() {
         await ws.sendVariableSet(props.fullName, currentValueAsString());
         emit('close');
     } catch (err) {
-        submitError.value = (err as Error).message;
-        net.pushLog('err', `variable.set rejected: ${(err as Error).message}`);
+        const msg = (err as Error).message;
+        if (msg === 'ack_timeout') submitError.value = t.value.errors.TIMEOUT;
+        else if (msg === 'send_failed' || msg === 'connection closed before ack') submitError.value = t.value.errors.CONNECTION_CLOSED;
+        else submitError.value = msg;
+        net.pushLog('err', `variable.set rejected: ${msg}`);
     } finally {
         submitting.value = false;
     }
@@ -123,7 +126,7 @@ function onCancel() {
             class="hc-btn px-3 py-1.5 text-xs rounded-[var(--radius-sm)] border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
             @click="valueBool = !valueBool"
           >
-            {{ valueBool ? 'true' : 'false' }}
+            {{ valueBool ? t.variables.boolTrue : t.variables.boolFalse }}
           </button>
           <ColorInput
             v-else

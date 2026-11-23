@@ -52,6 +52,18 @@ const svgImportOpen = ref(false);
 const lockInFlight = ref(false);
 const aliasInFlight = ref(false);
 
+/** 将 sendWithAck 抛出的内部哨兵（ack_timeout / send_failed / 断连）转为本地化人话。 */
+function localizeWsError(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === 'ack_timeout') return t.value.errors.TIMEOUT;
+    if (msg === 'send_failed' || msg === 'connection closed before ack') {
+        return t.value.errors.CONNECTION_CLOSED;
+    }
+    const errs = t.value.errors as Record<string, unknown>;
+    if (typeof errs[msg] === 'string') return errs[msg] as string;
+    return msg;
+}
+
 /**
  * optimistic mutation + rollback on server reject。
  *
@@ -74,12 +86,13 @@ async function toggleLock() {
     } catch (err) {
         // rollback：恢复 prev
         project.lockedAt = prev;
-        const msg = (err as Error).message;
+        const rawMsg = (err as Error).message;
+        const friendly = localizeWsError(err);
         // 用 net.lastError 作为统一错误显示通道（已被 NetworkStatus / 日志面板订阅）
         net.lastError = wasLocked
-            ? `${t.value.wall.unlockFailed}: ${msg}`
-            : `${t.value.wall.lockFailed}: ${msg}`;
-        net.pushLog('err', `lock toggle rejected: ${msg}`);
+            ? `${t.value.wall.unlockFailed}：${friendly}`
+            : `${t.value.wall.lockFailed}：${friendly}`;
+        net.pushLog('err', `lock toggle rejected: ${rawMsg}`);
     } finally {
         lockInFlight.value = false;
     }
@@ -124,22 +137,24 @@ async function commitAliasEdit() {
     } catch (err) {
         // rollback to prev
         project.alias = prev;
-        const msg = (err as Error).message;
+        const rawMsg = (err as Error).message;
+        const errCode = (err as { code?: string })?.code ?? net.lastOpError?.code;
         // 按 server code 决定 UI：被占用 / 格式 → 回到 inline edit；其它（FORBIDDEN/timeout）
-        // → 统一 lastError 提示
-        if (msg.includes('ALIAS_TAKEN')) {
+        // → 统一 lastError 提示（兼容 wsClient 不再拼 "${CODE}: " 前缀的新行为）
+        if (errCode === 'ALIAS_TAKEN' || rawMsg.includes('ALIAS_TAKEN') || rawMsg === t.value.errors.ALIAS_TAKEN) {
             aliasDraft.value = trimmed;
             editingAlias.value = true;
             aliasError.value = t.value.wall.aliasInUse;
             nextTick(() => aliasInput.value?.focus());
-        } else if (msg.includes('INVALID_ALIAS_FORMAT')) {
+        } else if (errCode === 'INVALID_ALIAS_FORMAT' || rawMsg.includes('INVALID_ALIAS_FORMAT') || rawMsg === t.value.errors.INVALID_ALIAS_FORMAT) {
             aliasDraft.value = trimmed;
             editingAlias.value = true;
             aliasError.value = t.value.wall.aliasInvalid;
             nextTick(() => aliasInput.value?.focus());
         } else {
-            net.lastError = `${t.value.wall.aliasFailed}: ${msg}`;
-            net.pushLog('err', `alias commit rejected: ${msg}`);
+            const friendly = localizeWsError(err);
+            net.lastError = `${t.value.wall.aliasFailed}：${friendly}`;
+            net.pushLog('err', `alias commit rejected: ${rawMsg}`);
         }
     } finally {
         aliasInFlight.value = false;
@@ -175,10 +190,10 @@ async function refreshWall() {
         const msg = (e as Error).message;
         if (msg === 'ack_timeout') {
             showRefreshFlash(t.value.wall.refreshTimeout);
-        } else if (msg === 'send_failed') {
+        } else if (msg === 'send_failed' || msg === 'connection closed before ack') {
             showRefreshFlash(t.value.wall.refreshSendFailed);
         } else {
-            showRefreshFlash(msg);
+            showRefreshFlash(localizeWsError(e));
         }
     } finally {
         refreshing.value = false;
@@ -255,7 +270,7 @@ const showMoreButton = computed(() => true);
     <div class="flex items-center gap-3 min-w-0 flex-1 overflow-hidden">
       <span class="text-sm font-semibold tracking-tight shrink-0">{{ t.brand }}</span>
       <span class="text-xs text-[color:var(--muted-foreground)] shrink-0">
-        {{ net.serverVersion ? `server ${net.serverVersion}` : '' }}
+        {{ net.serverVersion ? t.topbar.serverVersion(net.serverVersion) : '' }}
       </span>
       <!-- wall 元数据 -->
       <div v-if="project.wallId" class="flex items-center gap-2 ml-2 text-xs min-w-0 overflow-hidden">

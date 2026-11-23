@@ -579,7 +579,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'elementId', type: 'element', labelKey: 'script.fields.elementId' },
         ],
     },
-    // ---- 补间包裹积木「在 X 秒内」（control 绿，带 body 子序列槽）----
+    // ---- 补间包裹积木「平滑过渡」（control 绿，带 body 子序列槽）----
     // body 只放属性动作（setElementProperties，kind ∈ TWEENABLE_KINDS）。
     // durationMs = number，easing = select（4 预设），body = statements。
     // 校验镜像 ScriptRuleValidator.TweenBlock case。

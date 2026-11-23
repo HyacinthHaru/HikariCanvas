@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue';
 import { isDrawTool, useUiStore, type ActiveTool } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
+import { useI18n } from '@/i18n';
 import { useLockGuard } from './useLockGuard';
 
 /**
@@ -19,6 +20,7 @@ import { useLockGuard } from './useLockGuard';
 export function useDrawToCreate() {
     const ui = useUiStore();
     const ws = getWsClient();
+    const { t } = useI18n();
     // lock 多入口 guard 内层防线（stage overlay 已挡 mousedown，
     // 但用户先 mousedown 起拖再被远端 lock 时本地 mouseup 仍会走 commitDraw —— 此处兜底）
     const lockGuard = useLockGuard();
@@ -202,7 +204,7 @@ export function useDrawToCreate() {
         }
 
         if (type && props) {
-            if (!lockGuard.guardMutation('drawTool')) {
+            if (!lockGuard.guardMutation(t.value.lockGuard.actionDraw)) {
                 ui.setTool('select');
                 return;
             }

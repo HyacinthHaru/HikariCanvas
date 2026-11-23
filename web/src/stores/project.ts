@@ -1,11 +1,13 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { ProjectState, Element, Layer, PatchOp, Timeline, Keyframe } from '@/types/protocol';
+import { useUiStore, type Locale } from './ui';
 import { useVariableStore } from './variables';
 import { useScheduleStore } from './schedule';
 import { useVariableAliasStore } from './variableAliases';
 import { useRailStore } from './rail';
 import { useScriptStore } from './scripts';
+import { messages } from '@/i18n/messages';
 import { clearLayerThumbnailCache } from '@/render/LayerThumbnailRenderer';
 import { resetImageCaches } from '@/render/PreviewRenderer';
 
@@ -98,12 +100,13 @@ export const useProjectStore = defineStore('project', () => {
      * 未就绪 → 空数组。</p>
      */
     const allElements = computed<{ id: string; type: string; label: string }[]>(() => {
+        const locale = useUiStore().locale;
         const s = state.value;
         if (!s || !s.layers) return [];
         const out: { id: string; type: string; label: string }[] = [];
         for (const layer of s.layers) {
             for (const el of layer.elements ?? []) {
-                out.push({ id: el.id, type: el.type, label: elementLabel(el) });
+                out.push({ id: el.id, type: el.type, label: elementLabel(el, locale) });
             }
         }
         return out;
@@ -298,7 +301,7 @@ export const useProjectStore = defineStore('project', () => {
  *
  * <p>注意：返回的是<b>展示文案</b>（含类型词），写回 wire 的始终是 {@code element.id}。</p>
  */
-function elementLabel(el: Element): string {
+function elementLabel(el: Element, locale: Locale): string {
     const shortId = el.id.replace(/^e-/, '').slice(0, 6);
     if (el.type === 'text') {
         const text = (el as { text?: string }).text;
@@ -307,7 +310,9 @@ function elementLabel(el: Element): string {
             return trimmed.length > 16 ? `${trimmed.slice(0, 16)}…` : trimmed;
         }
     }
-    return `${el.type} · ${shortId}`;
+    const types = messages[locale].elementTypes;
+    const typeName = types[el.type as keyof typeof types] ?? el.type;
+    return `${typeName} · ${shortId}`;
 }
 
 function activeLayerOf(state: ProjectState): Layer | null {

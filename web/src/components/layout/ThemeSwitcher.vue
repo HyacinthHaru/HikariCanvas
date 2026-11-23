@@ -131,8 +131,8 @@ const isActiveRadius = computed(() => (r: RadiusScale) => theme.radius === r);
               ? 'ring-2 ring-offset-2 ring-offset-[color:var(--card)] ring-[color:var(--foreground)]'
               : 'ring-1 ring-[color:var(--border)]'"
             :style="{ background: a.color }"
-            :aria-label="a.id"
-            :title="a.id"
+            :aria-label="t.themeAccents[a.id]"
+            :title="t.themeAccents[a.id]"
             @click="chooseAccent(a.id)"
           ></button>
         </div>

@@ -121,8 +121,11 @@ async function onSubmit() {
         emit('created', name.value);
         emit('close');
     } catch (err) {
-        submitError.value = (err as Error).message;
-        net.pushLog('err', `variable.create rejected: ${(err as Error).message}`);
+        const msg = (err as Error).message;
+        if (msg === 'ack_timeout') submitError.value = t.value.errors.TIMEOUT;
+        else if (msg === 'send_failed' || msg === 'connection closed before ack') submitError.value = t.value.errors.CONNECTION_CLOSED;
+        else submitError.value = msg;
+        net.pushLog('err', `variable.create rejected: ${msg}`);
     } finally {
         submitting.value = false;
     }
@@ -179,7 +182,9 @@ const TYPE_OPTIONS: { value: VarType; labelKey: 'typeString' | 'typeNumber' | 't
             <template v-else-if="nameValidation.errorKey === 'invalid'">{{ t.variables.nameErrorInvalid }}</template>
             <template v-else>{{ t.variables.nameErrorEmpty }}</template>
           </span>
-          <span v-else class="text-xs text-[color:var(--muted-foreground)]">{{ t.variables.dialogNewNameHint }}</span>
+          <span v-else class="text-xs text-[color:var(--muted-foreground)]">
+            {{ scope === 'global' ? t.variables.dialogNewNameGlobalHint : t.variables.dialogNewNameHint }}
+          </span>
         </label>
 
         <!-- scope toggle（作用域）：本 wall vs 全局 -->
@@ -256,7 +261,7 @@ const TYPE_OPTIONS: { value: VarType; labelKey: 'typeString' | 'typeNumber' | 't
               class="hc-btn px-3 py-1.5 text-xs rounded-[var(--radius-sm)] border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
               @click="defaultValueBool = !defaultValueBool"
             >
-              {{ defaultValueBool ? 'true' : 'false' }}
+              {{ defaultValueBool ? t.variables.boolTrue : t.variables.boolFalse }}
             </button>
             <div v-else>
               <ColorInput v-model="defaultValueColor" :allow-alpha="false" />

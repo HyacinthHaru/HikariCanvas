@@ -53,6 +53,29 @@ const editingEntry = ref<ScheduleEntry | null>(null);
 const entryDialogError = ref<string | null>(null);
 const entrySubmitting = ref(false);
 
+function localizeWsError(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === 'ack_timeout') return t.value.errors.TIMEOUT;
+    if (msg === 'send_failed' || msg === 'connection closed before ack') {
+        return t.value.errors.CONNECTION_CLOSED;
+    }
+    const errs = t.value.errors as Record<string, unknown>;
+    if (typeof errs[msg] === 'string') return errs[msg] as string;
+    return msg;
+}
+
+function formatBoolPreview(v: string): string {
+    if (v === 'true') return t.value.common.yes;
+    if (v === 'false') return t.value.common.no;
+    return v || '—';
+}
+
+function formatPrecisionPreview(v: string): string {
+    if (v === 'second') return t.value.schedule.precisionSecond;
+    if (v === 'minute') return t.value.schedule.precisionMinute;
+    return v || '—';
+}
+
 watch(open, async (v) => {
     if (!v) return;
     if (!project.wallId) return;
@@ -62,7 +85,7 @@ watch(open, async (v) => {
         schedule.setLoaded(ack.schedule);
         stationDraft.value = ack.schedule?.stationName ?? '';
     } catch (e) {
-        schedule.setError((e as Error).message);
+        schedule.setError(localizeWsError(e));
         schedule.setLoading(false);
     }
     // 同步 rail binding 草稿到 store（ready payload 已带 binding）
@@ -88,6 +111,7 @@ async function expandRailSection() {
                 rail.setStations(detail.stations, lineId);
             }
         } catch (e) {
+            schedule.setError(localizeWsError(e));
             net.pushLog('err', `rail.line.list rejected: ${(e as Error).message}`);
         }
     }
@@ -102,6 +126,7 @@ async function onRailLineChange() {
         const detail = await ws.sendRailLineDetail(lineId);
         rail.setStations(detail.stations, lineId);
     } catch (e) {
+        schedule.setError(localizeWsError(e));
         net.pushLog('err', `rail.line.detail rejected: ${(e as Error).message}`);
     }
 }
@@ -110,6 +135,7 @@ async function applyRailBinding() {
     if (railBindSubmitting.value) return;
     if (!railLineDraft.value || !railStationDraft.value) return;
     railBindSubmitting.value = true;
+    schedule.setError(null);
     try {
         const { binding } = await ws.sendRailWallBind({
             lineId: railLineDraft.value,
@@ -118,6 +144,7 @@ async function applyRailBinding() {
         });
         rail.setBinding(binding);
     } catch (e) {
+        schedule.setError(localizeWsError(e));
         net.pushLog('err', `rail.wall.bind rejected: ${(e as Error).message}`);
     } finally {
         railBindSubmitting.value = false;
@@ -127,6 +154,7 @@ async function applyRailBinding() {
 async function clearRailBinding() {
     if (railBindSubmitting.value) return;
     railBindSubmitting.value = true;
+    schedule.setError(null);
     try {
         const { binding } = await ws.sendRailWallBind({
             lineId: null,
@@ -137,6 +165,7 @@ async function clearRailBinding() {
         railLineDraft.value = '';
         railStationDraft.value = '';
     } catch (e) {
+        schedule.setError(localizeWsError(e));
         net.pushLog('err', `rail.wall.bind clear rejected: ${(e as Error).message}`);
     } finally {
         railBindSubmitting.value = false;
@@ -154,7 +183,7 @@ async function saveStationName(): Promise<void> {
         schedule.setStationName(ack.stationName);
         if (ack.precision) schedule.setPrecision(ack.precision);
     } catch (e) {
-        schedule.setError((e as Error).message);
+        schedule.setError(localizeWsError(e));
     } finally {
         stationSubmitting.value = false;
     }
@@ -180,7 +209,7 @@ async function switchPrecision(precision: SchedulePrecision): Promise<void> {
         if (ack.precision) schedule.setPrecision(ack.precision);
         else schedule.setPrecision(precision);
     } catch (e) {
-        schedule.setError((e as Error).message);
+        schedule.setError(localizeWsError(e));
     } finally {
         precisionSubmitting.value = false;
     }
@@ -224,7 +253,7 @@ async function onEntryDialogSubmit(payload: {
         });
         entryDialogOpen.value = false;
     } catch (e) {
-        entryDialogError.value = (e as Error).message;
+        entryDialogError.value = localizeWsError(e);
     } finally {
         entrySubmitting.value = false;
     }
@@ -237,7 +266,7 @@ async function deleteEntry(entry: ScheduleEntry): Promise<void> {
         await ws.sendScheduleEntryDelete(entry.id);
         schedule.removeEntry(entry.id);
     } catch (e) {
-        schedule.setError((e as Error).message);
+        schedule.setError(localizeWsError(e));
     } finally {
         submittingEntryId.value = null;
     }
@@ -493,11 +522,11 @@ const previewVars = computed(() => {
             <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewEtaMmss }}</dt>
             <dd>{{ previewVars.etaMmss || '—' }}</dd>
             <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewIsArriving }}</dt>
-            <dd>{{ previewVars.isArriving }}</dd>
+            <dd>{{ formatBoolPreview(previewVars.isArriving) }}</dd>
             <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewArrivalStatus }}</dt>
             <dd>{{ previewVars.arrivalStatus || '—' }}</dd>
             <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewPrecision }}</dt>
-            <dd>{{ previewVars.precision }}</dd>
+            <dd>{{ formatPrecisionPreview(previewVars.precision) }}</dd>
           </dl>
 
           <!-- 第二班次 -->
@@ -515,7 +544,7 @@ const previewVars = computed(() => {
               <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewEtaMmss }}</dt>
               <dd>{{ previewVars.next2EtaMmss || '—' }}</dd>
               <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewIsArriving }}</dt>
-              <dd>{{ previewVars.next2IsArriving }}</dd>
+              <dd>{{ formatBoolPreview(previewVars.next2IsArriving) }}</dd>
               <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewArrivalStatus }}</dt>
               <dd>{{ previewVars.next2ArrivalStatus || '—' }}</dd>
             </dl>

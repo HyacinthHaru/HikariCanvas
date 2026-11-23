@@ -8,7 +8,7 @@
  * watch image bbox 变化 → 预设 mask 按新 bbox 重生成（用 detectMaskPreset 反推 kind，
  * 自由 path 落到 'none' 不动）。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { ImagePlus, RefreshCw } from 'lucide-vue-next';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import { preloadImage } from '@/render/PreviewRenderer';
@@ -143,7 +143,8 @@ function onMaskKindChange(ev: Event) {
     }
     if (kind === 'lasso') {
         // 仅切换标识 — 实际 path 等用户 Alt + 拖动绘制。若当前已是非预设 d 保留；
-        // 否则提示用户去画布上拖
+        // 否则内联提示用户去画布上拖
+        if (detectMaskPreset(im) !== 'lasso') showLassoHint();
         return;
     }
     let d = '';
@@ -182,17 +183,42 @@ function onMaskClear() {
     emit('update', { mask: null });
 }
 
+const lassoHintVisible = ref(false);
+let lassoHintTimer: number | null = null;
+
+function clearLassoHintTimer() {
+    if (lassoHintTimer !== null && typeof window !== 'undefined') {
+        window.clearTimeout(lassoHintTimer);
+        lassoHintTimer = null;
+    }
+}
+
+function showLassoHint() {
+    lassoHintVisible.value = true;
+    clearLassoHintTimer();
+    if (typeof window !== 'undefined') {
+        lassoHintTimer = window.setTimeout(() => {
+            lassoHintVisible.value = false;
+            lassoHintTimer = null;
+        }, 6000);
+    }
+}
+
+watch(() => props.element.id, () => {
+    lassoHintVisible.value = false;
+    clearLassoHintTimer();
+});
+
+onBeforeUnmount(() => {
+    clearLassoHintTimer();
+});
+
 /**
- * 触发 lasso 编辑模式。仅是 UI hint —— 实际拖动绘制由 CanvasView /
- * useLassoMask 监听全局 Alt + drag 事件捕获，不需要 RightPanel 改 store state。
- * 这里只做用户教育（toast / hint）；按钮 click 主要为可发现性。
+ * 触发 lasso 编辑引导。实际拖动绘制由 CanvasView / useLassoMask 监听全局 Alt + drag
+ * 事件捕获，这里通过面板内非阻塞状态条展示操作引导，避免 window.alert 阻塞界面。
  */
 function onMaskEditLasso() {
-    // 简化实装：alert 提示用户操作方式。生产可接 toast / hint overlay；
-    // 关键的实际编辑逻辑都在 useLassoMask composable 里，按钮非必需。
-    if (typeof window !== 'undefined') {
-        window.alert(t.value.image.maskEditLassoTip);
-    }
+    showLassoHint();
 }
 
 function toggleImageDither(ev: Event) {
@@ -377,6 +403,13 @@ async function onReplaceFileChange(e: Event) {
           >
             {{ t.image.maskClear }}
           </button>
+        </div>
+        <div
+          v-if="lassoHintVisible"
+          role="status"
+          class="ml-1 px-2 py-1.5 text-xs rounded bg-[color:var(--muted)] text-[color:var(--muted-foreground)] border border-[color:var(--border)]"
+        >
+          {{ t.image.maskEditLassoTip }}
         </div>
       </div>
 

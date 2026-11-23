@@ -135,7 +135,8 @@ public final class TemplatePublisher {
             Files.write(packAbs, ok.packBytes(), StandardOpenOption.CREATE,
                     StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
         } catch (IOException e) {
-            return new Result.Failed("WRITE_FAILED", "pack: " + e.getMessage());
+            log.log(Level.WARNING, "Failed to write template pack " + packAbs, e);
+            return new Result.Failed("WRITE_FAILED", "Failed to save template file");
         }
 
         // 5) 缩略图：直接 rasterize 当前 ProjectState（参数化前的快照）

@@ -30,7 +30,6 @@ type Phase = 'idle' | 'importing' | 'done' | 'error';
 const phase = ref<Phase>('idle');
 const importCount = ref(0);
 const errorCode = ref<string | null>(null);
-const errorMessage = ref<string | null>(null);
 
 const fileRef = ref<HTMLInputElement | null>(null);
 /** 拖拽悬停高亮态。 */
@@ -58,7 +57,6 @@ async function doImport(file: File) {
     phase.value = 'importing';
     importCount.value = 0;
     errorCode.value = null;
-    errorMessage.value = null;
     try {
         const text = await file.text();
         const r = await useSvgImport().importSvg(text);
@@ -68,8 +66,14 @@ async function doImport(file: File) {
         if (err instanceof SvgImportError) {
             errorCode.value = err.code;
         } else {
-            errorCode.value = 'UNKNOWN';
-            errorMessage.value = (err as Error).message ?? String(err);
+            const msg = (err as Error)?.message ?? '';
+            if (msg === 'ack_timeout') {
+                errorCode.value = 'TIMEOUT';
+            } else if (msg === 'send_failed' || msg === 'connection closed before ack') {
+                errorCode.value = 'CONNECTION_CLOSED';
+            } else {
+                errorCode.value = 'UNKNOWN';
+            }
         }
         phase.value = 'error';
     }
@@ -82,7 +86,6 @@ function onClose() {
     isDragging.value = false;
     importCount.value = 0;
     errorCode.value = null;
-    errorMessage.value = null;
     emit('close');
 }
 
@@ -161,10 +164,7 @@ defineExpose({ doImport });
         <template v-else-if="phase === 'error'">
           <div class="flex items-start gap-2 text-[color:var(--destructive)]">
             <AlertTriangle class="size-4 shrink-0 mt-0.5" />
-            <div class="space-y-0.5">
-              <div>{{ t.svgImport.failed(errorCode ?? '') }}</div>
-              <div v-if="errorMessage" class="text-[color:var(--muted-foreground)]">{{ errorMessage }}</div>
-            </div>
+            <div>{{ t.svgImport.failed(errorCode ?? 'UNKNOWN') }}</div>
           </div>
         </template>
       </div>
@@ -174,7 +174,7 @@ defineExpose({ doImport });
           class="hc-btn px-3 py-1.5 text-xs rounded-[var(--radius-sm)] border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
           :disabled="phase === 'importing'"
           @click="onClose"
-        >{{ t.workshop.cancel }}</button>
+        >{{ phase === 'done' ? t.common.close : t.workshop.cancel }}</button>
       </footer>
     </div>
   </div>

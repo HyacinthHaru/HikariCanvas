@@ -104,6 +104,22 @@ function warningText(w: ImportWarningDto): string {
     return fn ? fn(w.detail) : w.detail;
 }
 
+/**
+ * 仅当 errorCode 未知（为空 / UNKNOWN / 未被 importFailed 映射为独立人话）且 errorMessage
+ * 有实际可读内容（排除英文 'network error' / 'Failed to fetch'）时，才显示辅助错误文案。
+ */
+const auxiliaryErrorMessage = computed<string | null>(() => {
+    const msg = errorMessage.value?.trim();
+    if (!msg) return null;
+    const lower = msg.toLowerCase();
+    if (lower === 'network error' || lower === 'failed to fetch') return null;
+    const code = errorCode.value ?? '';
+    const primary = t.value.project.importFailed(code);
+    if (msg === primary) return null;
+    const isUnknownCode = !code || code === 'UNKNOWN' || primary.includes(code);
+    return isUnknownCode ? msg : null;
+});
+
 function onClose() {
     if (phase.value === 'importing') return;   // 导入进行中不可关
     // 重置态，下次打开干净
@@ -209,7 +225,7 @@ defineExpose({ doImport, acceptFile, warningText });
             <AlertTriangle class="size-4 shrink-0 mt-0.5" />
             <div class="space-y-0.5">
               <div>{{ t.project.importFailed(errorCode ?? '') }}</div>
-              <div v-if="errorMessage" class="text-[color:var(--muted-foreground)]">{{ errorMessage }}</div>
+              <div v-if="auxiliaryErrorMessage" class="text-[color:var(--muted-foreground)]">{{ auxiliaryErrorMessage }}</div>
             </div>
           </div>
         </template>
@@ -228,13 +244,13 @@ defineExpose({ doImport, acceptFile, warningText });
             @click="confirmImport"
           >{{ t.project.importTitle }}</button>
         </template>
-        <!-- 其它阶段：关闭 -->
+        <!-- 其它阶段：done 显示“关闭”，其余显示“取消” -->
         <template v-else>
           <button
             class="hc-btn px-3 py-1.5 text-xs rounded-[var(--radius-sm)] border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
             :disabled="phase === 'importing'"
             @click="onClose"
-          >{{ t.workshop.cancel }}</button>
+          >{{ phase === 'done' ? t.common.close : t.workshop.cancel }}</button>
         </template>
       </footer>
     </div>

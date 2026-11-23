@@ -1097,7 +1097,7 @@ function onDragMove(ev: DragEvt, id: string): void {
 
 function onDragEnd(ev: DragEvt, id: string): void {
     // 内层防线：drag mid-flight 远端 lock 兜底（理论 overlay 已挡 mousedown）
-    if (!lockGuard.guardMutation('drag')) {
+    if (!lockGuard.guardMutation(t.value.lockGuard.actionDrag)) {
         dragInitial.value = new Map();
         timelineStore.setDraggingElementIds(new Set());
         activeSnapHints.value = null;

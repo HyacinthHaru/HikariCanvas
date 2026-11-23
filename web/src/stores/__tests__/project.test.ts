@@ -181,13 +181,13 @@ describe('project.allElements', () => {
     it('空正文文本元素 → 退 类型 · 短码', () => {
         const store = useProjectStore();
         store.setSnapshot(stateWithLayers([makeLayer('l-0', [makeTextEl('e-empty99', '   ')])]));
-        expect(store.allElements[0].label).toBe('text · empty9');
+        expect(store.allElements[0].label).toBe('Text · empty9');
     });
 
     it('非文本元素 label = 类型 · 短码', () => {
         const store = useProjectStore();
         store.setSnapshot(stateWithLayers([makeLayer('l-0', [makeEl('e-deadbeef', { type: 'image' })])]));
-        expect(store.allElements[0].label).toBe('image · deadbe');
+        expect(store.allElements[0].label).toBe('Image · deadbe');
     });
 });
 

@@ -104,7 +104,7 @@ function onElementDragEnd() {
       >
         <span class="w-5 text-xs text-[color:var(--muted-foreground)] tabular-nums">{{ idx }}</span>
         <span class="flex-1 truncate">
-          {{ el.type }}
+          {{ t.elementTypes[el.type as keyof typeof t.elementTypes] ?? el.type }}
           <span v-if="el.type === 'text'" class="opacity-60">· "{{ (el as any).text }}"</span>
         </span>
         <button

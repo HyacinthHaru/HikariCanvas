@@ -73,6 +73,7 @@ export function useLockGuard(): {
         const msg = actionName
             ? t.value.lockGuard.blockedWithAction(actionName)
             : t.value.lockGuard.blocked;
+        net.lastError = msg;
         net.pushLog('err', msg);
         // DEV-only console 警告，帮 future contributor 发现新入口忘了 guard
         if (import.meta.env.DEV) {

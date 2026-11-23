@@ -95,7 +95,7 @@ public final class PackParamResolver {
         try {
             root = MAPPER.readTree(paramsJson);
         } catch (Exception e) {
-            throw new CanvasImportException("IMPORT_MALFORMED", "params.json 解析失败: " + e.getMessage());
+            throw new CanvasImportException("IMPORT_MALFORMED", "模板参数定义格式错误，无法读取 params.json");
         }
         if (root == null || !root.isArray()) {
             throw new CanvasImportException("IMPORT_MALFORMED", "params.json 非数组");
@@ -115,12 +115,11 @@ public final class PackParamResolver {
                 param = MAPPER.convertValue(node, TemplateParam.class);
             } catch (Exception e) {
                 throw new CanvasImportException("IMPORT_MALFORMED",
-                        "params.json 参数 '" + id + "' 映射失败: " + e.getMessage());
+                        "模板参数 '" + id + "' 的字段定义格式不正确");
             }
             if (param.type() == null || !VALID_TYPES.contains(param.type())) {
                 throw new CanvasImportException("IMPORT_MALFORMED",
-                        "params.json 参数 '" + id + "' 的 type 缺失或非法: " + param.type()
-                                + "（可用: string/text/int/float/bool/color/enum/font）");
+                        "模板参数 '" + id + "' 的类型缺失或不受支持: " + param.type());
             }
             out.add(new ParamDef(id, param));
         }
@@ -149,7 +148,7 @@ public final class PackParamResolver {
             if (raw == null) raw = p.defaultValue();
             if (raw == null) {
                 if (p.required()) {
-                    errors.add("param '" + id + "' is required");
+                    errors.add("Parameter " + paramDisplay(id, p) + " is required");
                 }
                 // 非必填缺值：留 null 占位。Interpolator 视 containsKey=true → 替换为空串
                 // （与旧模板 validateParams 语义一致，避免把可选占位符当 undeclared 引用报错）。
@@ -208,40 +207,71 @@ public final class PackParamResolver {
 
     // ==================== 类型校验 ====================
 
+    private static String paramDisplay(String key, TemplateParam p) {
+        String label = p == null ? null : p.label();
+        if (label != null && !label.isBlank() && !label.equals(key)) {
+            return "'" + label + "' (" + key + ")";
+        }
+        return "'" + key + "'";
+    }
+
+    private static String formatBound(Double bound) {
+        if (bound == null) return "";
+        if (Double.isFinite(bound) && bound == Math.rint(bound) && Math.abs(bound) < 1e15) {
+            return Long.toString(bound.longValue());
+        }
+        return bound.toString();
+    }
+
     private static Object coerceAndValidate(String key, TemplateParam p,
                                             Object raw, List<String> errors) {
+        String name = paramDisplay(key, p);
         switch (p.type()) {
             case "string", "text" -> {
                 String s = raw.toString();
                 if (p.minLength() != null && s.length() < p.minLength()) {
-                    errors.add("param '" + key + "' length < " + p.minLength());
+                    errors.add("Parameter " + name + " must be at least " + p.minLength()
+                            + " characters (got " + s.length() + ")");
                 }
                 if (p.maxLength() != null && s.length() > p.maxLength()) {
-                    errors.add("param '" + key + "' length > " + p.maxLength());
+                    errors.add("Parameter " + name + " must be at most " + p.maxLength()
+                            + " characters (got " + s.length() + ")");
                 }
                 if (p.pattern() != null) {
-                    matchGuarded(key, p.pattern(), s, errors);
+                    matchGuarded(name, p.pattern(), s, errors);
                 }
                 return s;
             }
             case "int" -> {
                 Integer i = asInt(raw);
                 if (i == null) {
-                    errors.add("param '" + key + "' is not int: " + raw);
+                    errors.add("Parameter " + name + " must be an integer (got " + raw + ")");
                     return 0;
                 }
-                if (p.min() != null && i < p.min()) errors.add("param '" + key + "' < min");
-                if (p.max() != null && i > p.max()) errors.add("param '" + key + "' > max");
+                if (p.min() != null && i < p.min()) {
+                    errors.add("Parameter " + name + " must be >= " + formatBound(p.min())
+                            + " (got " + i + ")");
+                }
+                if (p.max() != null && i > p.max()) {
+                    errors.add("Parameter " + name + " must be <= " + formatBound(p.max())
+                            + " (got " + i + ")");
+                }
                 return i;
             }
             case "float" -> {
                 Double d = asDouble(raw);
                 if (d == null) {
-                    errors.add("param '" + key + "' is not float: " + raw);
+                    errors.add("Parameter " + name + " is not float: " + raw);
                     return 0.0;
                 }
-                if (p.min() != null && d < p.min()) errors.add("param '" + key + "' < min");
-                if (p.max() != null && d > p.max()) errors.add("param '" + key + "' > max");
+                if (p.min() != null && d < p.min()) {
+                    errors.add("Parameter " + name + " must be >= " + formatBound(p.min())
+                            + " (got " + d + ")");
+                }
+                if (p.max() != null && d > p.max()) {
+                    errors.add("Parameter " + name + " must be <= " + formatBound(p.max())
+                            + " (got " + d + ")");
+                }
                 return d;
             }
             case "bool" -> {
@@ -250,13 +280,13 @@ public final class PackParamResolver {
                     if ("true".equalsIgnoreCase(s)) return Boolean.TRUE;
                     if ("false".equalsIgnoreCase(s)) return Boolean.FALSE;
                 }
-                errors.add("param '" + key + "' is not bool: " + raw);
+                errors.add("Parameter " + name + " must be true or false (got " + raw + ")");
                 return Boolean.FALSE;
             }
             case "color" -> {
                 String s = raw.toString();
                 if (!COLOR_RE.matcher(s).matches()) {
-                    errors.add("param '" + key + "' invalid color: " + s);
+                    errors.add("Parameter " + name + " must be a hex color like #RRGGBB (got " + s + ")");
                 }
                 return s;
             }
@@ -265,7 +295,9 @@ public final class PackParamResolver {
                 if (p.options() != null) {
                     boolean ok = p.options().stream().anyMatch(
                             o -> String.valueOf(o.value()).equals(s));
-                    if (!ok) errors.add("param '" + key + "' not in enum options: " + s);
+                    if (!ok) {
+                        errors.add("Parameter " + name + " has unsupported option '" + s + "'");
+                    }
                 }
                 return s;
             }
@@ -273,7 +305,7 @@ public final class PackParamResolver {
                 return raw.toString();
             }
             default -> {
-                errors.add("param '" + key + "' has unknown type: " + p.type());
+                errors.add("Parameter " + name + " has unsupported type: " + p.type());
                 return raw;
             }
         }
@@ -283,9 +315,9 @@ public final class PackParamResolver {
      * 用不可信 pack 提供的正则匹配不可信填值，带长度闸 + 步数闸。任何问题只往
      * {@code errors} 里记一条，不上抛、不卡线程。
      */
-    private static void matchGuarded(String key, String pattern, String value, List<String> errors) {
+    private static void matchGuarded(String name, String pattern, String value, List<String> errors) {
         if (pattern.length() > MAX_PATTERN_LEN) {
-            errors.add("param '" + key + "' pattern too long: "
+            errors.add("Parameter " + name + " pattern too long: "
                     + pattern.length() + " > " + MAX_PATTERN_LEN);
             return;
         }
@@ -293,19 +325,19 @@ public final class PackParamResolver {
         try {
             compiled = Pattern.compile(pattern);
         } catch (RuntimeException e) {
-            errors.add("param '" + key + "' pattern invalid: " + e.getMessage());
+            errors.add("Parameter " + name + " has an invalid validation pattern");
             return;
         }
         try {
             if (!compiled.matcher(new StepLimited(value, MAX_MATCH_STEPS)).matches()) {
-                errors.add("param '" + key + "' doesn't match pattern " + pattern);
+                errors.add("Parameter " + name + " doesn't match pattern " + pattern);
             }
         } catch (StepLimitExceeded e) {
             // 走到这里基本就是灾难回溯（或者串太长配上太贵的正则）。当作校验不通过处理，
             // 并把原因说清楚，免得 pack 作者对着"不匹配"一头雾水。
-            errors.add("param '" + key + "' pattern too expensive to evaluate: " + pattern);
+            errors.add("Parameter " + name + " pattern too expensive to evaluate");
         } catch (RuntimeException e) {
-            errors.add("param '" + key + "' pattern failed: " + e.getMessage());
+            errors.add("Parameter " + name + " pattern validation failed");
         }
     }
 

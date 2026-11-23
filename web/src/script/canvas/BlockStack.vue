@@ -208,7 +208,7 @@ const hatStyle = computed(() => {
     >
       <div class="hc-hat-row">
         <span class="hc-hat-name">{{ rule.name }}</span>
-        <span v-if="!rule.enabled" class="hc-hat-disabled">{{ t.script.close }}</span>
+        <span v-if="!rule.enabled" class="hc-hat-disabled">{{ t.script.enabledOff }}</span>
       </div>
       <!-- 可编辑触发器 —— 触发类型 select + 当前类型参数控件（lock 时 disabled） -->
       <div class="hc-hat-row hc-hat-trigger">

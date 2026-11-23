@@ -69,7 +69,19 @@ const hasMore = ref(false);
 const offset = ref(0);
 const total = ref(0);
 const loading = ref(false);
-const loadError = ref<string | null>(null);
+const loadError = ref(false);
+const actionError = ref<string | null>(null);
+let actionErrorTimer: number | null = null;
+
+function showActionError(msg: string): void {
+    actionError.value = msg;
+    net.lastError = msg;
+    if (actionErrorTimer !== null) window.clearTimeout(actionErrorTimer);
+    actionErrorTimer = window.setTimeout(() => {
+        actionError.value = null;
+        actionErrorTimer = null;
+    }, 4000);
+}
 
 // 缓存 path d 命中情况触发 grid 重渲染（同 CanvasView 的 onIconLoaded 钩子）
 const pathCacheTick = ref(0);
@@ -125,7 +137,8 @@ function resetAndFetch(): void {
     items.value = [];
     hasMore.value = false;
     total.value = 0;
-    loadError.value = null;
+    loadError.value = false;
+    actionError.value = null;
     if (isClientCategory.value) {
         // 客户端列表：直接用 store；不发 fetch。debouncedSearch 在客户端列表上做子串过滤
         const source = lib.activeCategory === 'favorites' ? lib.favorites : lib.recent;
@@ -146,7 +159,7 @@ async function fetchPage(initial: boolean): Promise<void> {
     if (loading.value) return;
     if (!initial && !hasMore.value) return;
     loading.value = true;
-    loadError.value = null;
+    loadError.value = false;
     try {
         const params = new URLSearchParams();
         if (debouncedSearch.value) params.set('q', debouncedSearch.value);
@@ -155,12 +168,12 @@ async function fetchPage(initial: boolean): Promise<void> {
         params.set('offset', String(initial ? 0 : offset.value));
         const resp = await fetch(`/api/icon/list?${params.toString()}`);
         if (!resp.ok) {
-            loadError.value = `HTTP ${resp.status}`;
+            loadError.value = true;
             return;
         }
         const data = await resp.json() as ListResponse;
         if (!Array.isArray(data?.icons)) {
-            loadError.value = 'malformed';
+            loadError.value = true;
             return;
         }
         if (initial) {
@@ -172,8 +185,8 @@ async function fetchPage(initial: boolean): Promise<void> {
         }
         total.value = data.total | 0;
         hasMore.value = !!data.hasMore;
-    } catch (e) {
-        loadError.value = (e as Error).message || 'fetch failed';
+    } catch {
+        loadError.value = true;
     } finally {
         loading.value = false;
     }
@@ -193,7 +206,9 @@ function attachVisibilityObserver(): void {
             const el = entry.target as HTMLElement;
             const id = el.dataset.iconId;
             if (id && !getCached(id)) {
-                void ensureLoaded(id);
+                void ensureLoaded(id).then((res) => {
+                    if (!res) pathCacheTick.value++;
+                });
             }
         }
     }, { root: gridRef.value, rootMargin: '64px', threshold: 0.01 });
@@ -247,6 +262,10 @@ onBeforeUnmount(() => {
         window.clearTimeout(searchDebounceTimer);
         searchDebounceTimer = null;
     }
+    if (actionErrorTimer !== null) {
+        window.clearTimeout(actionErrorTimer);
+        actionErrorTimer = null;
+    }
 });
 
 // Esc 关闭
@@ -270,21 +289,32 @@ function centerCoords(): { x: number; y: number } {
     };
 }
 
-function onPick(icon: IconInfo): void {
+async function onPick(icon: IconInfo): Promise<void> {
     if (project.isLocked) {
+        showActionError(t.value.iconLibrary.lockedDenied);
         net.pushLog('meta', t.value.iconLibrary.lockedDenied);
         return;
     }
     if (!net.authenticated) return;
     const activeLayer = project.activeLayer;
     if (!activeLayer || activeLayer.locked) {
+        showActionError(t.value.iconLibrary.layerLocked);
         net.pushLog('meta', t.value.iconLibrary.layerLocked);
         return;
     }
+    const loaded = await ensureLoaded(icon.id);
+    if (!loaded) {
+        pathCacheTick.value++;
+        showActionError(t.value.iconLibrary.insertFailed);
+        return;
+    }
+    if (project.isLocked || !net.authenticated) return;
+    const targetLayer = project.activeLayer;
+    if (!targetLayer || targetLayer.locked) return;
     const { x, y } = centerCoords();
     ws.send('element.add', {
         type: 'icon',
-        layerId: activeLayer.id,
+        layerId: targetLayer.id,
         props: {
             x, y,
             w: ELEMENT_SIZE,
@@ -303,6 +333,11 @@ function onCellDragStart(ev: DragEvent, icon: IconInfo): void {
     if (!ev.dataTransfer) return;
     if (project.isLocked) {
         ev.preventDefault();
+        return;
+    }
+    if (getCached(icon.id) === null) {
+        ev.preventDefault();
+        showActionError(t.value.iconLibrary.insertFailed);
         return;
     }
     ev.dataTransfer.effectAllowed = 'copy';
@@ -410,9 +445,12 @@ onClickOutside(rootRef, (e) => {
 
     <!-- 主体：grid -->
     <div ref="gridRef" class="flex-1 overflow-y-auto px-3 pb-2 min-h-0">
+      <p v-if="actionError" role="alert" class="text-xs text-[color:var(--destructive)] py-1.5">
+        {{ actionError }}
+      </p>
       <!-- 错误 -->
       <p v-if="loadError" class="text-xs text-[color:var(--destructive)] py-3">
-        {{ loadError }}
+        {{ t.iconLibrary.loadFailed }}
       </p>
 
       <!-- 空状态 -->

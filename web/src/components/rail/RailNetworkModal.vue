@@ -51,6 +51,27 @@ const selectedStations = computed<RailStation[]>(() =>
 const selectedRuns = computed<RailRun[]>(() =>
     selectedLineId.value ? rail.runsByLine(selectedLineId.value) : []);
 
+function localizeWsError(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === 'ack_timeout') return t.value.errors.TIMEOUT;
+    if (msg === 'send_failed' || msg === 'connection closed before ack') {
+        return t.value.errors.CONNECTION_CLOSED;
+    }
+    const errs = t.value.errors as Record<string, unknown>;
+    if (typeof errs[msg] === 'string') return errs[msg] as string;
+    return msg;
+}
+
+function serviceTypeLabel(serviceType: string): string {
+    switch (serviceType) {
+        case 'local': return t.value.rail.serviceTypeLocal;
+        case 'express': return t.value.rail.serviceTypeExpress;
+        case 'section': return t.value.rail.serviceTypeSection;
+        case 'limited': return t.value.rail.serviceTypeLimited;
+        default: return serviceType;
+    }
+}
+
 onMounted(() => {
     void loadAll();
 });
@@ -65,7 +86,7 @@ async function loadAll() {
             await selectLine(lines[0].id);
         }
     } catch (e) {
-        errorMsg.value = (e as Error).message;
+        errorMsg.value = localizeWsError(e);
         net.pushLog('err', `rail.line.list rejected: ${(e as Error).message}`);
     } finally {
         loading.value = false;
@@ -92,7 +113,7 @@ async function selectLine(id: string) {
             })));
         }
     } catch (e) {
-        errorMsg.value = (e as Error).message;
+        errorMsg.value = localizeWsError(e);
         net.pushLog('err', `rail.line.detail rejected: ${(e as Error).message}`);
     }
 }
@@ -110,7 +131,7 @@ async function createLine() {
         lineName.value = '';
         lineCode.value = '';
     } catch (e) {
-        errorMsg.value = (e as Error).message;
+        errorMsg.value = localizeWsError(e);
     }
 }
 
@@ -133,7 +154,7 @@ async function confirmDeleteLine(id: string) {
         rail.removeLine(id);
         if (selectedLineId.value === id) selectedLineId.value = null;
     } catch (e) {
-        errorMsg.value = (e as Error).message;
+        errorMsg.value = localizeWsError(e);
     } finally {
         confirmingDelete.value = null;
     }
@@ -149,7 +170,7 @@ async function addStation() {
         rail.setStation(station);
         stationDraftName.value = '';
     } catch (e) {
-        errorMsg.value = (e as Error).message;
+        errorMsg.value = localizeWsError(e);
     }
 }
 
@@ -158,7 +179,7 @@ async function confirmDeleteStation(id: string) {
         await ws.sendRailStationDelete(id);
         rail.removeStation(id);
     } catch (e) {
-        errorMsg.value = (e as Error).message;
+        errorMsg.value = localizeWsError(e);
     } finally {
         confirmingDelete.value = null;
     }
@@ -189,7 +210,7 @@ async function persistStationOrder(ordered: RailStation[]) {
             const { station } = await ws.sendRailStationUpdate(s.id, { sortOrder: i });
             rail.setStation(station);
         } catch (e) {
-            errorMsg.value = (e as Error).message;
+            errorMsg.value = localizeWsError(e);
             return;
         }
     }
@@ -260,7 +281,7 @@ async function submitNewRun() {
         showNewRunDialog.value = false;
         runDialogOpenForRunId.value = run.id;
     } catch (e) {
-        errorMsg.value = (e as Error).message;
+        errorMsg.value = localizeWsError(e);
     }
 }
 
@@ -269,7 +290,7 @@ async function confirmDeleteRun(id: string) {
         await ws.sendRailRunDelete(id);
         rail.removeRun(id);
     } catch (e) {
-        errorMsg.value = (e as Error).message;
+        errorMsg.value = localizeWsError(e);
     } finally {
         confirmingDelete.value = null;
     }
@@ -482,7 +503,7 @@ function closeRunDialog() {
                       {{ r.direction === 'up' ? t.rail.directionUp : t.rail.directionDown }}
                     </span>
                     <span class="px-1.5 py-0.5 rounded bg-[color:var(--ctp-mauve)]/15 text-[color:var(--ctp-mauve)] text-[10px]">
-                      {{ r.serviceType }}
+                      {{ serviceTypeLabel(r.serviceType) }}
                     </span>
                     <span v-if="r.cars != null"
                           class="text-[color:var(--muted-foreground)]">{{ r.cars }} {{ t.rail.cars }}</span>

@@ -4,6 +4,7 @@ import { useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
 import type { Element, PathElement } from '@/types/protocol';
 import { scalePathD } from '@/render/pathScale';
+import { useI18n } from '@/i18n';
 import { useLockGuard } from './useLockGuard';
 
 interface TransformEvt { target: {
@@ -41,16 +42,17 @@ export function useTransformerManager(opts: {
     const project = useProjectStore();
     const ui = useUiStore();
     const ws = getWsClient();
+    const { t } = useI18n();
     // transform 完成时再 guard 一次（mid-transform 远端 lock 兜底）
     const lockGuard = useLockGuard();
 
     function attachTransformer(): void {
-        const t = opts.transformerRef.value?.getNode() as undefined | { nodes(ns: unknown[]): void };
+        const tr = opts.transformerRef.value?.getNode() as undefined | { nodes(ns: unknown[]): void };
         const l = opts.layerRef.value?.getNode() as undefined | { findOne(sel: string): unknown };
-        if (!t || !l) return;
+        if (!tr || !l) return;
         // hand 工具下同样隐藏 transformer（pan 模式不显示锚点遮挡）
         // paint-bucket 工具下隐藏 transformer（click-only 工具，不需要 resize/rotate 锚点）
-        if (ui.activeTool === 'move' || ui.activeTool === 'hand' || ui.activeTool === 'paint-bucket' || ui.selectedCount === 0) { t.nodes([]); return; }
+        if (ui.activeTool === 'move' || ui.activeTool === 'hand' || ui.activeTool === 'paint-bucket' || ui.selectedCount === 0) { tr.nodes([]); return; }
         const nodes: unknown[] = [];
         for (const id of ui.selectedIds) {
             const el = project.elementById(id);
@@ -72,7 +74,7 @@ export function useTransformerManager(opts: {
             const n = l.findOne(`#${id}`);
             if (n) nodes.push(n);
         }
-        t.nodes(nodes);
+        tr.nodes(nodes);
     }
 
     // Transformer attach：selection 变化 / elements 变化 / 工具切换都 reattach
@@ -105,7 +107,7 @@ export function useTransformerManager(opts: {
             return;
         }
         // 内层防线：node 状态已视觉重置；wall 远端被 lock 时不发 op
-        if (!lockGuard.guardMutation('transform')) return;
+        if (!lockGuard.guardMutation(t.value.lockGuard.actionTransform)) return;
 
         // 笔触兜底：正常路径 attachTransformer 已经不给它挂锚点，这里再挡一次，
         // 保证任何情况下都不会给服务端发出笔触的 w / h（发了整条 patch 会被拒）。

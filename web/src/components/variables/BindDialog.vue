@@ -34,7 +34,7 @@ const submitError = ref<string | null>(null);
 const boundPlugin = computed<string | null>(() => {
     const s = props.variable.source;
     if (!s) return null;
-    if (s === 'manual' || s === 'system' || s === 'papi') return null;
+    if (s === 'manual' || s === 'system' || s === 'papi' || s === 'scoreboard' || s === 'schedule') return null;
     return s;
 });
 
@@ -46,8 +46,11 @@ async function onUnbind() {
         await ws.sendVariableBind(props.fullName, null);
         emit('close');
     } catch (err) {
-        submitError.value = (err as Error).message;
-        net.pushLog('err', `variable.bind null rejected: ${(err as Error).message}`);
+        const msg = (err as Error).message;
+        if (msg === 'ack_timeout') submitError.value = t.value.errors.TIMEOUT;
+        else if (msg === 'send_failed' || msg === 'connection closed before ack') submitError.value = t.value.errors.CONNECTION_CLOSED;
+        else submitError.value = msg;
+        net.pushLog('err', `variable.bind null rejected: ${msg}`);
     } finally {
         submitting.value = false;
     }

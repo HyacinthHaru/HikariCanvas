@@ -130,7 +130,7 @@ public final class UploadHandler {
         UploadPerms perms = resolveUploadPerms(session);
         if (!perms.canUpload()) {
             auditUploadRejected(uploader, uploaderName, sessionId, "missing_permission_url");
-            reject(ctx, 403, "FORBIDDEN", "missing canvas.upload permission");
+            reject(ctx, 403, "FORBIDDEN", "Missing upload permission");
             return;
         }
         boolean bypass = perms.bypassLimit();
@@ -143,18 +143,18 @@ public final class UploadHandler {
             Object u = body == null ? null : body.get("url");
             if (!(u instanceof String us) || us.isBlank()) {
                 auditUploadRejected(uploader, uploaderName, sessionId, "missing_url_field");
-                reject(ctx, 400, "INVALID_PAYLOAD", "missing 'url' field");
+                reject(ctx, 400, "INVALID_PAYLOAD", "URL_INVALID", "Image URL is required");
                 return;
             }
             url = us.trim();
             if (url.length() > 2048) {
                 auditUploadRejected(uploader, uploaderName, sessionId, "url_too_long");
-                reject(ctx, 400, "INVALID_PAYLOAD", "url too long");
+                reject(ctx, 400, "INVALID_PAYLOAD", "URL_INVALID", "Image URL is too long");
                 return;
             }
         } catch (Exception e) {
             auditUploadRejected(uploader, uploaderName, sessionId, "url_body_parse");
-            reject(ctx, 400, "INVALID_PAYLOAD", "invalid JSON body");
+            reject(ctx, 400, "INVALID_PAYLOAD", "Invalid request body");
             return;
         }
 
@@ -166,8 +166,8 @@ public final class UploadHandler {
                     + " (url redacted; detail=" + safety.detail() + ")");
             auditUploadRejected(uploader, uploaderName, sessionId,
                     "ssrf_" + safety.reason().name().toLowerCase(Locale.ROOT));
-            reject(ctx, 400, "UPLOAD_REJECTED",
-                    "URL not allowed (" + safety.reason() + ")");
+            reject(ctx, 400, "UPLOAD_REJECTED", "URL_INVALID",
+                    "Invalid or unsupported image URL");
             return;
         }
 
@@ -187,7 +187,8 @@ public final class UploadHandler {
             if (sc < 200 || sc >= 300) {
                 drainAndCloseQuietly(conn.getErrorStream());
                 auditUploadRejected(uploader, uploaderName, sessionId, "url_http_" + sc);
-                reject(ctx, 502, "UPLOAD_REJECTED", "remote returned status " + sc);
+                reject(ctx, 502, "UPLOAD_REJECTED", "URL_FETCH_FAILED",
+                        "Remote server returned HTTP " + sc);
                 return;
             }
             declaredMime = conn.getContentType();
@@ -198,26 +199,27 @@ public final class UploadHandler {
             }
             if (declaredMime == null || !declaredMime.startsWith("image/")) {
                 auditUploadRejected(uploader, uploaderName, sessionId, "url_mime_not_image");
-                reject(ctx, 415, "UPLOAD_REJECTED",
-                        "remote Content-Type is not image/*: " + declaredMime);
+                reject(ctx, 415, "UPLOAD_REJECTED", "URL_FETCH_FAILED",
+                        "Remote URL did not return an image");
                 return;
             }
             if (!cfg.allowedMime().contains(declaredMime)) {
                 auditUploadRejected(uploader, uploaderName, sessionId, "url_mime_not_allowed");
-                reject(ctx, 415, "UPLOAD_REJECTED",
-                        "Content-Type not allowed: " + declaredMime);
+                reject(ctx, 415, "UPLOAD_REJECTED", "UNSUPPORTED_FORMAT",
+                        "Unsupported image format: " + declaredMime);
                 return;
             }
             if (!canDecodeMime(declaredMime)) {
                 auditUploadRejected(uploader, uploaderName, sessionId, "url_mime_no_decoder");
-                reject(ctx, 415, "UPLOAD_REJECTED", noDecoderMessage(declaredMime));
+                reject(ctx, 415, "UPLOAD_REJECTED", "UNSUPPORTED_FORMAT",
+                        noDecoderMessage(declaredMime));
                 return;
             }
             long advertised = conn.getContentLengthLong();
             if (advertised > 0 && advertised > URL_MAX_BYTES) {
                 auditUploadRejected(uploader, uploaderName, sessionId, "url_too_large_advertised");
-                reject(ctx, 413, "UPLOAD_REJECTED",
-                        "remote file too large: " + advertised + " > " + URL_MAX_BYTES);
+                reject(ctx, 413, "UPLOAD_REJECTED", "FILE_TOO_LARGE",
+                        "Remote image exceeds maximum allowed size");
                 return;
             }
             try (InputStream is = conn.getInputStream();
@@ -230,8 +232,8 @@ public final class UploadHandler {
                     total += n;
                     if (total > URL_MAX_BYTES) {
                         auditUploadRejected(uploader, uploaderName, sessionId, "url_too_large_stream");
-                        reject(ctx, 413, "UPLOAD_REJECTED",
-                                "remote file too large (>" + URL_MAX_BYTES + " bytes)");
+                        reject(ctx, 413, "UPLOAD_REJECTED", "FILE_TOO_LARGE",
+                                "Remote image exceeds maximum allowed size");
                         return;
                     }
                     baos.write(buf, 0, n);
@@ -240,32 +242,35 @@ public final class UploadHandler {
             }
         } catch (SocketTimeoutException ste) {
             auditUploadRejected(uploader, uploaderName, sessionId, "url_timeout");
-            reject(ctx, 504, "UPLOAD_REJECTED", "remote fetch timeout");
+            reject(ctx, 504, "UPLOAD_REJECTED", "URL_FETCH_FAILED",
+                    "Timed out while fetching image URL");
             return;
         } catch (Exception e) {
             log.log(Level.WARNING, "url fetch failed", e);
             auditUploadRejected(uploader, uploaderName, sessionId, "url_fetch_failed");
-            reject(ctx, 502, "UPLOAD_REJECTED", "failed to fetch URL");
+            reject(ctx, 502, "UPLOAD_REJECTED", "URL_FETCH_FAILED",
+                    "Failed to fetch image from URL");
             return;
         } finally {
             if (conn != null) conn.disconnect();
         }
         if (bytes == null || bytes.length == 0) {
             auditUploadRejected(uploader, uploaderName, sessionId, "url_empty");
-            reject(ctx, 400, "UPLOAD_REJECTED", "remote returned empty body");
+            reject(ctx, 400, "UPLOAD_REJECTED", "URL_FETCH_FAILED",
+                    "Remote URL returned an empty response");
             return;
         }
 
         long maxBytes = (long) cfg.maxSizeKb() * 1024L;
         if (maxBytes > 0 && bytes.length > maxBytes) {
             auditUploadRejected(uploader, uploaderName, sessionId, "size_exceeded_url");
-            reject(ctx, 413, "UPLOAD_REJECTED",
-                    "file too large: " + bytes.length + " > " + maxBytes + " bytes");
+            reject(ctx, 413, "UPLOAD_REJECTED", "FILE_TOO_LARGE",
+                    "Image file exceeds maximum size (" + cfg.maxSizeKb() + " KB)");
             return;
         }
 
         // 5. 走共享的解码、缩放、配额与持久化管线
-        ingestUploadedBytes(ctx, bytes, declaredMime, uploader, uploaderName, sessionId, bypass, "_url");
+        ingestUploadedBytes(ctx, session, bytes, declaredMime, uploader, uploaderName, sessionId, bypass, "_url");
     }
 
     // ---------- POST /api/upload ----------
@@ -283,7 +288,7 @@ public final class UploadHandler {
         UploadPerms perms = resolveUploadPerms(session);
         if (!perms.canUpload()) {
             auditUploadRejected(uploader, uploaderName, sessionId, "missing_permission");
-            reject(ctx, 403, "FORBIDDEN", "missing canvas.upload permission");
+            reject(ctx, 403, "FORBIDDEN", "Missing upload permission");
             return;
         }
         boolean bypass = perms.bypassLimit();
@@ -292,7 +297,7 @@ public final class UploadHandler {
         UploadedFile file = ctx.uploadedFile("file");
         if (file == null) {
             auditUploadRejected(uploader, uploaderName, sessionId, "missing_file_field");
-            reject(ctx, 400, "INVALID_PAYLOAD", "missing 'file' multipart field");
+            reject(ctx, 400, "INVALID_PAYLOAD", "No image file provided");
             return;
         }
 
@@ -300,13 +305,13 @@ public final class UploadHandler {
         long maxBytes = (long) cfg.maxSizeKb() * 1024L;
         if (sizeBytes > maxBytes) {
             auditUploadRejected(uploader, uploaderName, sessionId, "size_exceeded");
-            reject(ctx, 413, "UPLOAD_REJECTED",
-                    "file too large: " + sizeBytes + " > " + maxBytes + " bytes");
+            reject(ctx, 413, "UPLOAD_REJECTED", "FILE_TOO_LARGE",
+                    "Image file exceeds maximum size (" + cfg.maxSizeKb() + " KB)");
             return;
         }
         if (sizeBytes <= 0) {
             auditUploadRejected(uploader, uploaderName, sessionId, "empty_file");
-            reject(ctx, 400, "INVALID_PAYLOAD", "empty file");
+            reject(ctx, 400, "INVALID_PAYLOAD", "Uploaded file is empty");
             return;
         }
 
@@ -318,13 +323,14 @@ public final class UploadHandler {
         if (sep > 0) declaredMime = declaredMime.substring(0, sep).trim();
         if (!cfg.allowedMime().contains(declaredMime)) {
             auditUploadRejected(uploader, uploaderName, sessionId, "mime_not_allowed");
-            reject(ctx, 415, "UPLOAD_REJECTED",
-                    "Content-Type not allowed: " + declaredMime);
+            reject(ctx, 415, "UPLOAD_REJECTED", "UNSUPPORTED_FORMAT",
+                    "Unsupported image format: " + declaredMime);
             return;
         }
         if (!canDecodeMime(declaredMime)) {
             auditUploadRejected(uploader, uploaderName, sessionId, "mime_no_decoder");
-            reject(ctx, 415, "UPLOAD_REJECTED", noDecoderMessage(declaredMime));
+            reject(ctx, 415, "UPLOAD_REJECTED", "UNSUPPORTED_FORMAT",
+                    noDecoderMessage(declaredMime));
             return;
         }
 
@@ -335,26 +341,27 @@ public final class UploadHandler {
         } catch (IOException e) {
             log.log(Level.WARNING, "upload read failed", e);
             auditUploadRejected(uploader, uploaderName, sessionId, "read_failed");
-            reject(ctx, 400, "UPLOAD_REJECTED", "failed to read uploaded file");
+            reject(ctx, 400, "UPLOAD_REJECTED", "DECODE_FAILED",
+                    "Failed to read uploaded image");
             return;
         }
 
         // 5. 走共享的解码、缩放、配额与持久化管线
-        ingestUploadedBytes(ctx, bytes, declaredMime, uploader, uploaderName, sessionId, bypass, "");
+        ingestUploadedBytes(ctx, session, bytes, declaredMime, uploader, uploaderName, sessionId, bypass, "");
     }
 
     /**
      * 文件上传与 URL 上传共用的后半段管线：magic bytes 校验 → 隔离解码 → JPEG EXIF 旋转 →
      * bbox 校验与 bilinear 缩放 → PNG 编码与 sha256[:16] 计算 → 单事务配额/LRU 预留 → 原子写盘。
      */
-    private void ingestUploadedBytes(Context ctx, byte[] bytes, String declaredMime,
+    private void ingestUploadedBytes(Context ctx, Session session, byte[] bytes, String declaredMime,
                                      UUID uploader, String uploaderName,
                                      String sessionId, boolean bypass, String auditSuffix) {
         String actualMime = ImageDecodeGuard.detectMagicMime(bytes);
         if (actualMime == null || !actualMime.equals(declaredMime)) {
             auditUploadRejected(uploader, uploaderName, sessionId, "magic_mismatch" + auditSuffix);
-            reject(ctx, 400, "UPLOAD_REJECTED",
-                    "magic bytes mismatch: declared=" + declaredMime + " actual=" + actualMime);
+            reject(ctx, 400, "UPLOAD_REJECTED", "UNSUPPORTED_FORMAT",
+                    "File content does not match a supported image format");
             return;
         }
 
@@ -363,17 +370,27 @@ public final class UploadHandler {
             decoded = decodeGuard.decodeWithTimeout(bytes);
         } catch (TimeoutException te) {
             auditUploadRejected(uploader, uploaderName, sessionId, "decode_timeout" + auditSuffix);
-            reject(ctx, 400, "UPLOAD_REJECTED", "decode timeout (possible decompression bomb)");
+            reject(ctx, 400, "UPLOAD_REJECTED", "DECODE_FAILED",
+                    "Image took too long to process or may be corrupted");
             return;
         } catch (Exception e) {
+            if (isDimensionsExceededException(e)) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "bbox_out_of_range" + auditSuffix);
+                reject(ctx, 400, "UPLOAD_REJECTED", "DIMENSIONS_EXCEEDED",
+                        "Image dimensions exceed maximum allowed size ("
+                                + ImageDecodeGuard.BBOX_MAX_EDGE + "x" + ImageDecodeGuard.BBOX_MAX_EDGE + " px)");
+                return;
+            }
             log.log(Level.WARNING, "image decode failed", e);
             auditUploadRejected(uploader, uploaderName, sessionId, "decode_failed" + auditSuffix);
-            reject(ctx, 400, "UPLOAD_REJECTED", "failed to decode image");
+            reject(ctx, 400, "UPLOAD_REJECTED", "DECODE_FAILED",
+                    "Failed to decode image file");
             return;
         }
         if (decoded == null) {
             auditUploadRejected(uploader, uploaderName, sessionId, "decode_null" + auditSuffix);
-            reject(ctx, 400, "UPLOAD_REJECTED", "ImageIO returned null (unsupported format?)");
+            reject(ctx, 400, "UPLOAD_REJECTED", "DECODE_FAILED",
+                    "Unsupported or corrupted image file");
             return;
         }
 
@@ -385,7 +402,9 @@ public final class UploadHandler {
         int h = decoded.getHeight();
         if (w <= 0 || h <= 0 || w > ImageDecodeGuard.BBOX_MAX_EDGE || h > ImageDecodeGuard.BBOX_MAX_EDGE) {
             auditUploadRejected(uploader, uploaderName, sessionId, "bbox_out_of_range" + auditSuffix);
-            reject(ctx, 400, "UPLOAD_REJECTED", "bbox out of range: " + w + "x" + h);
+            reject(ctx, 400, "UPLOAD_REJECTED", "DIMENSIONS_EXCEEDED",
+                    "Image dimensions exceed maximum allowed size ("
+                            + ImageDecodeGuard.BBOX_MAX_EDGE + "x" + ImageDecodeGuard.BBOX_MAX_EDGE + " px)");
             return;
         }
         int maxEdge = cfg.downscaleMaxEdge();
@@ -399,11 +418,21 @@ public final class UploadHandler {
         } catch (IOException e) {
             log.log(Level.WARNING, "PNG encode failed", e);
             auditUploadRejected(uploader, uploaderName, sessionId, "encode_failed" + auditSuffix);
-            reject(ctx, 500, "INTERNAL_ERROR", "encode failed");
+            reject(ctx, 500, "INTERNAL_ERROR", "Failed to process uploaded image");
             return;
         }
         String hash = ImageStorage.sha256Hex16(pngBytes);
         long pngLen = pngBytes.length;
+
+        if (!bypass && !isReplaceRequest(ctx) && cfg.maxPerWall() > 0 && session != null) {
+            Set<String> wallSources = collectImageSourcesInWall(session.projectState());
+            if (!wallSources.contains(hash) && wallSources.size() >= cfg.maxPerWall()) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "quota_per_wall" + auditSuffix);
+                reject(ctx, 429, "UPLOAD_REJECTED", "QUOTA_PER_WALL",
+                        "This wall has reached its image limit (" + cfg.maxPerWall() + ")");
+                return;
+            }
+        }
 
         ReentrantLock hashLock = storage.writeLockFor(hash);
         hashLock.lock();
@@ -430,14 +459,14 @@ public final class UploadHandler {
             } catch (Exception e) {
                 log.log(Level.WARNING, "upload transaction failed", e);
                 auditUploadRejected(uploader, uploaderName, sessionId, "persist_failed" + auditSuffix);
-                reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
+                reject(ctx, 500, "INTERNAL_ERROR", "Failed to save uploaded image");
                 return;
             }
 
             if (qr instanceof ImageQuotaService.DeniedPerDay dp) {
                 auditUploadRejected(uploader, uploaderName, sessionId, "quota_per_day" + auditSuffix);
-                reject(ctx, 429, "QUOTA_EXCEEDED",
-                        "per-day upload limit reached: " + dp.currentCount() + "/" + dp.limit());
+                reject(ctx, 429, "QUOTA_EXCEEDED", "DAILY_QUOTA_EXCEEDED",
+                        "Daily upload limit reached (" + dp.currentCount() + "/" + dp.limit() + ")");
                 return;
             }
             if (qr instanceof ImageQuotaService.DeniedDiskAfterLru dd) {
@@ -447,7 +476,7 @@ public final class UploadHandler {
                 }
                 auditUploadRejected(uploader, uploaderName, sessionId, "quota_disk" + auditSuffix);
                 reject(ctx, 413, "QUOTA_EXCEEDED_DISK",
-                        "disk full; cannot free " + dd.bytesShort() + " more bytes");
+                        "Server image storage is full");
                 return;
             }
 
@@ -468,7 +497,7 @@ public final class UploadHandler {
                         storage.deleteFileOnly(evictedHash);
                     }
                     auditUploadRejected(uploader, uploaderName, sessionId, "write_failed" + auditSuffix);
-                    reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
+                    reject(ctx, 500, "INTERNAL_ERROR", "Failed to save uploaded image");
                     return;
                 }
             }
@@ -546,7 +575,7 @@ public final class UploadHandler {
         Session s = resolveSession(ctx, sessionId);
         if (s == null) return null;
         if (!sessionIpMatches(ctx, sessionId, s)) {
-            reject(ctx, 401, "AUTH_FAILED", "session ip mismatch");
+            reject(ctx, 401, "AUTH_FAILED", "SESSION_INVALID", "Session address mismatch");
             return null;
         }
         return s;
@@ -555,12 +584,12 @@ public final class UploadHandler {
     /** 通过 header / query / form 参数解析 {@link Session}；失败时已写响应。 */
     private Session resolveSession(Context ctx, String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
-            reject(ctx, 401, "AUTH_FAILED", "missing sessionId");
+            reject(ctx, 401, "AUTH_FAILED", "SESSION_INVALID", "Session ID is required");
             return null;
         }
         Session s = sessionManager.byId(sessionId);
         if (s == null) {
-            reject(ctx, 401, "AUTH_FAILED", "unknown session");
+            reject(ctx, 401, "AUTH_FAILED", "SESSION_INVALID", "Session has expired or does not exist");
             return null;
         }
         return s;
@@ -736,15 +765,49 @@ public final class UploadHandler {
     }
 
     private void reject(Context ctx, int status, String code, String message) {
-        ctx.status(status).json(Map.of("error", code, "message", message == null ? "" : message));
+        reject(ctx, status, code, null, message);
+    }
+
+    private void reject(Context ctx, int status, String code, String reason, String message) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", code);
+        if (reason != null && !reason.isEmpty()) {
+            body.put("reason", reason);
+        }
+        body.put("message", message == null ? "" : message);
+        ctx.status(status).json(body);
+    }
+
+    private static boolean isReplaceRequest(Context ctx) {
+        String q = ctx.queryParam("replace");
+        if ("1".equals(q) || "true".equalsIgnoreCase(q)) return true;
+        try {
+            String f = ctx.formParam("replace");
+            return "1".equals(f) || "true".equalsIgnoreCase(f);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** 判定隔离解码抛出的异常是否源于头部像素宽高超限（{@link ImageDecodeGuard#BBOX_MAX_EDGE}）。 */
+    private static boolean isDimensionsExceededException(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null && msg.contains("image dimensions too large")) {
+                return true;
+            }
+            if (cur.getCause() == cur) break;
+            cur = cur.getCause();
+        }
+        return false;
     }
 
     /**
-     * 统计某 wall（{@link Session#projectState()}）全 layer 内 image 元素数，按 {@code source}
-     * 去重（{@code docs/data-model.md §2}：同 hash 内容寻址，重复引用同一图只算一份）。
+     * 收集某 wall（{@link Session#projectState()}）全 layer 内引用的去重图片 {@code source} 集合。
      */
-    private int countImageElementsInWall(ProjectState ps) {
-        if (ps == null || ps.layers() == null) return 0;
+    private Set<String> collectImageSourcesInWall(ProjectState ps) {
+        if (ps == null || ps.layers() == null) return Set.of();
         Set<String> sources = new HashSet<>();
         for (var layer : ps.layers()) {
             for (var el : layer.elements()) {
@@ -753,7 +816,15 @@ public final class UploadHandler {
                 }
             }
         }
-        return sources.size();
+        return sources;
+    }
+
+    /**
+     * 统计某 wall（{@link Session#projectState()}）全 layer 内 image 元素数，按 {@code source}
+     * 去重（{@code docs/data-model.md §2}：同 hash 内容寻址，重复引用同一图只算一份）。
+     */
+    private int countImageElementsInWall(ProjectState ps) {
+        return collectImageSourcesInWall(ps).size();
     }
 
     /**
@@ -807,8 +878,7 @@ public final class UploadHandler {
 
     /** 白名单放行但本机没有解码器时的拒绝文案。 */
     private static String noDecoderMessage(String mime) {
-        return "this server cannot decode " + mime
-                + " (no image reader installed); please upload PNG or JPEG instead";
+        return "Unsupported image format (" + mime + "); please upload PNG or JPEG instead";
     }
 
     /** bilinear 缩放到最大边 = maxEdge，等比例。 */

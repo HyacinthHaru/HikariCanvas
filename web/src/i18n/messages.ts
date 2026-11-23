@@ -17,7 +17,35 @@
 export const messages = {
     zh: {
         brand: 'HikariCanvas',
+        common: {
+            close: '关闭',
+            done: '完成',
+            yes: '是',
+            no: '否',
+            networkError: '无法连接服务器，请检查网络后重试',
+        },
+        elementTypes: {
+            text: '文本',
+            rect: '矩形',
+            circle: '椭圆',
+            shape: '多边形',
+            path: '路径',
+            brush: '笔触',
+            image: '图片',
+            icon: '图标',
+        },
+        themeAccents: {
+            mauve: '紫',
+            blue: '蓝',
+            teal: '青',
+            green: '绿',
+            peach: '橙',
+            pink: '粉',
+            lavender: '淡紫',
+            sapphire: '湖蓝',
+        },
         topbar: {
+            serverVersion: (v: string) => `服务器 v${v}`,
             toggleLeft: '折叠 / 展开左侧工具栏',
             toggleRight: '折叠 / 展开右侧属性面板',
             toggleLog: '打开 / 关闭日志抽屉',
@@ -57,9 +85,9 @@ export const messages = {
                 if (code === 'WALL_LOCKED') return '画板已锁定，先解锁才能导入';
                 if (code === 'SVG_TOO_LARGE') return 'SVG 文件太大，超过了大小限制';
                 if (code === 'SVG_HAS_ENTITY') return 'SVG 文件含有不安全内容，已拒绝导入';
-                if (code === 'SVG_MALFORMED') return 'SVG 文件格式有问题，读不进来';
+                if (code === 'SVG_MALFORMED') return 'SVG 文件格式有问题，无法读取';
                 if (code === 'SVG_TOO_COMPLEX') return 'SVG 太复杂（形状太多或节点太密），超过了处理上限';
-                return `导入失败（${code}）`;
+                return '导入失败，请检查 SVG 文件后重试';
             },
         },
         // .canvas 工程导入对话框
@@ -70,21 +98,36 @@ export const messages = {
             importConfirmReplace: '导入会替换当前画布的全部内容，确定继续吗？',
             importing: '正在导入…',
             importDone: '导入完成',
-            importFailed: (code: string) =>
-                code === 'WALL_LOCKED' ? '画板已锁定，先解锁才能导入工程' : `导入失败（${code}）`,
+            importFailed: (code: string) => {
+                switch (code) {
+                    case 'WALL_LOCKED': return '画板已锁定，先解锁才能导入工程';
+                    case 'IMPORT_ZIP_TOO_LARGE': return '工程文件过大，超过了服务器允许的大小上限';
+                    case 'IMPORT_SPEC_UNSUPPORTED': return '该工程由更高版本的插件导出，请先升级服务器插件';
+                    case 'IMPORT_SIZE_MISMATCH': return '工程尺寸与当前画板不一致，请新建相同尺寸的画板后再导入';
+                    case 'IMPORT_BAD_ENTRY': return '工程文件内含有异常条目，无法导入';
+                    case 'IMPORT_MALFORMED': return '工程文件已损坏或格式不正确，无法读取';
+                    case 'IMPORT_INVALID_PARAM': return '工程内的参数不符合要求，无法导入';
+                    case 'FORBIDDEN': return '你没有导入工程的权限（请确认角色仍在游戏内）';
+                    case 'NO_SESSION':
+                    case 'AUTH_FAILED': return '编辑会话已失效，请刷新页面或在游戏里重新打开';
+                    case 'SESSION_NOT_READY': return '画板尚未准备就绪，请稍候再试';
+                    case 'NETWORK': return '无法连接服务器，请检查网络后重试';
+                    default: return '导入失败，请检查文件后重试';
+                }
+            },
             warnTitle: '导入提示',
             // 后端 warning kind → 服主/玩家看得懂的大白话（禁开发黑话）。
             warn: {
                 'missing-font': (d: string) => `字体「${d}」这台服务器没有，已用默认字体代替`,
                 'missing-variable': (d: string) => `变量「${d}」在这台服务器上不存在，显示为占位符`,
                 'missing-icon': (d: string) => `图标「${d}」缺失，已留空`,
-                'script-command-blocked': (d: string) => `脚本里的指令模板「${d}」本服没有，该积木已停用`,
+                'script-command-blocked': (d: string) => `脚本里的命令模板「${d}」本服没有，该积木已停用`,
                 'script-invalid': (d: string) => `有一条脚本规则不合法，已跳过（${d}）`,
-                'script-quota': () => '脚本数量超过上限，部分规则未导入',
-                'animation-flattened': () => '这张图自带动画，已按初始样子导入',
-                'orphan-track-dropped': () => '有动画轨指向已删除的元素，已自动清理',
-                'asset-quota': () => '图片配额已满，部分图片未导入',
-            } as Record<string, (d: string) => string>,
+                'script-quota': (_d: string) => '脚本数量超过上限，部分规则未导入',
+                'animation-flattened': (_d: string) => '这张图自带动画，已按初始样子导入',
+                'orphan-track-dropped': (_d: string) => '有动画轨指向已删除的元素，已自动清理',
+                'asset-quota': (_d: string) => '图片配额已满，部分图片未导入',
+            },
         },
         wall: {
             copyId: (id: string) => `点击复制画板 ID：${id}`,
@@ -102,7 +145,7 @@ export const messages = {
             lockToggleOn: '锁定这块画板（变为只读）',
             lockToggleOff: '解锁画板',
             lockOwnerOnly: '只有画板作者可以锁定 / 解锁',
-            lockedOwnerHint: '画板已锁定 · 点击顶栏 Unlock 继续编辑',
+            lockedOwnerHint: '画板已锁定 · 点击顶栏「已锁定」即可解锁继续编辑',
             lockedReaderHint: '画板已锁定（仅作者可解锁）· 只读模式',
             refresh: '刷新画板',
             refreshTip: '补回缺失的支撑方块、重新挂回画框、强制重画一次',
@@ -112,7 +155,7 @@ export const messages = {
                 if (frames === 0) return `已补回 ${blocks} 块支撑方块`;
                 return `已补回 ${blocks} 块支撑方块，并重新挂回 ${frames} 个画框`;
             },
-            refreshTimeout: '服务端没响应，稍后再试',
+            refreshTimeout: '服务器没有响应，请稍后再试',
             refreshSendFailed: '当前没有连上服务器',
             lockFailed: '锁定失败，请稍后再试',
             unlockFailed: '解锁失败，请稍后再试',
@@ -129,7 +172,6 @@ export const messages = {
             lockedGroup: (n: number) => `已锁定（${n}）`,
             unlockedGroup: (n: number) => `可编辑（${n}）`,
             mapsLabel: (w: number, h: number) => `${w}×${h} 张地图`,
-            updatedAt: (s: string) => `${s} 更新过`,
             copyHint: '点击复制打开命令',
             refresh: '刷新列表',
             // 时间戳本地化（fmtTime 用）。i 为 0(周日)..6(周六)；m 为 1..12。
@@ -152,8 +194,6 @@ export const messages = {
             addRect: '添加一个矩形',
             undo: '撤销（Ctrl+Z）',
             redo: '重做（Ctrl+Shift+Z）',
-            ping: 'Ping 测试',
-            paint: '演示：把所有地图涂红',
         },
         templates: {
             header: '模板库',
@@ -174,7 +214,7 @@ export const messages = {
             applying: '应用中…',
             applyConfirm: '确认覆盖',
             applyFailed: '模板应用失败',
-            applyTimeout: '服务端没有响应；可能是连接断开了，请稍后重试。',
+            applyTimeout: '服务器没有响应；可能是连接断开了，请稍后重试。',
             cancel: '取消',
             overwriteWarning: '应用模板会清空当前所有元素和背景设置，且无法撤销。',
             on: '开',
@@ -196,10 +236,10 @@ export const messages = {
             backgroundLabel: '背景',
             // 一键透明背景
             setTransparentBackground: '设为透明背景',
-            transparentBgTooltip: '把背景设为完全透明，可让 wall 后面的方块 / 风景透出来',
+            transparentBgTooltip: '把背景设为完全透明，可让画板后面的方块 / 风景透出来',
             // 画布导航快捷键提示（ZoomBar 角落显示）
-            navHint: 'Shift+滚轮 横向 · 中键 / Space / H 拖拽画布',
-            // 字体从服务端拉取较慢时的右下角提示
+            navHint: 'Shift+滚轮 横向 · 中键 / 空格 / H 拖拽画布',
+            // 字体从服务器拉取较慢时的右下角提示
             fontLoading: '网页字体正在加载中，请稍等',
         },
         properties: {
@@ -210,6 +250,10 @@ export const messages = {
             deleteMultiTip: (n: number) => `删除选中的 ${n} 个元素`,
             id: 'ID',
             type: '类型',
+            posX: 'X',
+            posY: 'Y',
+            width: '宽',
+            height: '高',
             transformHeader: '位置与变换',
             rectHeader: '矩形',
             textHeader: '文本',
@@ -243,27 +287,26 @@ export const messages = {
             letterSpacingTip: '字符之间的距离（像素，可填负数让字距收紧）',
             lineHeight: '行高',
             lineHeightTip: '行高倍数。例如 1.2 = 1.2 倍字号；建议 0.8 ~ 3.0',
-            opacity: '透明度',
-            opacityTip: '元素整体透明程度。100% = 完全不透明；降低后能透出下层元素或背景',
-            blendMode: '混色模式',
-            blendModeTip: '元素与下层颜色如何混合（高级；搭配抖动柔化效果更细腻）',
+            opacity: '不透明度',
+            opacityTip: '元素整体不透明程度。100% = 完全不透明；降低后能透出下层元素或背景',
+            blendMode: '混合模式',
+            blendModeTip: '元素与下层颜色如何混合（高级；搭配柔和呈现效果更细腻）',
             renderMode: '色彩呈现',
             renderModeTip: '颜色如何映射到游戏地图调色板（清晰锐利 vs 柔和过渡）',
             renderModeClean: '清晰',
             renderModeDither: '柔和',
             // 字段悬停说明
             fontIdLabel: '字体',
-            fontIdTip: '选择渲染文字用的字体；插件自带像素体 / 黑体，也可放到 plugins/HikariCanvas/fonts/ 用自定义字体',
+            fontIdTip: '选择文字字体；内置 22 款中英文字体，也可将字体文件放入 plugins/HikariCanvas/fonts/ 使用自定义字体',
             fontGroupBuiltin: '内置字体',
             fontGroupUser: '用户字体',
             fontSizeLabel: '字号',
             fontSizeTip: '文字大小（像素）；像素体字体建议用 12 的倍数',
             positionTip: '元素左上角相对画布的坐标（像素）',
-            sizeLabel: '尺寸',
             sizeTip: '元素的宽 × 高（像素）',
             brushSizeReadonlyTip: '笔触的宽高由笔画本身决定，不能直接改；要改形状请重新画',
             colorLabel: '颜色',
-            colorTip: '点击色块选颜色；alpha 用于半透明叠加',
+            colorTip: '点击色块选择颜色；可调节不透明度实现半透明叠加',
             alignLabel: '对齐',
             alignLeft: '左对齐',
             alignCenter: '居中',
@@ -271,7 +314,7 @@ export const messages = {
             // bold / italic 切换
             styleLabel: '样式',
             boldTip: '加粗（自动叠加字色描边模拟）',
-            italicTip: '斜体（字形剪切倾斜变换）',
+            italicTip: '斜体（文字向右倾斜）',
             // 形状 (shape) 字段友好化
             shapeKind: '形状',
             shapeKindPolygon: '多边形',
@@ -283,7 +326,7 @@ export const messages = {
             projectHeader: '本画板色板',
             recentHeader: '最近用过',
             defaultHeader: '默认色板',
-            copyTip: '点击复制颜色 hex 到剪贴板',
+            copyTip: '点击复制颜色代码到剪贴板',
             copied: '已复制',
         },
         clipboard: {
@@ -336,7 +379,7 @@ export const messages = {
             pressureOpacity: '压感 → 不透明度',
             pressureOpacityTip: '开启后每一段笔触的不透明度随压感变化；适合水彩 / 软笔效果',
             smoothing: '平滑度',
-            smoothingTip: '笔触结束时的简化强度（0 = 不简化；1 = 容差 4 像素）；调高能让手抖锯齿被压平',
+            smoothingTip: '松手后线条自动顺滑的程度（0 = 保持原样；越高越能抚平手抖锯齿）',
             dither: '柔和过渡',
             ditherTip: '让笔触在游戏色板上看起来更柔和（适合渐变 / 大色块）',
             hint: '按住画布拖动开始画。支持数位板压感、Apple Pencil。按 Esc 取消正在画的这一笔。',
@@ -353,10 +396,17 @@ export const messages = {
             building: '计算中…',
             recolorSuccess: '已重新填色',
             elementLocked: '这个元素已锁定',
-            elementUnsupported: (type: string) => `${type} 类型的元素不支持油漆桶`,
+            elementUnsupported: (type: string) => {
+                const names: Record<string, string> = {
+                    text: '文本', rect: '矩形', circle: '椭圆', shape: '多边形',
+                    path: '路径', brush: '笔触', image: '图片', icon: '图标',
+                };
+                const label = names[type];
+                return label ? `${label}元素不支持油漆桶填色` : '该元素不支持油漆桶填色';
+            },
             wallLocked: '画板已锁定，没法编辑',
             degraded: '油漆桶检测到几何过于复杂；试试简化或删除重叠元素',
-            gapTooComplex: '这块区域的形状太碎（里面的小块太多），填不了；把"平滑度"调高一点或者减少重叠元素再试',
+            gapTooComplex: '这块区域的形状太碎（里面的小块太多），填不了；把「边缘精度」调大一点或者减少重叠元素再试',
         },
         iconLibrary: {
             title: '图标库',
@@ -364,6 +414,8 @@ export const messages = {
             empty: '没找到匹配的图标',
             loading: '正在加载',
             loadMore: '加载更多',
+            loadFailed: '图标库加载失败，请刷新重试',
+            insertFailed: '添加图标失败，请稍后重试',
             category: {
                 all: '全部',
                 faSolid: 'FA 实心',
@@ -385,7 +437,7 @@ export const messages = {
             save: '发布',
             saving: '发布中…',
             cancel: '取消',
-            slugLabel: '短链（slug）',
+            slugLabel: '模板标识',
             slugPlaceholder: 'my-sign',
             slugHint: '小写字母 / 数字 / 连字符，2-32 个字符',
             slugPatternHint: '只能用小写字母 / 数字 / 连字符，长度 2-32',
@@ -400,6 +452,8 @@ export const messages = {
             paramNameLabel: '参数 ID',
             paramLabelLabel: '显示标签',
             paramDescLabel: '说明',
+            paramIdInvalid: '参数代号须以小写字母开头，仅含小写字母、数字或下划线（最长 32 位）',
+            paramIdDuplicate: '参数代号不能重复',
             markFieldsLabel: '参数化：',
             markColor: '字色',
             markFontSize: '字号',
@@ -417,12 +471,11 @@ export const messages = {
         },
         image: {
             header: '图片',
-            source: '内容指纹',
-            sourceTip: '基于图片内容生成的 sha256 指纹；多块画板引用同一张图不会重复占用空间',
+            sourceTip: '按图片内容生成的唯一编号；多块画板引用同一张图不会重复占用存储空间',
             replace: '替换图片',
             replaceTip: '点击选新文件，或者直接拖拽 / 按 Ctrl+V 粘贴到画布',
             maskHeader: '形状蒙版',
-            maskPresetTip: '当前支持 4 种预设几何形状；自由画 / 套索蒙版会在后续版本加入',
+            maskPresetTip: '使用预设形状或自由套索裁切图片显示区域',
             maskInverted: '反相（显示蒙版外）',
             maskInvertedTip: '勾选后显示形状外的像素（蒙版反相）',
             maskPresets: {
@@ -442,7 +495,7 @@ export const messages = {
             maskLassoSimplified: '套索画得太复杂，边缘已自动简化（蒙版最多 64 个转折点）',
             uploading: '上传中…',
             uploadTip: '上传图片（点击 / 拖到画布 / Ctrl+V 粘贴 / 粘贴 URL）',
-            uploadUrlFailed: '从 URL 下载图片失败',
+            uploadUrlFailed: '从链接下载图片失败',
             uploadFailed: (status: number, msg: string) =>
                 status > 0 ? `上传失败（${status}）${msg ? '：' + msg : ''}` : `上传失败${msg ? '：' + msg : ''}`,
             lockedDenied: '画板已锁定，没法上传图片',
@@ -463,7 +516,7 @@ export const messages = {
             renameSave: '保存（Enter）',
             opacityLabel: '不透明度',
             opacityHint: 'MC 调色板下，半透明 = 与背景叠加后颜色变浅，不是真透明',
-            blendModeLabel: '混合方式',
+            blendModeLabel: '混合模式',
             blendModeOptions: {
                 normal: '正常',
                 multiply: '正片叠底',
@@ -544,12 +597,15 @@ export const messages = {
         lockGuard: {
             blocked: '画板已锁定，无法编辑（请让作者先解锁）',
             blockedWithAction: (action: string) => `画板已锁定 — ${action}不可用（请让作者先解锁）`,
+            actionDrag: '移动元素',
+            actionDraw: '绘制图形',
+            actionTransform: '缩放或旋转',
         },
         // 变量管理面板 / 对话框 / 错误文案。
         variables: {
             // 面板
             panelTitle: '变量管理',
-            panelEmpty: '该 wall 暂无变量',
+            panelEmpty: '当前画板还没有变量',
             panelSearch: '搜索变量名',
             panelNewButton: '新建变量',
             // 分组
@@ -572,12 +628,31 @@ export const messages = {
             typeNumber: '数字',
             typeBoolean: '布尔',
             typeColor: '颜色',
+            boolTrue: '是（true）',
+            boolFalse: '否（false）',
+            pickerDynamicBadge: '按需',
+            builtinNamespaces: {
+                user: '当前画板变量',
+                userglobal: '全服共享变量',
+                system: '系统自动变量',
+                schedule: '列车时刻表',
+                schedule_rail: '铁路网络',
+                papi: 'PlaceholderAPI',
+                scoreboard: '原版计分板',
+            },
+            sourceLabels: {
+                manual: '手动设置',
+                system: '系统自动',
+                papi: 'PlaceholderAPI',
+                scoreboard: '计分板',
+                schedule: '时刻表',
+            },
             // 值显示
             currentLabel: '当前',
             defaultLabel: '默认',
             // 操作
-            actionInc: '+1（长按累加）',
-            actionDec: '-1（长按累加）',
+            actionInc: '+1（长按连加）',
+            actionDec: '-1（长按连减）',
             actionEdit: '改值',
             actionDelete: '删除',
             actionBind: '让插件接管',
@@ -585,19 +660,20 @@ export const messages = {
             dialogNewTitle: '新建变量',
             dialogNewNameLabel: '名称',
             dialogNewNamePlaceholder: '例如 red_score',
-            dialogNewNameHint: '将自动加 user:<wallId>/ 前缀',
+            dialogNewNameHint: '字母 / 数字 / _ . - · 将创建为当前画板变量',
+            dialogNewNameGlobalHint: '字母 / 数字 / _ . - · 将创建为全服共享变量 userglobal/<名称>',
             dialogNewTypeLabel: '类型',
             dialogNewDefaultLabel: '默认值',
             // scope toggle
             dialogNewScopeLabel: '作用域',
-            dialogNewScopeWall: '本 wall',
+            dialogNewScopeWall: '当前画板',
             dialogNewScopeGlobal: '全局',
-            dialogNewScopeWallHint: '仅本画布可见；删 wall 则一并删除',
-            dialogNewScopeGlobalHint: '全服所有 wall 可读取，但只有你和管理员能修改',
+            dialogNewScopeWallHint: '仅当前画板可见；删除画板时一并清除',
+            dialogNewScopeGlobalHint: '全服所有画板可读取，但只有你和管理员能修改',
             // 可选 alias 字段
             dialogNewAliasLabel: '别名',
             dialogNewAliasPlaceholder: '可选；起一个短名（≤ 64 字符）',
-            dialogNewAliasHint: '别名仅本 wall 内生效，不参与 ${var:} 解析',
+            dialogNewAliasHint: '别名仅在当前画板内显示，不参与 ${var:} 解析',
             dialogNewSubmit: '创建',
             dialogNewCancel: '取消',
             optional: '可选',
@@ -608,7 +684,6 @@ export const messages = {
             // VariablePanel 行内别名 chip + 编辑入口
             aliasChipPrefix: '别名:',
             actionEditAlias: '改别名',
-            aliasEmpty: '（无别名）',
             // 改值对话框
             dialogValueTitle: '修改当前值',
             dialogValueSubmit: '保存',
@@ -636,14 +711,13 @@ export const messages = {
                 insertButtonLabel: '插入变量',
                 insertButtonTooltip: '插入变量占位符（或在文本中输入 ${ 触发）',
                 keyboardHint: '↑↓ 选择，Enter 确认，Esc 关闭',
-                // 动态 namespace（如 scoreboard / papi）行内标记 tooltip
-                dynamicHint: '动态注册：引用时按 namespace 模板（如 scoreboard.<obj>.<player>）自动创建',
+                dynamicHint: '按需读取：在文本里引用时自动生效（如 scoreboard.<计分项>.<玩家名>）',
                 // 3 列表格 + 别名编辑
                 columnAlias: '别名',
                 columnValue: '数值',
                 columnName: '变量名',
                 emptyAliasPlaceholder: '—',
-                aliasEditTooltip: '编辑此变量在当前 wall 的别名',
+                aliasEditTooltip: '编辑此变量在当前画板的别名',
                 aliasEditPlaceholder: '起一个简短名称',
                 aliasSaveButton: '保存',
                 aliasClearButton: '清空',
@@ -662,12 +736,6 @@ export const messages = {
                 tooltipCurrent: '当前值',
                 tooltipSource: '来源',
                 tooltipDeleted: '变量已删除，最终渲染为 "???"',
-            },
-            // chip 错误态：点击红 chip 触发补创对话框
-            chipError: {
-                notFound: '变量 {name} 不存在。',
-                createConfirm: '是否立即创建？（按确定即新建一个空字符串用户变量）',
-                onlyUserCanCreate: '只能在编辑器中手动创建 user/ 域变量；系统 / 插件 / PAPI 变量由对应 Provider 自动注册。',
             },
         },
         // 铁路网络（线路 / 站点 / 车次 / 时刻表）
@@ -762,7 +830,7 @@ export const messages = {
             railBindingTitle: '铁路网络绑定',
             railBindingEnabled: '已启用',
             railBindingDisabled: '未启用',
-            railBindingHint: '绑定到铁路网络后，本 wall 的 schedule.* 变量自动来自该线路 / 站点 / 方向的车次时刻表；下方手动条目灰显。',
+            railBindingHint: '绑定到铁路网络后，当前画板的时刻表变量（schedule.*）自动来自该线路 / 站点 / 方向的车次时刻表；下方手动条目暂停生效。',
             railBindingLine: '线路',
             railBindingStation: '本站',
             railBindingDirection: '方向',
@@ -811,7 +879,6 @@ export const messages = {
             empty: '还没有脚本规则，点「新建规则」开始',
             close: '关闭',
             resetView: '回到原始视图',
-            zoom: '缩放',
             paletteTitle: '积木库',
             // palette 分组标题 + 无选中规则提示
             paletteNeedRule: '先在上面选一条规则，再把积木拖到画布上',
@@ -870,11 +937,11 @@ export const messages = {
             legendBlocked: '被拦下',
             legendError: '出错了',
             // lock 提示
-            lockedHint: '这面墙已锁定，脚本只读',
+            lockedHint: '当前画板已锁定，脚本为只读模式',
             selectRuleHint: '在左侧选一条规则来编辑，或点「新建规则」',
             // 补间动画帧率（per-wall，canvas.tweenFps op）
             tweenFpsLabel: '动画帧率',
-            tweenFpsTooltip: '这面招牌里「在 X 秒内」补间动画的流畅度：数字越高越顺滑，但服务器负担也越高（范围 1-60）',
+            tweenFpsTooltip: '当前画板「平滑过渡」补间动画的流畅度：数值越高越顺滑，但服务器负担也越高（范围 1～60）',
             // 触发器帽子里"选触发类型"下拉的前缀标签。
             triggerKindLabel: '什么时候触发',
             // 积木画布右下角「本脚本变量实时预览」面板。
@@ -923,18 +990,18 @@ export const messages = {
                 appendVariable: '文本拼接',
                 cloneElement: '克隆元素',
                 deleteElement: '删除元素',
-                tweenBlock: '在 X 秒内',
+                tweenBlock: '平滑过渡',
                 randomBranch: '随机分支',
                 setElementLayer: '元素置顶/置底',
                 roundVariable: '变量取整',
                 showTitle: '弹出标题',
             },
-            // 友好元素积木标题（移到 / 改大小 / 旋转 / 透明度 / 显示 / 隐藏 / 改文字 / 改颜色）。
+            // 友好元素积木标题（移到 / 改大小 / 旋转 / 不透明度 / 显示 / 隐藏 / 改文字 / 改颜色）。
             friendly: {
                 moveTo: '移到',
                 resize: '改大小',
                 rotateTo: '旋转到',
-                setOpacity: '设透明度',
+                setOpacity: '设不透明度',
                 show: '显示',
                 hide: '隐藏',
                 setText: '改文字',
@@ -975,7 +1042,6 @@ export const messages = {
                 // 重复循环字段标签。
                 repeatCount: '重复次数',
                 body: '循环体',
-                times: '次',
                 // 粒子 / 等待直到字段。
                 particle: '粒子种类',
                 particleCount: '粒子数量',
@@ -1116,7 +1182,7 @@ export const messages = {
                 villagerYes: '村民同意',
                 villagerNo: '村民拒绝',
             },
-            // 右侧墙面预览框（显示当前墙现状，可折叠 / 拖宽）。
+            // 右侧预览框（显示当前画板现状，可折叠 / 拖宽）。
             preview: {
                 title: '预览',
                 expand: '展开预览',
@@ -1127,92 +1193,92 @@ export const messages = {
             validation: {
                 ruleNull: '规则不能为空',
                 nameBlank: '规则名称不能为空',
-                nameTooLong: (max: number) => `规则名称超长（最多 ${max} 字符）`,
-                missingTrigger: '缺少触发器',
+                nameTooLong: (max: number) => `规则名称过长（最多 ${max} 个字符）`,
+                missingTrigger: '请选择一个触发条件',
                 actionsEmpty: '动作列表不能为空',
-                layoutTooLong: (max: number) => `积木布局数据超长（最多 ${max} 字符）`,
-                tooManyBlocks: (total: number, max: number) => `积木总数 ${total} 超过上限 ${max}`,
-                varChangeBlank: '变量变化触发器的变量名不能为空',
-                timerRange: (min: number, max: number) => `定时器间隔需在 ${min}..${max} 秒之间`,
-                nearRange: (min: number, max: number) => `玩家靠近半径需在 ${min}..${max} 方块之间`,
-                leaveRange: (min: number, max: number) => `玩家离开半径需在 ${min}..${max} 方块之间`,
+                layoutTooLong: (max: number) => `积木布局内容过多（最多 ${max} 个字符）`,
+                tooManyBlocks: (total: number, max: number) => `积木总数（${total} 个）超过上限 ${max} 个`,
+                varChangeBlank: '「当变量变化」触发器请填写变量名',
+                timerRange: (min: number, max: number) => `定时触发间隔需在 ${min}～${max} 秒之间`,
+                nearRange: (min: number, max: number) => `玩家靠近半径需在 ${min}～${max} 方块之间`,
+                leaveRange: (min: number, max: number) => `玩家离开半径需在 ${min}～${max} 方块之间`,
                 setVarNameBlank: '设置变量的变量名不能为空',
-                setVarValueNull: '设置变量的值不能为 null（空串合法）',
-                setVarValueTooLong: (max: number) => `设置变量的值超长（最多 ${max} 字符）`,
-                incVarNameBlank: '累加变量的变量名不能为空',
-                incDeltaFinite: '累加步长必须是有限数值',
+                setVarValueNull: '请填写变量值（允许留空文本）',
+                setVarValueTooLong: (max: number) => `变量值过长（最多 ${max} 个字符）`,
+                incVarNameBlank: '请填写要增减的变量名',
+                incDeltaFinite: '增减数值请输入有效数字',
                 setPropMissingEl: '设置元素属性缺少元素 ID',
-                setPropInvalid: (p: unknown) => `元素属性不在允许范围：${p}`,
+                setPropInvalid: (p: unknown) => `不支持修改该元素属性：${p}`,
                 setPropValueBlank: '设置元素属性的值不能为空',
                 timelineMissingId: '时间轴控制缺少时间轴 ID',
-                timelineInvalidOp: (op: unknown) => `时间轴操作不在允许范围：${op}`,
-                seekMissingMs: 'seek 操作必须提供 seekMs',
-                seekNegative: 'seekMs 不能为负数',
-                soundIdInvalid: (max: number) => `声音 ID 不能为空且最多 ${max} 字符`,
-                soundVolumeRange: (min: string, max: string) => `音量需在 ${min}..${max} 之间`,
-                soundPitchRange: (min: string, max: string) => `音调需在 ${min}..${max} 之间`,
-                soundInvalidScope: (scope: unknown) => `声音范围不在允许范围：${scope}`,
-                waitRange: (min: number, max: number) => `等待时长需在 ${min}..${max} 毫秒之间`,
+                timelineInvalidOp: (op: unknown) => `不支持的时间轴操作：${op}`,
+                seekMissingMs: '时间轴跳转操作需要填写跳转时间',
+                seekNegative: '跳转时间不能为负数',
+                soundIdInvalid: (max: number) => `请填写音效名称（最多 ${max} 个字符）`,
+                soundVolumeRange: (min: string, max: string) => `音量需在 ${min}～${max} 之间`,
+                soundPitchRange: (min: string, max: string) => `音调需在 ${min}～${max} 之间`,
+                soundInvalidScope: (scope: unknown) => `不支持的音效播放范围：${scope}`,
+                waitRange: (min: number, max: number) => `等待时长需在 ${min}～${max} 毫秒之间`,
                 cmdMissingTemplate: '执行命令缺少模板 ID',
-                cmdParamTooLong: (key: string, max: number) => `命令参数 '${key}' 超长（最多 ${max} 字符）`,
-                logNull: '日志内容不能为 null',
-                logTooLong: (max: number) => `日志内容超长（最多 ${max} 字符）`,
-                ifDepthExceeded: (max: number, depth: number) => `if 嵌套超过 ${max} 层（depth=${depth}）`,
-                ifConditionBlank: 'if 条件不能为空',
-                ifConditionTooLong: (max: number) => `if 条件超长（最多 ${max} 字符）`,
-                patchEmpty: '批量设属性的 patch 不能为空',
-                patchTooManyKeys: (max: number) => `patch 属性数超过 ${max}`,
-                kindTooLong: 'kind 超长',
-                patchPropBlank: (k: string) => `属性 ${k} 的值不能为空`,
+                cmdParamTooLong: (key: string, max: number) => `命令参数「${key}」过长（最多 ${max} 个字符）`,
+                logNull: '日志内容不能为空',
+                logTooLong: (max: number) => `日志内容过长（最多 ${max} 个字符）`,
+                ifDepthExceeded: (max: number, depth: number) => `条件判断嵌套不能超过 ${max} 层（当前为 ${depth} 层）`,
+                ifConditionBlank: '请填写条件判断的表达式',
+                ifConditionTooLong: (max: number) => `条件判断表达式过长（最多 ${max} 个字符）`,
+                patchEmpty: '请至少填写一项属性修改项',
+                patchTooManyKeys: (max: number) => `单次修改的属性修改项过多（最多 ${max} 项）`,
+                kindTooLong: '积木动作类型标识过长',
+                patchPropBlank: (k: string) => `属性「${k}」的值不能为空`,
                 nudgeMissingEl: '相对移动缺少元素 ID',
-                nudgeFinite: '相对移动的 dx/dy 必须是有限数值',
-                msgNull: '发消息内容不能为 null',
-                msgTooLong: (max: number) => `发消息内容超长（最多 ${max}）`,
-                msgInvalidChannel: (ch: unknown) => `消息渠道不在允许范围：${ch}`,
-                msgInvalidTarget: (target: unknown) => `发送对象不在允许范围：${target}`,
+                nudgeFinite: '横向/纵向移动距离请输入有效数字',
+                msgNull: '消息内容不能为空',
+                msgTooLong: (max: number) => `消息内容过长（最多 ${max} 个字符）`,
+                msgInvalidChannel: (ch: unknown) => `不支持的消息显示位置：${ch}`,
+                msgInvalidTarget: (target: unknown) => `不支持的消息接收对象：${target}`,
                 randVarNameBlank: '随机数变量名不能为空',
-                randBoundsFinite: '随机区间必须是有限数值',
-                randMinGtMax: '随机区间 min 不能大于 max',
+                randBoundsFinite: '随机范围请输入有效数字',
+                randMinGtMax: '随机范围的最小值不能大于最大值',
                 scaleVarNameBlank: '乘除变量名不能为空',
-                scaleInvalidOp: (op: unknown) => `运算不在允许范围：${op}`,
-                scaleFactorFinite: '乘除系数必须是有限数值',
+                scaleInvalidOp: (op: unknown) => `不支持的计算方式：${op}`,
+                scaleFactorFinite: '乘除系数请输入有效数字',
                 scaleDivZero: '除数不能为 0',
                 awaitTimelineMissingId: '播时间轴缺少时间轴 ID',
-                repeatCountRange: (min: number, max: number) => `重复次数需在 ${min}..${max} 之间`,
+                repeatCountRange: (min: number, max: number) => `重复次数需在 ${min}～${max} 次之间`,
                 repeatBodyEmpty: '重复循环体不能为空',
-                repeatUntilConditionInvalid: (max: number) => `重复条件不能为空且最多 ${max} 字符`,
-                repeatUntilMaxRange: (min: number, max: number) => `重复次数上限需在 ${min}..${max} 之间`,
-                particleInvalid: (p: unknown) => `粒子种类不在允许范围: ${p}`,
-                particleCountRange: (min: number, max: number) => `粒子数量需在 ${min}..${max} 之间`,
-                particleOffsetFinite: '粒子偏移必须是有限数值',
-                waitUntilConditionInvalid: (max: number) => `等待条件不能为空且最多 ${max} 字符`,
-                waitUntilTimeoutRange: (min: number, max: number) => `超时时长需在 ${min}..${max} 毫秒之间`,
-                copyVarBlank: '变量复制的目标 / 来源不能为空',
+                repeatUntilConditionInvalid: (max: number) => `请填写循环终止条件（最多 ${max} 个字符）`,
+                repeatUntilMaxRange: (min: number, max: number) => `最大循环次数需在 ${min}～${max} 次之间`,
+                particleInvalid: (p: unknown) => `不支持的粒子效果：${p}`,
+                particleCountRange: (min: number, max: number) => `粒子数量需在 ${min}～${max} 之间`,
+                particleOffsetFinite: '粒子偏移位置请输入有效数字',
+                waitUntilConditionInvalid: (max: number) => `请填写等待条件（最多 ${max} 个字符）`,
+                waitUntilTimeoutRange: (min: number, max: number) => `等待超时时长需在 ${min}～${max} 毫秒之间`,
+                copyVarBlank: '复制变量的目标变量与来源变量均不能为空',
                 appendVarBlank: '文本拼接的目标变量不能为空',
-                appendTextTooLong: (max: number) => `拼接文本超长（最多 ${max} 字符）`,
-                cloneMissingEl: '克隆元素的目标不能为空',
-                cloneOffsetFinite: '克隆偏移必须是有限数值',
-                deleteMissingEl: '删除元素的目标不能为空',
-                probRange: (min: number, max: number) => `随机概率需在 ${min}..${max} 之间`,
-                branchDepthExceeded: (max: number, depth: number) => `分支嵌套超过 ${max} 层（depth=${depth}）`,
+                appendTextTooLong: (max: number) => `拼接的文本过长（最多 ${max} 个字符）`,
+                cloneMissingEl: '请选择要克隆的目标元素',
+                cloneOffsetFinite: '克隆偏移位置请输入有效数字',
+                deleteMissingEl: '请选择要删除的目标元素',
+                probRange: (min: number, max: number) => `随机触发概率需在 ${min}%～${max}% 之间`,
+                branchDepthExceeded: (max: number, depth: number) => `条件与随机分支嵌套不能超过 ${max} 层（当前为 ${depth} 层）`,
                 layerMissingEl: '元素置层缺少元素 ID',
-                layerInvalidMode: (mode: unknown) => `置层方向不在允许范围：${mode}`,
+                layerInvalidMode: (mode: unknown) => `不支持的叠放顺序操作：${mode}`,
                 roundVarBlank: '取整变量名不能为空',
-                roundInvalidMode: (mode: unknown) => `取整方式不在允许范围：${mode}`,
-                titleBothBlank: '标题和副标题不能同时为空',
-                titleTooLong: (max: number) => `标题超长（最多 ${max} 字符）`,
-                subtitleTooLong: (max: number) => `副标题超长（最多 ${max} 字符）`,
-                fadeInRange: (max: number) => `淡入时长需在 0..${max} 毫秒之间`,
-                stayRange: (max: number) => `停留时长需在 0..${max} 毫秒之间`,
-                fadeOutRange: (max: number) => `淡出时长需在 0..${max} 毫秒之间`,
-                titleInvalidTarget: (target: unknown) => `弹窗发送对象不在允许范围：${target}`,
-                tweenDurationRange: (min: number, max: number) => `补间时长需在 ${min}..${max} 毫秒之间`,
-                tweenInvalidEasing: '补间缓动类型不合法',
-                tweenInvalidBezier: '自定义缓动的控制点不合法（x1,x2 需在 0..1 之间）',
-                tweenUnexpectedBezier: 'bezier 参数仅允许 cubicBezier 缓动',
-                tweenBodyEmpty: '补间里至少要放一个动作',
-                tweenBodyInvalidAction: '补间里只能放移动/缩放/转动/透明度/变色',
-                tweenBodyInvalidKind: (kind: string) => `补间里只能放移动/缩放/转动/透明度/变色（不支持 kind=${kind}）`,
+                roundInvalidMode: (mode: unknown) => `不支持的取整方式：${mode}`,
+                titleBothBlank: '主标题和副标题不能同时为空',
+                titleTooLong: (max: number) => `主标题过长（最多 ${max} 个字符）`,
+                subtitleTooLong: (max: number) => `副标题过长（最多 ${max} 个字符）`,
+                fadeInRange: (max: number) => `淡入时长需在 0～${max} 毫秒之间`,
+                stayRange: (max: number) => `停留时长需在 0～${max} 毫秒之间`,
+                fadeOutRange: (max: number) => `淡出时长需在 0～${max} 毫秒之间`,
+                titleInvalidTarget: (target: unknown) => `不支持的标题接收对象：${target}`,
+                tweenDurationRange: (min: number, max: number) => `补间时长需在 ${min}～${max} 毫秒之间`,
+                tweenInvalidEasing: '不支持的缓动效果类型',
+                tweenInvalidBezier: '自定义缓动曲线的横坐标控制点需在 0～1 之间',
+                tweenUnexpectedBezier: '仅选择「自定义曲线」时才可填写曲线控制点参数',
+                tweenBodyEmpty: '平滑过渡内部至少需要放入一个属性动画积木',
+                tweenBodyInvalidAction: '平滑过渡内部只能放入移动、缩放、旋转、不透明度或变色积木',
+                tweenBodyInvalidKind: (kind: string) => `平滑过渡内部只能放入移动、缩放、旋转、不透明度或变色积木（不支持 ${kind}）`,
                 fieldMustBeInteger: (label: string) => `${label}必须是整数（不能带小数）`,
             },
         },
@@ -1225,7 +1291,7 @@ export const messages = {
             loopLoop: '循环播放',
             loopPingPong: '来回播',
             triggerLabel: '什么时候播',
-            triggerManual: '手动 / 循环（墙加载就播）',
+            triggerManual: '手动 / 循环（画板加载时播放）',
             triggerVariableChange: '变量变了就播',
             triggerSchedule: '到点就播（时刻表）',
             triggerPickHint: '点这里选要监听的变量',
@@ -1258,7 +1324,7 @@ export const messages = {
             dockEmpty: '还没有时间轴',
             dockEmptyHint: '新建一条时间轴，给元素加关键帧做动画',
             dockNew: '新建时间轴',
-            dockSelectHint: '在画布上选中一个元素，就能给它的属性（位置/大小/透明度等）加关键帧',
+            dockSelectHint: '在画布上选中一个元素，就能给它的属性（位置/大小/不透明度等）加关键帧',
             dockAddKeyframe: '在播放头给这个元素打一个关键帧',
             autoKeyframe: '自动加帧：开着时，在画布上拖动 / 缩放元素就会在播放头记下一个关键帧（直接拉出起点和终点）',
             dockSettings: '时间轴设置',
@@ -1269,7 +1335,7 @@ export const messages = {
         errors: {
             // WebSocket / 协议级
             UNAUTHORIZED: '身份验证失败，请重新打开编辑器链接',
-            AUTH_FAILED: '身份验证失败 — token 已失效，请在游戏里重新 /canvas edit',
+            AUTH_FAILED: '登录凭证已失效，请在游戏里重新执行 /canvas edit 或 /canvas open',
             FORBIDDEN: '你没有这块画板的权限',
             NOT_FOUND: '找不到这块画板，可能已经被删除了',
             WALL_NOT_FOUND: '找不到这块画板，可能已经被删除了',
@@ -1281,45 +1347,71 @@ export const messages = {
             INTERNAL_ERROR: '服务器内部错误，请稍后再试',
             UNEXPECTED: '出了点意外，请稍后再试',
             SESSION_CLOSED: '编辑会话已关闭，请刷新页面重新打开',
+            SESSION_INVALID: '编辑会话已失效，请刷新页面或在游戏里重新打开',
             CONNECTION_CLOSED: '与服务器的连接断开了，正在尝试重连…',
             PROTOCOL_VERSION_UNSUPPORTED: '编辑器版本与服务器不匹配，请刷新页面更新',
             PROTOCOL_MISMATCH_DETAIL: (acceptedV: number, clientV: number) =>
-                `协议版本不兼容 (server accepted_v=${acceptedV}, client=${clientV})；请升级`,
+                `编辑器与服务器版本不兼容（服务器协议 v${acceptedV}，当前页面 v${clientV}），请刷新页面升级`,
             TIMEOUT: '服务器响应超时，请稍后再试',
-            // 锁定 / 协作
+            DB_FAILED: '服务器保存数据时出错，请稍后再试',
+            WRITE_FAILED: '服务器写入文件失败，请联系管理员检查存储空间',
+            SERIALIZE_FAILED: '打包数据时出错，请稍后再试',
+            POOL_EXHAUSTED: '服务器可用地图数量不足，请联系服主或管理员扩容',
+            // 锁定 / 图层 / 元素 / 笔刷 / 时间轴
             WALL_LOCKED: '画板已锁定，请先解锁再编辑',
             LAYER_LOCKED: '图层已锁定，先解锁才能编辑',
-            ELEMENT_LOCKED: '这个元素已锁定',
-            NOT_OWNER: '只有画板作者可以做这个操作',
-            // 别名
+            LAYER_NOT_FOUND: '找不到该图层，可能已被删除',
+            LAST_LAYER: '至少需要保留一个图层，无法删除最后一个图层',
+            INVALID_ELEMENT: '元素不存在或属性超出范围，请刷新页面后重试',
+            INVALID_STROKE: '当前笔触已失效，请松手后重新绘制',
+            STROKE_TOO_LONG: '单笔笔画太长了，请分段绘制',
+            TOO_MANY_STROKES: '同时绘制的笔触过多，请稍等片刻再画',
+            TIMELINE_NOT_FOUND: '找不到该时间轴，可能已被删除',
+            KEYFRAME_NOT_FOUND: '找不到该关键帧，可能已被删除',
+            INVALID_KEYFRAME_TIME: '关键帧时间超出时间轴范围',
+            INVALID_EASING: '缓动曲线设置无效，请重新选择',
+            // 别名 / 模板 / 导入导出 / 铁路
             ALIAS_TAKEN: '这个别名已经被占用了',
             INVALID_ALIAS_FORMAT: '别名格式不对，只能用字母 / 数字 / _ / -，长度 2-32',
+            INVALID_SLUG: '模板标识格式不正确（仅限小写字母、数字与连字符，长度 2～32）',
+            INVALID_PARAM_ID: '模板参数代号格式不正确（须以小写字母开头，仅含小写字母、数字或下划线）',
+            DUPLICATE_PARAM_ID: '模板参数代号不能重复',
+            ROUNDTRIP_FAILED: '模板打包自检未通过，请检查参数标记后重试',
+            IMPORT_ZIP_TOO_LARGE: '工程文件过大，超过了服务器允许的大小上限',
+            IMPORT_SPEC_UNSUPPORTED: '该工程由更高版本的插件导出，请先升级服务器插件',
+            IMPORT_SIZE_MISMATCH: '工程尺寸与当前画板不一致，请新建相同尺寸的画板后再导入',
+            IMPORT_BAD_ENTRY: '工程文件内含有异常条目，无法导入',
+            IMPORT_MALFORMED: '工程文件已损坏或格式不正确，无法读取',
+            IMPORT_INVALID_PARAM: '模板参数填写不符合要求，请检查后重试',
+            RUN_NUMBER_TAKEN: '该线路已存在相同车次号',
             // 上传 / 配额
-            QUOTA_EXCEEDED: '本日上传次数已达上限，明天再来吧',
+            QUOTA_EXCEEDED: '数量已达上限，请先清理一部分再试',
+            DAILY_QUOTA_EXCEEDED: '今日上传次数已达上限，请明天再试',
+            QUOTA_PER_WALL: '当前画板的图片数量已达上限，请先删除几张再添加',
             QUOTA_EXCEEDED_DISK: '服务器存储空间已满，请联系管理员清理',
-            DISK_QUOTA_EXCEEDED: '服务器存储空间已满，请联系管理员清理',
             FILE_TOO_LARGE: '图片太大了，请压缩后再上传',
+            DIMENSIONS_EXCEEDED: '图片像素宽高超过上限，请缩小尺寸后再上传',
             UNSUPPORTED_FORMAT: '不支持这种图片格式，请用 PNG / JPEG / WebP',
             DECODE_FAILED: '图片解析失败，可能文件损坏了',
-            UPLOAD_REJECTED: '上传被拒绝',
+            URL_INVALID: '图片链接无效，请检查网址是否完整（需以 http:// 或 https:// 开头）',
+            URL_FETCH_FAILED: '无法拉取该链接的图片，请改用本地文件上传',
+            UPLOAD_REJECTED: '上传被拒绝，请检查图片后重试',
             PERMISSION_DENIED: '没有这个操作的权限',
-            // 校验
-            VALIDATION: '内容不符合要求，请检查后重试',
             BAD_REQUEST: '请求格式不正确',
             // 变量系统
             VARIABLE_NOT_FOUND: '变量不存在',
             VARIABLE_EXISTS: '变量已存在',
             VARIABLE_TYPE_MISMATCH: '变量类型不匹配',
             VARIABLE_NAMESPACE_DENIED: '无权限操作该命名空间的变量',
-            // 墙脚本
+            // 画板脚本
             SCRIPT_INVALID: '脚本规则有问题，请按提示检查后再保存',
             SCRIPT_NOT_FOUND: '找不到这条脚本规则，可能已经被删除了',
             SCRIPT_QUOTA_EXCEEDED: '这块画板的脚本数量已达上限，先删几条再加',
             SCRIPT_ENGINE_UNAVAILABLE: '脚本功能暂时不可用，请联系服主或稍后再试',
             // 重连 / 初始化
             RECONNECT_EXHAUSTED: '服务器长时间不可达，请刷新页面或在游戏里重新 /canvas edit',
-            TOKEN_MISSING: 'token 丢失，请刷新页面或重新 /canvas edit',
-            MALFORMED_READY: '初始化数据异常（协议错误），请刷新页面',
+            TOKEN_MISSING: '缺少访问凭证，请从游戏内点击编辑器链接打开，或重新执行 /canvas edit',
+            MALFORMED_READY: '初始化数据异常，请刷新页面重试',
             // 兜底
             UNKNOWN: '出了点小问题，请稍后再试',
         },
@@ -1369,7 +1461,35 @@ export const messages = {
     },
     en: {
         brand: 'HikariCanvas',
+        common: {
+            close: 'Close',
+            done: 'Done',
+            yes: 'Yes',
+            no: 'No',
+            networkError: 'Could not connect to the server — please check your network',
+        },
+        elementTypes: {
+            text: 'Text',
+            rect: 'Rectangle',
+            circle: 'Ellipse',
+            shape: 'Shape',
+            path: 'Path',
+            brush: 'Brush',
+            image: 'Image',
+            icon: 'Icon',
+        },
+        themeAccents: {
+            mauve: 'Mauve',
+            blue: 'Blue',
+            teal: 'Teal',
+            green: 'Green',
+            peach: 'Peach',
+            pink: 'Pink',
+            lavender: 'Lavender',
+            sapphire: 'Sapphire',
+        },
         topbar: {
+            serverVersion: (v: string) => `Server v${v}`,
             toggleLeft: 'Collapse / expand left toolbar',
             toggleRight: 'Collapse / expand right panel',
             toggleLog: 'Open / close log drawer',
@@ -1411,7 +1531,7 @@ export const messages = {
                 if (code === 'SVG_HAS_ENTITY') return 'SVG file contains unsafe content and was rejected';
                 if (code === 'SVG_MALFORMED') return 'SVG file is malformed and could not be read';
                 if (code === 'SVG_TOO_COMPLEX') return 'SVG is too complex (too many shapes or vertices)';
-                return `Import failed (${code})`;
+                return 'Import failed — please check the SVG file and try again';
             },
         },
         // .canvas project import dialog
@@ -1422,8 +1542,23 @@ export const messages = {
             importConfirmReplace: 'Importing replaces everything on the current canvas. Continue?',
             importing: 'Importing…',
             importDone: 'Imported',
-            importFailed: (code: string) =>
-                code === 'WALL_LOCKED' ? 'Wall is locked — unlock it first to import a project' : `Import failed (${code})`,
+            importFailed: (code: string) => {
+                switch (code) {
+                    case 'WALL_LOCKED': return 'Wall is locked — unlock it first to import a project';
+                    case 'IMPORT_ZIP_TOO_LARGE': return 'Project file is too large and exceeds the server limit';
+                    case 'IMPORT_SPEC_UNSUPPORTED': return 'This project was exported by a newer plugin version — please update the server plugin';
+                    case 'IMPORT_SIZE_MISMATCH': return 'Project size does not match this wall — create a wall of the same size first';
+                    case 'IMPORT_BAD_ENTRY': return 'Project file contains unexpected entries and could not be imported';
+                    case 'IMPORT_MALFORMED': return 'Project file is corrupted or malformed and could not be read';
+                    case 'IMPORT_INVALID_PARAM': return 'Project parameters are invalid and could not be imported';
+                    case 'FORBIDDEN': return 'You do not have permission to import this project (make sure you are online in-game)';
+                    case 'NO_SESSION':
+                    case 'AUTH_FAILED': return 'Editor session has expired — refresh the page or reopen in-game';
+                    case 'SESSION_NOT_READY': return 'Wall is not ready yet — please try again in a moment';
+                    case 'NETWORK': return 'Could not connect to the server — please check your network';
+                    default: return 'Import failed — please check the file and try again';
+                }
+            },
             warnTitle: 'Import notes',
             // backend warning kind → plain language for server owners / players.
             warn: {
@@ -1432,16 +1567,16 @@ export const messages = {
                 'missing-icon': (d: string) => `Icon "${d}" is missing and was left blank`,
                 'script-command-blocked': (d: string) => `The command template "${d}" isn't set up on this server, so that block was disabled`,
                 'script-invalid': (d: string) => `A script rule was invalid and was skipped (${d})`,
-                'script-quota': () => 'Too many scripts; some rules were not imported',
-                'animation-flattened': () => 'This image is animated and was imported in its starting state',
-                'orphan-track-dropped': () => 'An animation track pointed at a deleted element and was cleaned up',
-                'asset-quota': () => 'The image quota is full; some images were not imported',
-            } as Record<string, (d: string) => string>,
+                'script-quota': (_d: string) => 'Too many scripts; some rules were not imported',
+                'animation-flattened': (_d: string) => 'This image is animated and was imported in its starting state',
+                'orphan-track-dropped': (_d: string) => 'An animation track pointed at a deleted element and was cleaned up',
+                'asset-quota': (_d: string) => 'The image quota is full; some images were not imported',
+            },
         },
         wall: {
-            copyId: (id: string) => `Click to copy wall id: ${id}`,
+            copyId: (id: string) => `Click to copy wall ID: ${id}`,
             copied: 'Copied',
-            aliasEmpty: 'no alias',
+            aliasEmpty: 'Untitled',
             aliasSetTip: (a: string) => `Alias: ${a} (click to change)`,
             aliasSetTipEmpty: 'Click to give this wall a friendly name',
             aliasPlaceholder: '2-32 chars: letters / digits / _ / -',
@@ -1454,8 +1589,8 @@ export const messages = {
             lockToggleOn: 'Lock this wall (make it read-only)',
             lockToggleOff: 'Unlock this wall',
             lockOwnerOnly: 'Only the wall owner can lock / unlock',
-            lockedOwnerHint: 'Wall is locked · click Unlock in the top bar to keep editing',
-            lockedReaderHint: 'Wall is locked (owner-only unlock) · read-only',
+            lockedOwnerHint: 'Wall is locked · Click "Locked" in the top bar to unlock and keep editing',
+            lockedReaderHint: 'Wall is locked (owner-only unlock) · Read-only',
             refresh: 'Refresh wall',
             refreshTip: 'Replace missing support blocks, re-spawn item frames, and force a full redraw',
             refreshedDetail: (frames: number, blocks: number) => {
@@ -1464,7 +1599,7 @@ export const messages = {
                 if (frames === 0) return `Replaced ${blocks} support block${blocks === 1 ? '' : 's'}`;
                 return `Replaced ${blocks} block${blocks === 1 ? '' : 's'} and re-spawned ${frames} frame${frames === 1 ? '' : 's'}`;
             },
-            refreshTimeout: 'No response from server, try again in a moment',
+            refreshTimeout: 'No response from server — please try again in a moment',
             refreshSendFailed: 'Not connected to the server',
             lockFailed: 'Could not lock the wall, please try again',
             unlockFailed: 'Could not unlock the wall, please try again',
@@ -1481,7 +1616,6 @@ export const messages = {
             lockedGroup: (n: number) => `Locked (${n})`,
             unlockedGroup: (n: number) => `Editable (${n})`,
             mapsLabel: (w: number, h: number) => `${w}×${h} maps`,
-            updatedAt: (s: string) => `updated ${s}`,
             copyHint: 'Click to copy the open command',
             refresh: 'Refresh list',
             // localized timestamp parts (used by fmtTime). i = 0(Sun)..6(Sat); m = 1..12.
@@ -1504,8 +1638,6 @@ export const messages = {
             addRect: 'Add a rectangle',
             undo: 'Undo (Ctrl+Z)',
             redo: 'Redo (Ctrl+Shift+Z)',
-            ping: 'Ping the server',
-            paint: 'Demo: paint every map red',
         },
         templates: {
             header: 'Templates',
@@ -1519,7 +1651,7 @@ export const messages = {
             incompatible: 'Size mismatch',
             incompatibleHint: 'Current wall size is outside this template\'s supported range',
             wallMismatchHint: (range: string) =>
-                `Current wall doesn\'t match the template\'s required ${range}. Create a wall of matching size first, then apply.`,
+                `Current wall doesn't match the template's required ${range}. Create a wall of matching size first, then apply.`,
             noParams: 'This template has no parameters',
             resetParams: 'Reset parameters',
             apply: 'Apply template',
@@ -1529,8 +1661,8 @@ export const messages = {
             applyTimeout: 'Server didn\'t respond — the connection may have dropped. Try again shortly.',
             cancel: 'Cancel',
             overwriteWarning: 'Applying a template wipes the current elements and background. This can\'t be undone.',
-            on: 'on',
-            off: 'off',
+            on: 'On',
+            off: 'Off',
         },
         canvas: {
             sizeLabel: (cw: number, ch: number, pw: number, ph: number) =>
@@ -1561,6 +1693,10 @@ export const messages = {
             deleteMultiTip: (n: number) => `Delete the ${n} selected elements`,
             id: 'ID',
             type: 'Type',
+            posX: 'X',
+            posY: 'Y',
+            width: 'W',
+            height: 'H',
             transformHeader: 'Position & Transform',
             rectHeader: 'Rectangle',
             textHeader: 'Text',
@@ -1570,8 +1706,8 @@ export const messages = {
             shapeHeader: 'Polygon / Star',
             pathHeader: 'Path',
             verticalHelp: 'Vertical',
-            visible: 'visible',
-            locked: 'locked',
+            visible: 'Visible',
+            locked: 'Locked',
             fill: 'Fill',
             stroke: 'Stroke',
             strokeWidth: 'Stroke thickness',
@@ -1604,25 +1740,24 @@ export const messages = {
             renderModeDither: 'Smooth',
             // extra field tooltips
             fontIdLabel: 'Font',
-            fontIdTip: 'Choose which font renders the text. The plugin ships with a pixel font and a sans-serif; drop your own .ttf into plugins/HikariCanvas/fonts/',
+            fontIdTip: 'Choose which font renders the text; includes 22 built-in Chinese & Latin fonts, or drop custom font files into plugins/HikariCanvas/fonts/',
             fontGroupBuiltin: 'Built-in fonts',
             fontGroupUser: 'User fonts',
             fontSizeLabel: 'Font size',
             fontSizeTip: 'Text size in pixels. For pixel fonts, multiples of 12 look best',
             positionTip: 'Top-left corner of the element relative to the canvas (in pixels)',
-            sizeLabel: 'Size',
             sizeTip: 'Element width × height in pixels',
             brushSizeReadonlyTip: 'Brush stroke size comes from the stroke itself and cannot be edited here; redraw to change it',
             colorLabel: 'Color',
-            colorTip: 'Click the swatch to pick a color; alpha controls translucency',
+            colorTip: 'Click the swatch to pick a color; adjust opacity for translucency',
             alignLabel: 'Align',
             alignLeft: 'Left',
             alignCenter: 'Center',
             alignRight: 'Right',
             // bold / italic toggles
             styleLabel: 'Style',
-            boldTip: 'Bold (overlays a colored stroke to thicken glyphs)',
-            italicTip: 'Italic (shear transform tilts glyphs)',
+            boldTip: 'Bold (adds a matching outline to thicken characters)',
+            italicTip: 'Italic (slants characters to the right)',
             // shape field labels
             shapeKind: 'Shape',
             shapeKindPolygon: 'Polygon',
@@ -1634,7 +1769,7 @@ export const messages = {
             projectHeader: 'This wall\'s palette',
             recentHeader: 'Recently used',
             defaultHeader: 'Default palette',
-            copyTip: 'Click to copy the hex value',
+            copyTip: 'Click to copy the color code to clipboard',
             copied: 'Copied',
         },
         clipboard: {
@@ -1685,9 +1820,9 @@ export const messages = {
             pressureSize: 'Pressure → size',
             pressureSizeTip: 'When on, actual width = size × current pressure; mouse defaults to 0.5',
             pressureOpacity: 'Pressure → opacity',
-            pressureOpacityTip: 'When on, each stroke segment\'s alpha tracks pressure; great for watercolor / soft brush effects',
+            pressureOpacityTip: 'When on, each stroke segment\'s opacity tracks pressure; great for watercolor / soft brush effects',
             smoothing: 'Smoothing',
-            smoothingTip: 'Simplification strength at end of stroke (0 = none, 1 = 4 px tolerance); higher values flatten hand jitter',
+            smoothingTip: 'How strongly strokes are smoothed on release (0 = keep raw stroke; higher values smooth out hand jitter)',
             dither: 'Smooth strokes',
             ditherTip: 'Soften strokes against the in-game palette (best for gradients / large brushwork)',
             hint: 'Hold and drag on the canvas to paint. Tablet pressure and Apple Pencil supported. Esc cancels the stroke in progress.',
@@ -1704,10 +1839,17 @@ export const messages = {
             building: 'Building…',
             recolorSuccess: 'Recolored',
             elementLocked: 'This element is locked',
-            elementUnsupported: (type: string) => `Paint bucket doesn\'t support ${type} elements`,
+            elementUnsupported: (type: string) => {
+                const names: Record<string, string> = {
+                    text: 'Text', rect: 'Rectangle', circle: 'Ellipse', shape: 'Shape',
+                    path: 'Path', brush: 'Brush', image: 'Image', icon: 'Icon',
+                };
+                const label = names[type];
+                return label ? `${label} elements do not support Paint Bucket fill` : 'This element does not support Paint Bucket fill';
+            },
             wallLocked: 'Wall is locked — editing blocked',
             degraded: 'Paint bucket detected complex geometry; try simplifying or removing overlapping elements',
-            gapTooComplex: 'This region has too many separate islands to fill; raise the smoothing setting or remove some overlapping elements',
+            gapTooComplex: 'This region is too fragmented to fill; increase "Edge precision" or remove overlapping elements and try again',
         },
         iconLibrary: {
             title: 'Icon Library',
@@ -1715,6 +1857,8 @@ export const messages = {
             empty: 'No icons match',
             loading: 'Loading',
             loadMore: 'Load more',
+            loadFailed: 'Failed to load icon library — please refresh and try again',
+            insertFailed: 'Failed to add icon — please try again',
             category: {
                 all: 'All',
                 faSolid: 'FA Solid',
@@ -1736,7 +1880,7 @@ export const messages = {
             save: 'Publish',
             saving: 'Publishing…',
             cancel: 'Cancel',
-            slugLabel: 'Slug',
+            slugLabel: 'Template ID',
             slugPlaceholder: 'my-sign',
             slugHint: 'Lowercase letters / digits / hyphens, 2-32 chars',
             slugPatternHint: 'Only lowercase letters / digits / hyphens, length 2-32',
@@ -1751,6 +1895,8 @@ export const messages = {
             paramNameLabel: 'Parameter ID',
             paramLabelLabel: 'Display label',
             paramDescLabel: 'Description',
+            paramIdInvalid: 'Parameter ID must start with a lowercase letter and use only a-z, 0-9, or _ (max 32 chars)',
+            paramIdDuplicate: 'Duplicate parameter ID',
             markFieldsLabel: 'Parametrize:',
             markColor: 'Color',
             markFontSize: 'Size',
@@ -1768,12 +1914,11 @@ export const messages = {
         },
         image: {
             header: 'Image',
-            source: 'Content fingerprint',
-            sourceTip: 'sha256 fingerprint of the file. Multiple walls referencing the same image share one file',
+            sourceTip: 'Unique content ID for this image — multiple walls using the same image share storage',
             replace: 'Replace image',
             replaceTip: 'Click to pick a new file, or drag / Ctrl+V paste onto the canvas',
             maskHeader: 'Shape mask',
-            maskPresetTip: '4 preset shapes today; free-form / lasso masks coming in a later release',
+            maskPresetTip: 'Crop the image with a preset shape or freehand lasso',
             maskInverted: 'Invert (show outside the mask)',
             maskInvertedTip: 'When checked, pixels outside the shape are shown instead (mask is inverted)',
             maskPresets: {
@@ -1793,7 +1938,7 @@ export const messages = {
             maskLassoSimplified: 'That lasso was very detailed — its edge was simplified (masks allow at most 64 corner points)',
             uploading: 'Uploading…',
             uploadTip: 'Upload an image (click / drag onto canvas / Ctrl+V paste / paste URL)',
-            uploadUrlFailed: 'Failed to fetch image from URL',
+            uploadUrlFailed: 'Failed to download image from URL',
             uploadFailed: (status: number, msg: string) =>
                 status > 0 ? `Upload failed (${status})${msg ? ': ' + msg : ''}` : `Upload failed${msg ? ': ' + msg : ''}`,
             lockedDenied: 'Wall is locked — can\'t upload',
@@ -1866,14 +2011,14 @@ export const messages = {
             close: 'Close',
         },
         status: {
-            ready: 'ready',
-            connecting: 'connecting',
-            authenticating: 'authenticating',
-            error: 'error',
-            disconnected: 'disconnected',
-            session: (id: string) => `session ${id.slice(0, 8)}…`,
-            sessionFull: (id: string) => `full session id: ${id}`,
-            wall: (w: number, h: number) => `wall ${w}×${h} maps`,
+            ready: 'Ready',
+            connecting: 'Connecting',
+            authenticating: 'Authenticating',
+            error: 'Error',
+            disconnected: 'Disconnected',
+            session: (id: string) => `Session ${id.slice(0, 8)}…`,
+            sessionFull: (id: string) => `Full session ID: ${id}`,
+            wall: (w: number, h: number) => `Wall ${w}×${h} maps`,
             elements: (n: number, v: number) => `${n} elements · v${v}`,
             unlocked: 'Editable',
             locked: 'Locked',
@@ -1895,6 +2040,9 @@ export const messages = {
         lockGuard: {
             blocked: 'Wall is locked — editing blocked (ask the owner to unlock first)',
             blockedWithAction: (action: string) => `Wall is locked — ${action} unavailable (ask the owner to unlock first)`,
+            actionDrag: 'moving elements',
+            actionDraw: 'drawing',
+            actionTransform: 'resizing or rotating',
         },
         // variable management panel / dialogs / error strings.
         variables: {
@@ -1923,6 +2071,25 @@ export const messages = {
             typeNumber: 'Number',
             typeBoolean: 'Boolean',
             typeColor: 'Color',
+            boolTrue: 'True',
+            boolFalse: 'False',
+            pickerDynamicBadge: 'Dynamic',
+            builtinNamespaces: {
+                user: 'Wall Variables',
+                userglobal: 'Global Variables',
+                system: 'System Variables',
+                schedule: 'Transit Schedule',
+                schedule_rail: 'Rail Network',
+                papi: 'PlaceholderAPI',
+                scoreboard: 'Scoreboard',
+            },
+            sourceLabels: {
+                manual: 'Manual',
+                system: 'System',
+                papi: 'PlaceholderAPI',
+                scoreboard: 'Scoreboard',
+                schedule: 'Schedule',
+            },
             // value display
             currentLabel: 'Current',
             defaultLabel: 'Default',
@@ -1936,14 +2103,15 @@ export const messages = {
             dialogNewTitle: 'New variable',
             dialogNewNameLabel: 'Name',
             dialogNewNamePlaceholder: 'e.g. red_score',
-            dialogNewNameHint: 'A user:<wallId>/ prefix will be added automatically',
+            dialogNewNameHint: 'Letters / digits / _ . - · Created as a variable on this wall',
+            dialogNewNameGlobalHint: 'Letters / digits / _ . - · Created as server-wide variable userglobal/<name>',
             dialogNewTypeLabel: 'Type',
             dialogNewDefaultLabel: 'Default value',
             // scope toggle
             dialogNewScopeLabel: 'Scope',
             dialogNewScopeWall: 'This wall',
             dialogNewScopeGlobal: 'Global',
-            dialogNewScopeWallHint: 'Only visible on this canvas; deleted with the wall',
+            dialogNewScopeWallHint: 'Only visible on this wall; deleted when the wall is deleted',
             dialogNewScopeGlobalHint: 'Readable from all walls; only you and admins can modify',
             // optional alias field
             dialogNewAliasLabel: 'Alias',
@@ -1959,7 +2127,6 @@ export const messages = {
             // VariablePanel inline alias chip + edit entry
             aliasChipPrefix: 'Alias:',
             actionEditAlias: 'Edit alias',
-            aliasEmpty: '(no alias)',
             // value editor dialog
             dialogValueTitle: 'Edit current value',
             dialogValueSubmit: 'Save',
@@ -1988,7 +2155,7 @@ export const messages = {
                 insertButtonTooltip: 'Insert a variable placeholder (or type ${ in the text)',
                 keyboardHint: '↑↓ to choose, Enter to confirm, Esc to close',
                 // dynamic namespace (e.g. scoreboard / papi) row marker tooltip
-                dynamicHint: 'Dynamic namespace: register on reference (e.g. scoreboard.<obj>.<player>)',
+                dynamicHint: 'On-demand variable: resolves automatically when referenced in text (e.g. scoreboard.<objective>.<player>)',
                 // 3-column table + inline alias editor
                 columnAlias: 'Alias',
                 columnValue: 'Value',
@@ -2013,12 +2180,6 @@ export const messages = {
                 tooltipCurrent: 'Current',
                 tooltipSource: 'Source',
                 tooltipDeleted: 'Variable has been deleted — will render as "???"',
-            },
-            // chip error state: clicking a red chip triggers create-confirm
-            chipError: {
-                notFound: 'Variable {name} does not exist.',
-                createConfirm: 'Create it now? (Confirm to create an empty STRING user variable.)',
-                onlyUserCanCreate: 'Only user/ namespace variables can be created from the editor; system / plugin / PAPI variables are auto-registered by their providers.',
             },
         },
         // rail network (lines / stations / runs / timetable)
@@ -2045,7 +2206,7 @@ export const messages = {
             // service type i18n labels
             serviceTypeLocal: 'Local',
             serviceTypeExpress: 'Express',
-            serviceTypeSection: 'Section',
+            serviceTypeSection: 'Short-turn',
             serviceTypeLimited: 'Limited',
             serviceTypeCustom: 'Custom…',
             serviceTypeCustomPlaceholder: 'e.g. "RUSH-HOUR-FAST"',
@@ -2057,8 +2218,8 @@ export const messages = {
             directionUp: 'Up',
             directionDown: 'Down',
             serviceType: 'Service type',
-            startStation: 'Section start',
-            endStation: 'Section end',
+            startStation: 'Short-turn start',
+            endStation: 'Short-turn end',
             lineStart: 'Line start',
             lineEnd: 'Line end',
             notes: 'Notes',
@@ -2074,8 +2235,8 @@ export const messages = {
             timetableUnsaved: 'Timetable has unsaved changes',
             autoGenerateTitle: 'Auto-generate timetable',
             firstDeparture: 'First departure (HH:mm:ss)',
-            travelSeconds: 'Travel seconds',
-            dwellSeconds: 'Dwell seconds',
+            travelSeconds: 'Travel time (s)',
+            dwellSeconds: 'Dwell time (s)',
             skipStations: 'Skipped stations (express)',
             cancel: 'Cancel',
             generate: 'Generate',
@@ -2094,8 +2255,8 @@ export const messages = {
             tipStep3: 'Add a run → click "Details" to edit',
             tipStep4: 'Inside run details, click "Auto-generate timetable"',
             // prompt when auto-generate inputs are empty / NaN
-            autoInvalidInput: 'Please enter a valid first departure time, travel seconds and dwell seconds (none may be blank)',
-            autoStartAfterEnd: 'Start station must come before end station',
+            autoInvalidInput: 'Please enter a valid first departure time, travel time (s), and dwell time (s) (none may be blank)',
+            autoStartAfterEnd: 'Short-turn start station must come before end station',
         },
         // train / bus schedule manager (built-in fallback, zero external dependency)
         schedule: {
@@ -2159,7 +2320,6 @@ export const messages = {
             empty: 'No script rules yet. Click "New rule" to start.',
             close: 'Close',
             resetView: 'Reset view',
-            zoom: 'Zoom',
             paletteTitle: 'Blocks',
             // palette group titles + no-rule-selected hint
             paletteNeedRule: 'Pick a rule above first, then drag blocks onto the canvas',
@@ -2218,7 +2378,7 @@ export const messages = {
             selectRuleHint: 'Pick a rule on the left to edit, or click "New rule"',
             // Tween animation frame rate (per-wall, canvas.tweenFps op)
             tweenFpsLabel: 'Animation frame rate',
-            tweenFpsTooltip: 'How smooth the "over X seconds" tween animations look on this sign — higher is smoother but uses more server resources (range 1–60)',
+            tweenFpsTooltip: 'How smooth "Smooth transition" animations look on this wall — higher is smoother but uses more server resources (range 1–60)',
             // prefix label for the "trigger type" select in the hat block.
             triggerKindLabel: 'When to trigger',
             // "variables used by this script" live-preview panel (bottom-right of block canvas).
@@ -2240,7 +2400,7 @@ export const messages = {
                 playerKill: 'When player kills',
                 playerNear: 'When player is near',
                 wallReady: 'When wall is ready',
-                rightClickWall: 'When wall right-clicked',
+                rightClickWall: 'When wall is right-clicked',
                 playerLeaveRange: 'When player leaves range',
                 playerQuit: 'When player quits',
                 setVariable: 'Set variable',
@@ -2266,7 +2426,7 @@ export const messages = {
                 appendVariable: 'Append text',
                 cloneElement: 'Clone element',
                 deleteElement: 'Delete element',
-                tweenBlock: 'Over X seconds',
+                tweenBlock: 'Smooth transition',
                 randomBranch: 'Random branch',
                 setElementLayer: 'Move element to front / back',
                 roundVariable: 'Round variable',
@@ -2317,7 +2477,6 @@ export const messages = {
                 // repeat loop field labels.
                 repeatCount: 'Repeat count',
                 body: 'Loop body',
-                times: 'times',
                 // particle / wait-until fields.
                 particle: 'Particle',
                 particleCount: 'Count',
@@ -2406,13 +2565,13 @@ export const messages = {
                 // field on the block is still empty. {field} = friendly field name
                 // (element / timeline / command / variable / condition / sound).
                 needSelect: 'Still need to fill in: {field}',
+                // crosshair button next to the element field. Click it, then
+                // click an element in the right-side preview to fill it in.
+                pickFromPreview: 'Pick from preview',
                 // orphan warning when the saved templateId is not in the
                 // current template list (server admin deleted / renamed the template).
                 // {id} = the stale template ID.
                 orphanTemplate: (id: string) => `Command template not found: ${id} (re-select or ask an admin to reconfigure)`,
-                // crosshair button next to the element field. Click it, then
-                // click an element in the right-side preview to fill it in.
-                pickFromPreview: 'Pick from preview',
             },
             // if-condition visual builder strings.
             condition: {
@@ -2471,92 +2630,92 @@ export const messages = {
             validation: {
                 ruleNull: 'Rule cannot be empty',
                 nameBlank: 'Rule name cannot be empty',
-                nameTooLong: (max: number) => `Rule name is too long (max ${max} chars)`,
-                missingTrigger: 'Missing trigger',
+                nameTooLong: (max: number) => `Rule name is too long (max ${max} characters)`,
+                missingTrigger: 'Please choose a trigger',
                 actionsEmpty: 'Actions list cannot be empty',
-                layoutTooLong: (max: number) => `Block layout data is too long (max ${max} chars)`,
-                tooManyBlocks: (total: number, max: number) => `Total block count ${total} exceeds limit ${max}`,
+                layoutTooLong: (max: number) => `Block layout content is too large (max ${max} characters)`,
+                tooManyBlocks: (total: number, max: number) => `Total block count (${total}) exceeds limit ${max}`,
                 varChangeBlank: 'Variable-change trigger requires a variable name',
-                timerRange: (min: number, max: number) => `Timer interval must be between ${min}..${max} seconds`,
-                nearRange: (min: number, max: number) => `Player-near range must be between ${min}..${max} blocks`,
-                leaveRange: (min: number, max: number) => `Player-leave range must be between ${min}..${max} blocks`,
+                timerRange: (min: number, max: number) => `Timer interval must be between ${min} and ${max} seconds`,
+                nearRange: (min: number, max: number) => `Player-near range must be between ${min} and ${max} blocks`,
+                leaveRange: (min: number, max: number) => `Player-leave range must be between ${min} and ${max} blocks`,
                 setVarNameBlank: 'Set-variable action requires a variable name',
-                setVarValueNull: 'Set-variable value cannot be null (empty string is allowed)',
-                setVarValueTooLong: (max: number) => `Set-variable value is too long (max ${max} chars)`,
+                setVarValueNull: 'Please enter a variable value (empty text is allowed)',
+                setVarValueTooLong: (max: number) => `Variable value is too long (max ${max} characters)`,
                 incVarNameBlank: 'Increment-variable action requires a variable name',
-                incDeltaFinite: 'Increment step must be a finite number',
+                incDeltaFinite: 'Increment step must be a valid number',
                 setPropMissingEl: 'Set-element-property action requires an element ID',
-                setPropInvalid: (p: unknown) => `Element property is not allowed: ${p}`,
-                setPropValueBlank: 'Set-element-property value cannot be empty',
+                setPropInvalid: (p: unknown) => `Unsupported element property: ${p}`,
+                setPropValueBlank: 'Element property value cannot be empty',
                 timelineMissingId: 'Timeline action requires a timeline ID',
-                timelineInvalidOp: (op: unknown) => `Timeline operation is not allowed: ${op}`,
-                seekMissingMs: 'Seek operation requires seekMs',
-                seekNegative: 'seekMs cannot be negative',
-                soundIdInvalid: (max: number) => `Sound ID cannot be empty and must be at most ${max} chars`,
-                soundVolumeRange: (min: string, max: string) => `Volume must be between ${min}..${max}`,
-                soundPitchRange: (min: string, max: string) => `Pitch must be between ${min}..${max}`,
-                soundInvalidScope: (scope: unknown) => `Sound scope is not allowed: ${scope}`,
-                waitRange: (min: number, max: number) => `Wait duration must be between ${min}..${max} ms`,
-                cmdMissingTemplate: 'Run-command action requires a template ID',
-                cmdParamTooLong: (key: string, max: number) => `Command parameter '${key}' is too long (max ${max} chars)`,
-                logNull: 'Log message cannot be null',
-                logTooLong: (max: number) => `Log message is too long (max ${max} chars)`,
-                ifDepthExceeded: (max: number, depth: number) => `If nesting exceeds ${max} levels (depth=${depth})`,
-                ifConditionBlank: 'If condition cannot be empty',
-                ifConditionTooLong: (max: number) => `If condition is too long (max ${max} chars)`,
-                patchEmpty: 'Property patch cannot be empty',
-                patchTooManyKeys: (max: number) => `Property patch exceeds ${max} keys`,
-                kindTooLong: 'Block kind is too long',
-                patchPropBlank: (k: string) => `Property ${k} value cannot be empty`,
-                nudgeMissingEl: 'Nudge-element action requires an element ID',
-                nudgeFinite: 'Nudge dx/dy must be finite numbers',
-                msgNull: 'Message text cannot be null',
-                msgTooLong: (max: number) => `Message text is too long (max ${max})`,
-                msgInvalidChannel: (ch: unknown) => `Message channel is not allowed: ${ch}`,
-                msgInvalidTarget: (target: unknown) => `Message target is not allowed: ${target}`,
+                timelineInvalidOp: (op: unknown) => `Unsupported timeline operation: ${op}`,
+                seekMissingMs: 'Timeline seek operation requires a target time',
+                seekNegative: 'Target time cannot be negative',
+                soundIdInvalid: (max: number) => `Please enter a sound name (at most ${max} characters)`,
+                soundVolumeRange: (min: string, max: string) => `Volume must be between ${min} and ${max}`,
+                soundPitchRange: (min: string, max: string) => `Pitch must be between ${min} and ${max}`,
+                soundInvalidScope: (scope: unknown) => `Unsupported sound playback scope: ${scope}`,
+                waitRange: (min: number, max: number) => `Wait duration must be between ${min} and ${max} ms`,
+                cmdMissingTemplate: 'Run-command action requires a command template',
+                cmdParamTooLong: (key: string, max: number) => `Command parameter "${key}" is too long (max ${max} characters)`,
+                logNull: 'Log message cannot be empty',
+                logTooLong: (max: number) => `Log message is too long (max ${max} characters)`,
+                ifDepthExceeded: (max: number, depth: number) => `Conditional nesting cannot exceed ${max} levels (currently ${depth})`,
+                ifConditionBlank: 'Condition expression cannot be empty',
+                ifConditionTooLong: (max: number) => `Condition expression is too long (max ${max} characters)`,
+                patchEmpty: 'Please set at least one property to change',
+                patchTooManyKeys: (max: number) => `Too many properties changed at once (max ${max})`,
+                kindTooLong: 'Action block type identifier is too long',
+                patchPropBlank: (k: string) => `Property "${k}" value cannot be empty`,
+                nudgeMissingEl: 'Relative-move action requires an element ID',
+                nudgeFinite: 'Horizontal and vertical move distances must be valid numbers',
+                msgNull: 'Message text cannot be empty',
+                msgTooLong: (max: number) => `Message text is too long (max ${max} characters)`,
+                msgInvalidChannel: (ch: unknown) => `Unsupported message location: ${ch}`,
+                msgInvalidTarget: (target: unknown) => `Unsupported message recipient: ${target}`,
                 randVarNameBlank: 'Random-number action requires a variable name',
-                randBoundsFinite: 'Random bounds must be finite numbers',
-                randMinGtMax: 'Random min cannot be greater than max',
-                scaleVarNameBlank: 'Scale-variable action requires a variable name',
-                scaleInvalidOp: (op: unknown) => `Scale operation is not allowed: ${op}`,
-                scaleFactorFinite: 'Scale factor must be a finite number',
+                randBoundsFinite: 'Random range bounds must be valid numbers',
+                randMinGtMax: 'Random range minimum cannot be greater than maximum',
+                scaleVarNameBlank: 'Multiply/divide action requires a variable name',
+                scaleInvalidOp: (op: unknown) => `Unsupported calculation mode: ${op}`,
+                scaleFactorFinite: 'Multiply/divide factor must be a valid number',
                 scaleDivZero: 'Divisor cannot be 0',
                 awaitTimelineMissingId: 'Play-and-wait action requires a timeline ID',
-                repeatCountRange: (min: number, max: number) => `Repeat count must be between ${min}..${max}`,
+                repeatCountRange: (min: number, max: number) => `Repeat count must be between ${min} and ${max}`,
                 repeatBodyEmpty: 'Repeat loop body cannot be empty',
-                repeatUntilConditionInvalid: (max: number) => `Repeat-until condition cannot be empty and must be at most ${max} chars`,
-                repeatUntilMaxRange: (min: number, max: number) => `Max repeat count must be between ${min}..${max}`,
-                particleInvalid: (p: unknown) => `Particle type is not allowed: ${p}`,
-                particleCountRange: (min: number, max: number) => `Particle count must be between ${min}..${max}`,
-                particleOffsetFinite: 'Particle offset must be finite numbers',
-                waitUntilConditionInvalid: (max: number) => `Wait-until condition cannot be empty and must be at most ${max} chars`,
-                waitUntilTimeoutRange: (min: number, max: number) => `Timeout must be between ${min}..${max} ms`,
-                copyVarBlank: 'Copy-variable target and source cannot be empty',
+                repeatUntilConditionInvalid: (max: number) => `Please enter a loop stop condition (at most ${max} characters)`,
+                repeatUntilMaxRange: (min: number, max: number) => `Max repeat count must be between ${min} and ${max}`,
+                particleInvalid: (p: unknown) => `Unsupported particle effect: ${p}`,
+                particleCountRange: (min: number, max: number) => `Particle count must be between ${min} and ${max}`,
+                particleOffsetFinite: 'Particle offset must be valid numbers',
+                waitUntilConditionInvalid: (max: number) => `Please enter a wait condition (at most ${max} characters)`,
+                waitUntilTimeoutRange: (min: number, max: number) => `Wait timeout must be between ${min} and ${max} ms`,
+                copyVarBlank: 'Copy-variable target and source variables cannot be empty',
                 appendVarBlank: 'Append-text target variable cannot be empty',
-                appendTextTooLong: (max: number) => `Appended text is too long (max ${max} chars)`,
-                cloneMissingEl: 'Clone-element target cannot be empty',
-                cloneOffsetFinite: 'Clone offset must be finite numbers',
-                deleteMissingEl: 'Delete-element target cannot be empty',
-                probRange: (min: number, max: number) => `Probability must be between ${min}..${max}`,
-                branchDepthExceeded: (max: number, depth: number) => `Branch nesting exceeds ${max} levels (depth=${depth})`,
+                appendTextTooLong: (max: number) => `Appended text is too long (max ${max} characters)`,
+                cloneMissingEl: 'Please choose an element to clone',
+                cloneOffsetFinite: 'Clone offset must be valid numbers',
+                deleteMissingEl: 'Please choose an element to delete',
+                probRange: (min: number, max: number) => `Random branch probability must be between ${min}% and ${max}%`,
+                branchDepthExceeded: (max: number, depth: number) => `Conditional and random branch nesting cannot exceed ${max} levels (currently ${depth})`,
                 layerMissingEl: 'Move-element-layer action requires an element ID',
-                layerInvalidMode: (mode: unknown) => `Layer mode is not allowed: ${mode}`,
+                layerInvalidMode: (mode: unknown) => `Unsupported layer order direction: ${mode}`,
                 roundVarBlank: 'Round-variable action requires a variable name',
-                roundInvalidMode: (mode: unknown) => `Round mode is not allowed: ${mode}`,
+                roundInvalidMode: (mode: unknown) => `Unsupported rounding mode: ${mode}`,
                 titleBothBlank: 'Title and subtitle cannot both be empty',
-                titleTooLong: (max: number) => `Title is too long (max ${max} chars)`,
-                subtitleTooLong: (max: number) => `Subtitle is too long (max ${max} chars)`,
-                fadeInRange: (max: number) => `Fade-in duration must be between 0..${max} ms`,
-                stayRange: (max: number) => `Stay duration must be between 0..${max} ms`,
-                fadeOutRange: (max: number) => `Fade-out duration must be between 0..${max} ms`,
-                titleInvalidTarget: (target: unknown) => `Title target is not allowed: ${target}`,
-                tweenDurationRange: (min: number, max: number) => `Tween duration must be between ${min}..${max} ms`,
-                tweenInvalidEasing: 'Invalid tween easing type',
-                tweenInvalidBezier: 'Invalid custom bezier control points (x1,x2 must be in 0..1)',
-                tweenUnexpectedBezier: 'bezier parameter is only allowed for cubicBezier easing',
-                tweenBodyEmpty: 'Tween block requires at least one action inside',
-                tweenBodyInvalidAction: 'Only move / resize / rotate / opacity / color blocks are allowed inside tween',
-                tweenBodyInvalidKind: (kind: string) => `Only move / resize / rotate / opacity / color blocks are allowed inside tween (unsupported kind=${kind})`,
+                titleTooLong: (max: number) => `Title is too long (max ${max} characters)`,
+                subtitleTooLong: (max: number) => `Subtitle is too long (max ${max} characters)`,
+                fadeInRange: (max: number) => `Fade-in duration must be between 0 and ${max} ms`,
+                stayRange: (max: number) => `Stay duration must be between 0 and ${max} ms`,
+                fadeOutRange: (max: number) => `Fade-out duration must be between 0 and ${max} ms`,
+                titleInvalidTarget: (target: unknown) => `Unsupported title recipient: ${target}`,
+                tweenDurationRange: (min: number, max: number) => `Transition duration must be between ${min} and ${max} ms`,
+                tweenInvalidEasing: 'Unsupported easing curve type',
+                tweenInvalidBezier: 'Custom easing curve horizontal control points must be between 0 and 1',
+                tweenUnexpectedBezier: 'Curve control points are only allowed when "Custom curve" is selected',
+                tweenBodyEmpty: 'Smooth transition requires at least one property animation block inside',
+                tweenBodyInvalidAction: 'Smooth transition only allows Move to, Resize, Rotate to, Set opacity, or Set color blocks inside',
+                tweenBodyInvalidKind: (kind: string) => `Smooth transition only allows Move to, Resize, Rotate to, Set opacity, or Set color blocks inside (unsupported: ${kind})`,
                 fieldMustBeInteger: (label: string) => `${label} must be an integer (no decimals)`,
             },
         },
@@ -2613,7 +2772,7 @@ export const messages = {
         errors: {
             // WebSocket / protocol layer
             UNAUTHORIZED: 'Sign-in failed — please reopen the editor link',
-            AUTH_FAILED: 'Auth failed — token expired or consumed. Run /canvas edit in-game again',
+            AUTH_FAILED: 'Sign-in link expired or already used — run /canvas edit or /canvas open in-game again',
             FORBIDDEN: 'You don\'t have access to this wall',
             NOT_FOUND: 'This wall can\'t be found — it may have been deleted',
             WALL_NOT_FOUND: 'This wall can\'t be found — it may have been deleted',
@@ -2625,30 +2784,56 @@ export const messages = {
             INTERNAL_ERROR: 'Server hit an error — please try again shortly',
             UNEXPECTED: 'Something unexpected happened — please try again',
             SESSION_CLOSED: 'Editor session closed — refresh to reopen',
+            SESSION_INVALID: 'Editor session has expired — refresh the page or reopen in-game',
             CONNECTION_CLOSED: 'Connection to the server dropped — reconnecting…',
             PROTOCOL_VERSION_UNSUPPORTED: 'Editor version doesn\'t match the server — refresh to update',
             PROTOCOL_MISMATCH_DETAIL: (acceptedV: number, clientV: number) =>
-                `Protocol version mismatch (server accepted_v=${acceptedV}, client=${clientV}); please refresh or update`,
+                `Editor version is incompatible with the server (server protocol v${acceptedV}, editor v${clientV}) — please refresh to update`,
             TIMEOUT: 'Server didn\'t respond in time — please try again',
-            // Lock / collaboration
+            DB_FAILED: 'Server failed to save data — please try again shortly',
+            WRITE_FAILED: 'Server failed to write file — ask an admin to check storage space',
+            SERIALIZE_FAILED: 'Failed to package data — please try again shortly',
+            POOL_EXHAUSTED: 'No free maps left in the server pool — ask an admin to expand the map pool',
+            // Lock / layer / element / brush / timeline
             WALL_LOCKED: 'Wall is locked — unlock it first to edit',
             LAYER_LOCKED: 'Layer is locked — unlock it first to edit',
-            ELEMENT_LOCKED: 'This element is locked',
-            NOT_OWNER: 'Only the wall owner can do that',
-            // Alias
+            LAYER_NOT_FOUND: 'Layer not found — it may have been deleted',
+            LAST_LAYER: 'At least one layer must remain — cannot delete the last layer',
+            INVALID_ELEMENT: 'Element does not exist or its properties are out of range — please refresh and try again',
+            INVALID_STROKE: 'Current brush stroke is no longer valid — release and draw again',
+            STROKE_TOO_LONG: 'This brush stroke is too long — please split it into shorter strokes',
+            TOO_MANY_STROKES: 'Too many active brush strokes — wait a moment and try again',
+            TIMELINE_NOT_FOUND: 'Timeline not found — it may have been deleted',
+            KEYFRAME_NOT_FOUND: 'Keyframe not found — it may have been deleted',
+            INVALID_KEYFRAME_TIME: 'Keyframe time is outside the timeline duration',
+            INVALID_EASING: 'Invalid easing curve setting — please pick again',
+            // Alias / template / import-export / rail
             ALIAS_TAKEN: 'That alias is already taken',
             INVALID_ALIAS_FORMAT: 'Invalid alias — use letters / digits / _ / -, 2-32 chars',
+            INVALID_SLUG: 'Invalid template ID (use lowercase letters, digits, and hyphens, 2–32 chars)',
+            INVALID_PARAM_ID: 'Invalid template parameter ID (must start with a lowercase letter and use only a-z, 0-9, or _)',
+            DUPLICATE_PARAM_ID: 'Duplicate template parameter ID',
+            ROUNDTRIP_FAILED: 'Template self-check failed — please review your parameter fields and try again',
+            IMPORT_ZIP_TOO_LARGE: 'Project file is too large and exceeds the server limit',
+            IMPORT_SPEC_UNSUPPORTED: 'This project was exported by a newer plugin version — please update the server plugin',
+            IMPORT_SIZE_MISMATCH: 'Project size does not match this wall — create a wall of the same size first',
+            IMPORT_BAD_ENTRY: 'Project file contains unexpected entries and could not be imported',
+            IMPORT_MALFORMED: 'Project file is corrupted or malformed and could not be read',
+            IMPORT_INVALID_PARAM: 'Template parameter values are invalid — please check and try again',
+            RUN_NUMBER_TAKEN: 'A run with this number already exists on this line',
             // Upload / quota
-            QUOTA_EXCEEDED: 'You\'ve hit today\'s upload limit — try again tomorrow',
+            QUOTA_EXCEEDED: 'Limit reached — remove some items and try again',
+            DAILY_QUOTA_EXCEEDED: 'You\'ve reached today\'s upload limit — please try again tomorrow',
+            QUOTA_PER_WALL: 'This wall has reached its image limit — remove a few images before adding more',
             QUOTA_EXCEEDED_DISK: 'Server is out of storage — please contact the admin',
-            DISK_QUOTA_EXCEEDED: 'Server is out of storage — please contact the admin',
             FILE_TOO_LARGE: 'That image is too big — please compress it first',
+            DIMENSIONS_EXCEEDED: 'Image dimensions exceed the maximum allowed pixel size — please resize it first',
             UNSUPPORTED_FORMAT: 'Unsupported image format — use PNG / JPEG / WebP',
             DECODE_FAILED: 'Could not decode that image — the file may be corrupted',
-            UPLOAD_REJECTED: 'Upload was rejected',
+            URL_INVALID: 'Invalid image URL — make sure it is a complete http:// or https:// link',
+            URL_FETCH_FAILED: 'Could not download the image from that URL — try uploading a local file instead',
+            UPLOAD_REJECTED: 'Upload was rejected — please check the image and try again',
             PERMISSION_DENIED: 'You don\'t have permission for that',
-            // Validation
-            VALIDATION: 'Some content doesn\'t pass validation — please check and retry',
             BAD_REQUEST: 'Request format isn\'t correct',
             // Variable system
             VARIABLE_NOT_FOUND: 'Variable not found',
@@ -2661,9 +2846,9 @@ export const messages = {
             SCRIPT_QUOTA_EXCEEDED: 'This wall has hit its script limit — delete a few before adding more',
             SCRIPT_ENGINE_UNAVAILABLE: 'Scripting is temporarily unavailable — contact the admin or try later',
             // Reconnect / init
-            RECONNECT_EXHAUSTED: "Server unreachable for a while — refresh the page or run /canvas edit again in-game",
-            TOKEN_MISSING: 'Token missing — refresh the page or run /canvas edit again',
-            MALFORMED_READY: 'Malformed init data (protocol error) — please refresh',
+            RECONNECT_EXHAUSTED: 'Server unreachable for a while — refresh the page or run /canvas edit again in-game',
+            TOKEN_MISSING: 'Missing access link — open the editor link from in-game or run /canvas edit again',
+            MALFORMED_READY: 'Malformed init data — please refresh the page',
             // Fallback
             UNKNOWN: 'Something went wrong — please try again in a moment',
         },
@@ -2719,7 +2904,17 @@ type WidenLiterals<T> = T extends string
         ? (...args: A) => WidenLiterals<R>
         : { readonly [K in keyof T]: WidenLiterals<T[K]> };
 
-export type Messages = WidenLiterals<(typeof messages)['zh']>;
+type StrictMessages = WidenLiterals<(typeof messages)['zh']>;
 
-const _enParityCheck: Messages = messages.en;
+const _enParityCheck: StrictMessages = messages.en;
+const _zhParityCheck: WidenLiterals<(typeof messages)['en']> = messages.zh;
 void _enParityCheck;
+void _zhParityCheck;
+
+export type Messages = Omit<StrictMessages, 'project'> & {
+    readonly project: Omit<StrictMessages['project'], 'warn'> & {
+        readonly warn: StrictMessages['project']['warn'] & {
+            readonly [kind: string]: ((d: string) => string) | undefined;
+        };
+    };
+};

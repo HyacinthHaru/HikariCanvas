@@ -77,6 +77,19 @@ export function useCanvasUpload(opts: {
         if (errorTimer !== null) clearTimeout(errorTimer);
     });
 
+    /** 将上传接口错误响应转为友好本地化提示，屏蔽底层异常细节（如 magic bytes / ImageIO）。 */
+    function resolveUploadError(status: number, body: Record<string, string>, fallback: string): string {
+        const errs = t.value.errors as Record<string, unknown>;
+        const byReason = body.reason ? errs[body.reason] : undefined;
+        if (typeof byReason === 'string') return byReason;
+        const byError = body.error ? errs[body.error] : undefined;
+        if (typeof byError === 'string') return byError;
+        if (status === 413) return t.value.errors.FILE_TOO_LARGE;
+        if (status === 401 || status === 403) return t.value.errors.SESSION_INVALID;
+        if (status === 429) return t.value.errors.QUOTA_EXCEEDED;
+        return fallback;
+    }
+
     async function uploadAndPlace(file: File, dropClientX?: number, dropClientY?: number) {
         if (project.isLocked) { flashError(t.value.image.lockedDenied); return; }
         if (!net.sessionId) { flashError(t.value.image.noSession); return; }
@@ -92,7 +105,7 @@ export function useCanvasUpload(opts: {
             const resp = await fetch('/api/upload', { method: 'POST', body: fd });
             if (!resp.ok) {
                 const body = await resp.json().catch(() => ({} as Record<string, string>));
-                flashError(t.value.image.uploadFailed(resp.status, body.message || body.error || ''));
+                flashError(resolveUploadError(resp.status, body, t.value.errors.UPLOAD_REJECTED));
                 return;
             }
             const result = await resp.json() as { source: string; width: number; height: number; bytes: number };
@@ -117,8 +130,8 @@ export function useCanvasUpload(opts: {
                 type: 'image',
                 props: { x, y, w, h, source: result.source },
             });
-        } catch (e) {
-            flashError(t.value.image.uploadFailed(0, (e as Error).message));
+        } catch {
+            flashError(t.value.common.networkError);
         } finally {
             uploading.value = false;
         }
@@ -247,7 +260,7 @@ export function useCanvasUpload(opts: {
             });
             if (!resp.ok) {
                 const body = await resp.json().catch(() => ({} as Record<string, string>));
-                flashError(t.value.image.uploadFailed(resp.status, body.message || body.error || t.value.image.uploadUrlFailed));
+                flashError(resolveUploadError(resp.status, body, t.value.image.uploadUrlFailed));
                 return;
             }
             const result = await resp.json() as { source: string; width: number; height: number; bytes: number };
@@ -270,8 +283,8 @@ export function useCanvasUpload(opts: {
                 type: 'image',
                 props: { x, y, w, h, source: result.source },
             });
-        } catch (e) {
-            flashError(t.value.image.uploadFailed(0, (e as Error).message));
+        } catch {
+            flashError(t.value.common.networkError);
         } finally {
             uploading.value = false;
         }
