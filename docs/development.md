@@ -86,7 +86,7 @@ cd web && npm run dev
 
 | 任务 | 用途 |
 | --- | --- |
-| `:plugin:shadowJar` | 构建完整可部署插件包（含前端构建与第三方依赖重定位） |
+| `:plugin:shadowJar` | 构建完整可部署插件包（含前端构建与第三方依赖重定位；支持 `-PreleaseVersion=1.0.0` 指定注入版本号） |
 | `:plugin:runServer` | 启动本地 Paper 1.21.11 测试服并挂载最新插件包 |
 | `:plugin:test` | 运行全部后端 JUnit 6 单元测试与渲染快照测试 |
 | `:plugin:compileJava -PpaperApi=26.2.build.+ -PjavaVer=25` | 本地复现 CI 的 Paper 26.2（Java 25）跨版本编译守卫 |
@@ -222,7 +222,7 @@ cd web && npm run dev
 - **`ci.yml`**（推送或提交 PR 到 `main` 时触发）：
   - `build` 任务（Java 21 + Node 22）：依次执行前端依赖安装、`npm run typecheck`、`npm run test`、`npm run build`，以及后端 `./gradlew :plugin:test` 与 `./gradlew :plugin:shadowJar`，并归档构建产物；
   - `compat-26` 任务（Java 25）：针对 Paper 26.2 API 执行编译检查。
-- **`release.yml`**（推送 `v*` 标签时触发）：执行完整前后端类型检查、测试与打包，自动创建 GitHub Release 并上传 `HikariCanvas-<版本>.jar`（标签含 `-` 如 `v1.0.0-rc.1` 时自动标记为预发布）。
+- **`release.yml`**（推送 `v*` 标签如 `v1.0.0` 时触发）：自动从 Git tag 提取版本号并通过 `-PreleaseVersion` 注入构建，在通过 Paper 26.2 编译守卫、前后端全量类型检查与测试、并校验 jar 内 `paper-plugin.yml` 版本一致后，自动创建 GitHub Release 并上传 `HikariCanvas-<版本>.jar`（标签含 `-` 如 `v1.0.0-rc.1` 时自动标记为预发布）。
 
 **提交代码前请确认以下检查全部通过**：
 

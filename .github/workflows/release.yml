@@ -1,8 +1,9 @@
 name: Release
 
 # Tag 触发：`git tag v1.0.0 && git push origin v1.0.0`
-# 自动跑测试 + shadowJar + 创建 GitHub Release + 附 jar。
-# 含 `-`（如 v1.0.0-rc.1）自动标 prerelease=true。
+# 自动从 Git tag 提取版本号注入 Gradle（统一 jar 文件名与内嵌 paper-plugin.yml 版本），
+# 通过 Paper 26.2 编译守卫、前后端全量测试与产物内胆核验后创建 GitHub Release。
+# 含 `-`（如 v1.0.0-rc.1）自动标记为 prerelease。
 
 on:
   push:
@@ -10,15 +11,55 @@ on:
       - 'v*'
 
 permissions:
-  contents: write  # 创建 Release 需要
+  contents: read
 
 jobs:
-  release:
-    name: Build & Release
+  compat-26:
+    name: Compile against Paper 26.x (Java 25)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Java 25 (Temurin)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Compile main against Paper 26.2 API
+        run: ./gradlew :plugin:compileJava -PpaperApi=26.2.build.+ -PjavaVer=25 -PreleaseVersion="${GITHUB_REF_NAME#v}" --no-daemon --stacktrace
+
+  release:
+    name: Build & Release
+    needs: compat-26
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Extract and validate version from tag
+        run: |
+          set -eu
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          if [ -z "${VERSION}" ] || [ "${VERSION}" = "${TAG}" ]; then
+            echo "::error::Expected tag starting with 'v' (e.g. v1.0.0), got '${TAG}'"
+            exit 1
+          fi
+          if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Invalid semantic version '${VERSION}' from tag '${TAG}'"
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Releasing version: ${VERSION}"
+
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -40,9 +81,6 @@ jobs:
 
       - name: Frontend - install deps + typecheck + test + build
         working-directory: web
-        # npm ci fallback 与 ci.yml 对齐：macOS dev 生成的 platform-specific transitive
-        # deps（@rolldown/binding-* / @emnapi 等）不写入 package-lock.json，CI Linux 上
-        # 严格 npm ci 会失败 → fallback 到 npm install 保证 release 跑通。
         run: |
           npm ci || (echo "::warning::npm ci failed (likely platform-specific dep mismatch); falling back to npm install" && npm install --no-audit --no-fund)
           npm run typecheck
@@ -50,27 +88,24 @@ jobs:
           npm run build
 
       - name: Backend - test + shadowJar
-        run: ./gradlew :plugin:test :plugin:shadowJar --no-daemon --stacktrace
+        run: ./gradlew :plugin:test :plugin:shadowJar -PreleaseVersion="${VERSION}" --no-daemon --stacktrace
 
-      - name: Extract version from tag
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-          echo "Releasing version: ${VERSION}"
-
-      - name: Rename artifact
-        # plugin/build.gradle.kts shadowJar.archiveClassifier="" → 输出
-        # HikariCanvas-<gradle-version>.jar；若 tag 版本与 gradle 版本不一致，统一重命名为 tag 版本。
+      - name: Verify jar and embedded paper-plugin.yml version
         run: |
           set -eu
-          src=$(find plugin/build/libs -name 'HikariCanvas-*.jar' ! -name 'HikariCanvas-*-sources.jar' -print -quit)
-          dst="plugin/build/libs/HikariCanvas-${VERSION}.jar"
-          if [ "$src" = "$dst" ]; then
-            echo "Already named correctly: $src"
-          else
-            mv "$src" "$dst"
-            echo "Renamed: $src → $dst"
+          JAR="plugin/build/libs/HikariCanvas-${VERSION}.jar"
+          if [ ! -f "${JAR}" ]; then
+            echo "::error::Expected artifact not found: ${JAR}"
+            ls -la plugin/build/libs/ || true
+            exit 1
           fi
+          EMBEDDED=$(unzip -p "${JAR}" paper-plugin.yml | sed -n "s/^version:[[:space:]]*['\"]*\([^'\"]*\)['\"]*[[:space:]]*$/\1/p" | head -n 1)
+          if [ "${EMBEDDED}" != "${VERSION}" ]; then
+            echo "::error::paper-plugin.yml version mismatch inside ${JAR}: expected '${VERSION}', got '${EMBEDDED}'"
+            unzip -p "${JAR}" paper-plugin.yml | head -n 10 || true
+            exit 1
+          fi
+          echo "Verified ${JAR} -> paper-plugin.yml version='${EMBEDDED}'"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -78,6 +113,5 @@ jobs:
           files: plugin/build/libs/HikariCanvas-${{ env.VERSION }}.jar
           generate_release_notes: true
           draft: false
-          # 含 `-`（如 v1.0.0-rc.1）自动标为 prerelease；正式版不标 prerelease。
           prerelease: ${{ contains(env.VERSION, '-') }}
           fail_on_unmatched_files: true
