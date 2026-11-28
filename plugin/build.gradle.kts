@@ -53,7 +53,7 @@ dependencies {
     implementation("com.github.ben-manes.caffeine:caffeine:3.2.4")
 
     // snapshot 测试台
-    testImplementation("org.junit.jupiter:junit-jupiter:6.1.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     // 测试基建：JavalinTest（HTTP / WS 端到端测试）
     testImplementation("io.javalin:javalin-testtools:7.2.2")
