@@ -2,9 +2,12 @@ plugins {
     java
 }
 
+val paperApi: String = providers.gradleProperty("paperApi").getOrElse("1.21.11-R0.1-SNAPSHOT")
+val javaVer: Int = providers.gradleProperty("javaVer").map(String::toInt).getOrElse(21)
+
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(21))
+        languageVersion.set(JavaLanguageVersion.of(javaVer))
     }
 }
 
@@ -14,17 +17,14 @@ repositories {
 }
 
 dependencies {
-    compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
-    // 仅引用 API 包（在主 plugin jar 里）；编译期可见，运行期由 HikariCanvas 主插件提供。
-    // 主 plugin 的 :jar 被 paperweight 禁用 + shadowJar 跑全套构建慢，且 demo 仅需 API 类符号；
-    // 直接 compileOnly plugin main sourceSet 的 classes 目录（dependsOn compileJava 让 IDE / build 顺序正确）。
-    compileOnly(files(rootProject.layout.projectDirectory.dir("plugin/build/classes/java/main")))
+    compileOnly("io.papermc.paper:paper-api:$paperApi")
+    // 严格只依赖公开 API 变体（HikariCanvas-<version>-api.jar），物理隔离内部实现类
+    compileOnly(project(path = ":plugin", configuration = "apiElementsOnly"))
 }
 
 tasks.compileJava {
-    dependsOn(":plugin:compileJava")
     options.encoding = "UTF-8"
-    options.release.set(21)
+    options.release.set(javaVer)
 }
 
 tasks.jar {

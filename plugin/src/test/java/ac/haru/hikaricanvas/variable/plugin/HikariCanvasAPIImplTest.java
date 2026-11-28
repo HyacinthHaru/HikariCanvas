@@ -96,17 +96,20 @@ class HikariCanvasAPIImplTest {
     }
 
     @Test
-    void registerNamespace_idempotent_sameProviderInstance() {
+    void registerNamespace_idempotent_sameProviderInstanceAndUpdatesMetadata() {
         api.registerNamespace(pluginA, "ns1",
                 new NamespaceInfo("A", "PluginA", "1.0"));
+        api.declareKey(pluginA, "ns1", "score",
+                ac.haru.hikaricanvas.api.VarType.NUMBER, "当前分数");
         PluginNamespaceProvider first = api.providerOf("ns1").orElseThrow();
-        // 同 plugin 重复 register
+        // 同 plugin 重复 register：原地刷新展示元信息并保留已声明键与同一 provider 实例
         api.registerNamespace(pluginA, "ns1",
                 new NamespaceInfo("A2", "PluginA", "1.1"));
         PluginNamespaceProvider second = api.providerOf("ns1").orElseThrow();
-        // computeIfAbsent 保留同 provider 实例（避免 daemon 二次注册时机错乱）
         assertSame(first, second);
-        // daemon.register 第二次抛 IllegalStateException 被吞掉，daemon 仍只一个 entry
+        assertEquals("A2", second.displayName());
+        assertEquals("1.1", second.info().version());
+        assertEquals(1, second.declaredCount());
         assertEquals(1, daemon.registeredProviders().size());
     }
 
@@ -144,6 +147,26 @@ class HikariCanvasAPIImplTest {
                 () -> api.declareKey(pluginB, "ns1", "k",
                         ac.haru.hikaricanvas.api.VarType.STRING, null));
         assertEquals(PluginNamespaceException.Code.NAMESPACE_ACL_DENIED, ex.code());
+    }
+
+    @Test
+    void undeclareKey_removesMetadata_keepsStoredValue() {
+        api.registerNamespace(pluginA, "bedwars",
+                new NamespaceInfo("BedWars", "PluginA", "1.0"));
+        api.declareKey(pluginA, "bedwars", "red_score",
+                ac.haru.hikaricanvas.api.VarType.NUMBER, "红队分数");
+        api.setVariable(pluginA, "bedwars", "red_score", "12", Duration.ofSeconds(30));
+
+        api.undeclareKey(pluginA, "bedwars", "red_score");
+        // 元数据已移除，再次移除幂等静默，但 store 里的变量值保持不变
+        assertEquals(0, api.providerOf("bedwars").orElseThrow().declaredCount());
+        api.undeclareKey(pluginA, "bedwars", "red_score");
+        assertEquals("12", store.get("bedwars/red_score").orElseThrow().currentValue());
+
+        assertThrows(PluginNamespaceException.class,
+                () -> api.undeclareKey(pluginB, "bedwars", "red_score"));
+        assertThrows(IllegalArgumentException.class,
+                () -> api.undeclareKey(pluginA, "bedwars", "bad key!"));
     }
 
     // ──────────────────────────────────────────────────────────
@@ -241,14 +264,56 @@ class HikariCanvasAPIImplTest {
         assertEquals(VariableStore.MIN_TTL_MS, v.ttl());
     }
 
-    /** 负数 TTL 文档没承诺 clamp —— 仍然照常拒（静默 drop + log）。 */
+    /** 负数 TTL 文档没承诺 clamp —— 仍然照常拒（静默 drop + log），含亚毫秒负数。 */
     @Test
     void setVariable_negativeTtl_stillRejected() {
         api.registerNamespace(pluginA, "ns1", new NamespaceInfo("A", "PluginA", "1.0"));
 
         api.setVariable(pluginA, "ns1", "k", "v", Duration.ofMillis(-5));
+        api.setVariable(pluginA, "ns1", "subms_neg", "v", Duration.ofNanos(-1));
 
         assertTrue(store.get("ns1/k").isEmpty());
+        assertTrue(store.get("ns1/subms_neg").isEmpty());
+    }
+
+    /** 亚毫秒正数（如 500µs）不应因 toMillis()==0 误判成永久有效，必须钳制到 100ms。 */
+    @Test
+    void setVariable_subMillisecondPositiveTtl_clampedNotPermanent() {
+        api.registerNamespace(pluginA, "ns1", new NamespaceInfo("A", "PluginA", "1.0"));
+
+        api.setVariable(pluginA, "ns1", "micro", "v", Duration.ofNanos(500_000));
+
+        Variable v = store.get("ns1/micro").orElseThrow();
+        assertEquals(VariableStore.MIN_TTL_MS, v.ttl());
+    }
+
+    /** key 为 null 必须抛 NullPointerException，绝不能拼成 "<ns>/null" 误伤字面名为 "null" 的合法变量。 */
+    @Test
+    void nullKeyOrMapEntry_throwsNpeWithoutClobberingLiteralNullKey() {
+        api.registerNamespace(pluginA, "ns1", new NamespaceInfo("A", "PluginA", "1.0"));
+        api.setVariable(pluginA, "ns1", "null", "keep_me", Duration.ZERO);
+
+        assertThrows(NullPointerException.class,
+                () -> api.declareKey(pluginA, "ns1", null, ac.haru.hikaricanvas.api.VarType.STRING, null));
+        assertThrows(NullPointerException.class,
+                () -> api.undeclareKey(pluginA, "ns1", null));
+        assertThrows(NullPointerException.class,
+                () -> api.setVariable(pluginA, "ns1", null, "bad", Duration.ZERO));
+        assertThrows(NullPointerException.class,
+                () -> api.unsetVariable(pluginA, "ns1", null));
+
+        java.util.HashMap<String, VariableUpdate> nullKeyMap = new java.util.HashMap<>();
+        nullKeyMap.put(null, new VariableUpdate("bad", Duration.ZERO));
+        assertThrows(NullPointerException.class,
+                () -> api.setVariables(pluginA, "ns1", nullKeyMap));
+
+        java.util.HashMap<String, VariableUpdate> nullValMap = new java.util.HashMap<>();
+        nullValMap.put("k", null);
+        assertThrows(NullPointerException.class,
+                () -> api.setVariables(pluginA, "ns1", nullValMap));
+
+        // 字面键名 "null" 完好无损
+        assertEquals("keep_me", store.get("ns1/null").orElseThrow().currentValue());
     }
 
     /** 0 = 永久、≥100ms 原样传（clamp 只碰 0<ttl<100ms 那一段）。 */

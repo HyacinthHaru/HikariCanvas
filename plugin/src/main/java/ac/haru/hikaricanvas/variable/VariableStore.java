@@ -982,14 +982,15 @@ public final class VariableStore {
      */
     private static long validateTtl(@Nullable Duration ttl) {
         if (ttl == null) return -1L;
-        long ms = ttl.toMillis();
-        if (ms < 0) {
+        if (ttl.isNegative()) {
             throw new VariableException(VariableException.Code.TTL_INVALID,
-                    "ttl must be >= 0 (got " + ms + "ms)");
+                    "ttl must be >= 0 (got " + ttl + ")");
         }
-        if (ms > 0 && ms < MIN_TTL_MS) {
+        if (ttl.isZero()) return 0L;
+        long ms = ttl.toMillis();
+        if (ms < MIN_TTL_MS) {
             throw new VariableException(VariableException.Code.TTL_INVALID,
-                    "ttl must be 0 (permanent) or >= " + MIN_TTL_MS + "ms (got " + ms + "ms)");
+                    "ttl must be 0 (permanent) or >= " + MIN_TTL_MS + "ms (got " + ttl + ")");
         }
         return ms;
     }

@@ -255,34 +255,42 @@ public interface HikariCanvasAPI {
      * @param plugin    调用方 Plugin 实例（用于 ACL spoof 防御 + plugin disable 时自动清理）
      * @param namespace 插件 namespace，必须 == 注册时声明的（防 spoof）
      * @param key       变量名，[a-zA-Z0-9_.-]+ ≤ 64
-     * @param value     字符串值（非 null；空串合法，≤ 4096 char）
-     * @param ttl       TTL；null = 沿用变量原 TTL；Duration.ZERO = 永久；>0 必须 ≥ 100ms
+     * @param value     字符串值（非 null；空串合法，≤ 4096 char；渲染期空串走 fallback 链）
+     * @param ttl       TTL；null = 沿用变量原 TTL（首次自动创建时默认永久）；Duration.ZERO = 永久；
+     *                  正数 < 100ms（含亚毫秒正数）自动向上钳制到 100ms；负数记 warning 并丢弃本次写入
+     * @throws NullPointerException     plugin / namespace / key / value 为 null
      * @throws PluginNamespaceException 如果 namespace 未注册或不属于 plugin
      */
     void setVariable(Plugin plugin, String namespace, String key, String value, @Nullable Duration ttl);
     //               ^^^^^^^^^^^^ 第一参数：调用方 Plugin 实例（ACL spoof 防御）
 
     /**
-     * 批量 push（性能：内部 dirty wall merge，比单次循环高效）
+     * 批量 push（单次校验 ACL 与批量限流配额，受影响画板由下游 ProjectionThrottler 窗口合并重绘）
      */
     void setVariables(Plugin plugin, String namespace, Map<String, VariableUpdate> updates);
 
     /**
-     * 注册 namespace。每个插件 onEnable 时调用一次。
+     * 注册 namespace。每个插件 onEnable 时调用一次；同插件重复调用幂等刷新 NamespaceInfo。
      *
+     * @throws NullPointerException       plugin / namespace / info 为 null
      * @throws NamespaceConflictException 已被其他插件注册
      * @throws IllegalArgumentException   namespace 格式非法 / 与保留前缀冲突
      */
     void registerNamespace(Plugin plugin, String namespace, NamespaceInfo info);
 
     /**
-     * 列出当前 namespace 下的所有 key（编辑器自动补全用）。
+     * 声明当前 namespace 下的可用 key（编辑器 Variable Picker 自动补全用）。
      * declareKey 不写值；仅供 Variable Picker 列出可选项。
      */
     void declareKey(Plugin plugin, String namespace, String key, VarType type, @Nullable String hint);
 
     /**
-     * 撤销 variable（如插件停用）
+     * 撤销已声明的 key 元数据（如插件热重载子配置后移除废弃的自动补全项；不删除已写入的变量值）。
+     */
+    void undeclareKey(Plugin plugin, String namespace, String key);
+
+    /**
+     * 撤销 variable（如房间销毁或清理临时状态）
      */
     void unsetVariable(Plugin plugin, String namespace, String key);
 }

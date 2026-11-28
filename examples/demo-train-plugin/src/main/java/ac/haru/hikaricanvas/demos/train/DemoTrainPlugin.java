@@ -9,8 +9,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 /**
  * HikariCanvas Push API 示例：定时器 push 范型。
  *
- * <p>每 5 秒模拟两条线路的下一班车 ETA，通过 {@link HikariCanvasAPI#setVariable} 推送给
- * HikariCanvas；wall 上引用 {@code ${var:demo_train/line1.next_departure}} 等占位符即可
+ * <p>每 5 秒模拟两条线路的下一班车 ETA，通过 {@link HikariCanvasAPI#setVariables} 批量推送给
+ * HikariCanvas；画板上引用 {@code ${var:demo_train/line1.next_departure}} 等占位符即可
  * 在游戏内地图渲染实时倒计时。</p>
  *
  * <h2>关键约定</h2>

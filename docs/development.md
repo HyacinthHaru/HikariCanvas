@@ -87,6 +87,7 @@ cd web && npm run dev
 | 任务 | 用途 |
 | --- | --- |
 | `:plugin:shadowJar` | 构建完整可部署插件包（含前端构建与第三方依赖重定位；支持 `-PreleaseVersion=1.0.0` 指定注入版本号） |
+| `:plugin:apiJar` | 构建仅含 `ac.haru.hikaricanvas.api.*` 的轻量 `HikariCanvas-<版本>-api.jar`（供外部插件编译期依赖） |
 | `:plugin:runServer` | 启动本地 Paper 1.21.11 测试服并挂载最新插件包 |
 | `:plugin:test` | 运行全部后端 JUnit 6 单元测试与渲染快照测试 |
 | `:plugin:compileJava -PpaperApi=26.2.build.+ -PjavaVer=25` | 本地复现 CI 的 Paper 26.2（Java 25）跨版本编译守卫 |
@@ -134,7 +135,7 @@ cd web && npm run dev
    - **唯一前端独占例外**：油漆桶（`web/src/livepaint/`）的区域布尔分割仅在浏览器 Web Worker 中计算，最终产出标准 `PathElement` 路径字符串交由双端常规路径渲染器绘制。
 7. **数据库向前兼容迁移与打包重定位（[数据模型 §6.5](data-model.md)）**
    - SQLite 数据库（HikariCP 连接池保持 `maxPoolSize=4` 以支撑并发只读查询，写冲突靠 `busy_timeout` 兜底）自 `V018` 起严格执行只增不改迁移（由 `MigrationForwardOnlyTest` 守卫），不得篡改已落地的 `V001`–`V017` 脚本。
-   - `shadowJar` 将内嵌的 Jackson、Javalin、Jetty、HikariCP、JDBI、Caffeine 等统一重定位到 `ac.haru.hikaricanvas.shaded.*`；但**严禁重定位 `org.sqlite`**（破坏 JNI 本地库加载）与 **`ac.haru.hikaricanvas.api.*`**（破坏外部插件调用路径）。
+   - `shadowJar` 将内嵌的 Jackson、Javalin、Jetty、Kotlin、Jakarta、HikariCP、JDBI、GeAnTyRef、ASM、Caffeine、SnakeYAML 等统一重定位到 `ac.haru.hikaricanvas.shaded.*`，并排除 Paper 服务端自带的 `org.slf4j:slf4j-api`（直接复用服务端 Log4j2 桥接，**严禁重定位 `org.slf4j`**，否则日志黑洞吞没）；同时**严禁重定位 `org.sqlite`**（破坏 JNI 本地库加载）、**`org.jetbrains.annotations`**（保留公开接口空安全元数据）与 **`ac.haru.hikaricanvas.api.*`**（破坏外部插件调用路径）。
 
 ---
 
@@ -220,9 +221,9 @@ cd web && npm run dev
 
 仓库在 `.github/workflows/` 下包含两条自动化流水线：
 - **`ci.yml`**（推送或提交 PR 到 `main` 时触发）：
-  - `build` 任务（Java 21 + Node 22）：依次执行前端依赖安装、`npm run typecheck`、`npm run test`、`npm run build`，以及后端 `./gradlew :plugin:test` 与 `./gradlew :plugin:shadowJar`，并归档构建产物；
-  - `compat-26` 任务（Java 25）：针对 Paper 26.2 API 执行编译检查。
-- **`release.yml`**（推送 `v*` 标签如 `v1.0.0` 时触发）：自动从 Git tag 提取版本号并通过 `-PreleaseVersion` 注入构建，在通过 Paper 26.2 编译守卫、前后端全量类型检查与测试、并校验 jar 内 `paper-plugin.yml` 版本一致后，自动创建 GitHub Release 并上传 `HikariCanvas-<版本>.jar`（标签含 `-` 如 `v1.0.0-rc.1` 时自动标记为预发布）。
+  - `build` 任务（Java 21 + Node 22）：依次执行前端依赖安装、`npm run typecheck`、`npm run test`、`npm run build`，以及后端 `./gradlew :plugin:test`、`./gradlew :plugin:shadowJar :plugin:apiJar` 与两个 `examples/*` 示例插件编译打包，并归档构建产物；
+  - `compat-26` 任务（Java 25）：针对 Paper 26.2 API 执行主插件与示例插件的跨版本编译检查。
+- **`release.yml`**（推送 `v*` 标签如 `v1.0.0` 时触发）：自动从 Git tag 提取版本号并通过 `-PreleaseVersion` 注入构建，在通过 Paper 26.2 编译守卫、前后端全量类型检查与测试、并校验主插件包内 `paper-plugin.yml` 版本及轻量 `-api.jar` 内容结构后，自动创建 GitHub Release 并同时上传 `HikariCanvas-<版本>.jar` 与 `HikariCanvas-<版本>-api.jar`（标签含 `-` 如 `v1.0.0-rc.1` 时自动标记为预发布）。
 
 **提交代码前请确认以下检查全部通过**：
 

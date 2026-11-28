@@ -13,12 +13,6 @@ dependencies:
       required: true
       join-classpath: true
 
-commands:
-  demoscore:
-    description: 调整 demo 比分（add/reset/set）
-    usage: /demoscore <add|reset|set> [team] [value]
-    permission: hikari.demo.score
-
 permissions:
   hikari.demo.score:
     description: Operate the DemoScorePlugin scoreboard

@@ -32,8 +32,8 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Compile main against Paper 26.2 API
-        run: ./gradlew :plugin:compileJava -PpaperApi=26.2.build.+ -PjavaVer=25 -PreleaseVersion="${GITHUB_REF_NAME#v}" --no-daemon --stacktrace
+      - name: Compile main and examples against Paper 26.2 API
+        run: ./gradlew :plugin:compileJava :examples:demo-train-plugin:compileJava :examples:demo-score-plugin:compileJava -PpaperApi=26.2.build.+ -PjavaVer=25 -PreleaseVersion="${GITHUB_REF_NAME#v}" --no-daemon --stacktrace
 
   release:
     name: Build & Release
@@ -87,15 +87,16 @@ jobs:
           npm run test
           npm run build
 
-      - name: Backend - test + shadowJar
-        run: ./gradlew :plugin:test :plugin:shadowJar -PreleaseVersion="${VERSION}" --no-daemon --stacktrace
+      - name: Backend - test + shadowJar + apiJar + examples
+        run: ./gradlew :plugin:test :plugin:shadowJar :plugin:apiJar :examples:demo-train-plugin:jar :examples:demo-score-plugin:jar -PreleaseVersion="${VERSION}" --no-daemon --stacktrace
 
-      - name: Verify jar and embedded paper-plugin.yml version
+      - name: Verify jars and embedded metadata
         run: |
           set -eu
           JAR="plugin/build/libs/HikariCanvas-${VERSION}.jar"
-          if [ ! -f "${JAR}" ]; then
-            echo "::error::Expected artifact not found: ${JAR}"
+          API_JAR="plugin/build/libs/HikariCanvas-${VERSION}-api.jar"
+          if [ ! -f "${JAR}" ] || [ ! -f "${API_JAR}" ]; then
+            echo "::error::Expected release artifacts not found (${JAR} / ${API_JAR})"
             ls -la plugin/build/libs/ || true
             exit 1
           fi
@@ -105,12 +106,23 @@ jobs:
             unzip -p "${JAR}" paper-plugin.yml | head -n 10 || true
             exit 1
           fi
-          echo "Verified ${JAR} -> paper-plugin.yml version='${EMBEDDED}'"
+          if ! unzip -l "${API_JAR}" | grep -q "ac/haru/hikaricanvas/api/HikariCanvasAPI.class"; then
+            echo "::error::HikariCanvasAPI.class missing inside ${API_JAR}"
+            unzip -l "${API_JAR}" || true
+            exit 1
+          fi
+          if unzip -l "${API_JAR}" | grep -q "paper-plugin.yml"; then
+            echo "::error::paper-plugin.yml must not be bundled inside ${API_JAR}"
+            exit 1
+          fi
+          echo "Verified ${JAR} (version='${EMBEDDED}') and ${API_JAR}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: plugin/build/libs/HikariCanvas-${{ env.VERSION }}.jar
+          files: |
+            plugin/build/libs/HikariCanvas-${{ env.VERSION }}.jar
+            plugin/build/libs/HikariCanvas-${{ env.VERSION }}-api.jar
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(env.VERSION, '-') }}

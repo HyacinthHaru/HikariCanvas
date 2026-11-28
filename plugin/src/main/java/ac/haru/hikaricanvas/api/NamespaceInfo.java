@@ -1,20 +1,22 @@
 package ac.haru.hikaricanvas.api;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.Objects;
 
 /**
- * 外部插件向 {@link HikariCanvasAPI#registerNamespace} 声明 namespace 时附带的元信息。
+ * 外部插件向 {@link HikariCanvasAPI#registerNamespace} 注册命名空间时附带的展示元信息。
  *
- * <p>用于编辑器 UI 显示与审计日志——HikariCanvas 自身行为不依赖这些字段。</p>
+ * <p>用于网页编辑器变量选择器分组标题与审计日志展示。</p>
  *
- * @param displayName 人类可读的 namespace 名称（如 {@code "BedWars 比赛数据"}），编辑器 Picker 显示
- * @param pluginName  调用插件名（约定与 {@code plugin.getName()} 一致；编辑器 / 审计日志显示）
- * @param version     调用插件版本字符串（无格式约束）
+ * @param displayName 可读分组名称（如 {@code "起床战争比赛数据"}），显示在编辑器变量选择器中
+ * @param pluginName  调用方插件名称（建议与 {@code plugin.getPluginMeta().getName()} 一致）
+ * @param version     调用方插件版本字符串
  */
 public record NamespaceInfo(
-        String displayName,
-        String pluginName,
-        String version
+        @NotNull String displayName,
+        @NotNull String pluginName,
+        @NotNull String version
 ) {
     public NamespaceInfo {
         Objects.requireNonNull(displayName, "displayName");

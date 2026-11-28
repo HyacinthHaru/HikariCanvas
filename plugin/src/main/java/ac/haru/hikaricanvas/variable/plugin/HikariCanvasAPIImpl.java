@@ -121,20 +121,30 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     @Override
     public void registerNamespace(Plugin plugin, String namespace, NamespaceInfo info) {
         Objects.requireNonNull(plugin, "plugin");
-        Objects.requireNonNull(namespace, "namespace");  // 对齐 api.md §8.1 契约
+        Objects.requireNonNull(namespace, "namespace");
+        Objects.requireNonNull(info, "info");
         // PluginNamespaceRegistry.register 内部校验 namespace 格式 + 保留前缀 + ACL；
         // 抛 NamespaceConflictException / IllegalArgumentException → 直接传给调用方。
         registry.register(plugin, namespace, info);
 
-        // 建立 PluginNamespaceProvider + register 到 daemon（让 declaredKeys 接变量元数据端点）
-        PluginNamespaceProvider provider = providers.computeIfAbsent(namespace,
-                ns -> new PluginNamespaceProvider(ns, info));
-        try {
-            daemon.register(provider);
-        } catch (IllegalStateException e) {
-            // 重复 register（同 plugin 二次注册或 daemon 已 shutdown）— 幂等 OK
-            log.fine("PluginNamespaceProvider register skipped for '" + namespace
-                    + "': " + e.getMessage());
+        // 建立或原地刷新 PluginNamespaceProvider，并注册到 daemon（让 declaredKeys 接变量元数据端点）
+        boolean[] created = { false };
+        PluginNamespaceProvider provider = providers.compute(namespace, (ns, existing) -> {
+            if (existing == null) {
+                created[0] = true;
+                return new PluginNamespaceProvider(ns, info);
+            }
+            existing.updateInfo(info);
+            return existing;
+        });
+        if (created[0]) {
+            try {
+                daemon.register(provider);
+            } catch (IllegalStateException e) {
+                // daemon 已在关停或并发重复注册 — 安全跳过
+                log.fine("PluginNamespaceProvider register skipped for '" + namespace
+                        + "': " + e.getMessage());
+            }
         }
         log.fine("[HikariCanvas] plugin '" + plugin.getName()
                 + "' registered namespace '" + namespace + "'");
@@ -145,6 +155,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
                            VarType apiType, @Nullable String hint) {
         Objects.requireNonNull(plugin, "plugin");
         Objects.requireNonNull(namespace, "namespace");
+        Objects.requireNonNull(key, "key");
         Objects.requireNonNull(apiType, "type");
         checkAcl(plugin, namespace);
         // key 格式校验（对齐 VariableStore.validateKey）。上游报错优于让坏 key
@@ -163,13 +174,28 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     }
 
     @Override
+    public void undeclareKey(Plugin plugin, String namespace, String key) {
+        Objects.requireNonNull(plugin, "plugin");
+        Objects.requireNonNull(namespace, "namespace");
+        Objects.requireNonNull(key, "key");
+        checkAcl(plugin, namespace);
+        validateKeyFormat(key);
+
+        PluginNamespaceProvider provider = providers.get(namespace);
+        if (provider != null) {
+            provider.removeKey(key);
+        }
+    }
+
+    @Override
     public void setVariable(Plugin plugin, String namespace, String key, String value,
                             @Nullable Duration ttl) {
         Objects.requireNonNull(plugin, "plugin");
         Objects.requireNonNull(namespace, "namespace");
+        Objects.requireNonNull(key, "key");
         Objects.requireNonNull(value, "value");
         checkAcl(plugin, namespace);
-        // 限流检查（dynamic-data.md §10.2）。limiter 内部已 log；这里 drop。
+        // 限流检查（dynamic-data.md §11.2）。limiter 内部已 log；这里 drop。
         if (!limiter.tryAcquire(plugin)) {
             return;
         }
@@ -193,6 +219,10 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
         Objects.requireNonNull(plugin, "plugin");
         Objects.requireNonNull(namespace, "namespace");
         Objects.requireNonNull(updates, "updates");
+        for (Map.Entry<String, VariableUpdate> entry : updates.entrySet()) {
+            Objects.requireNonNull(entry.getKey(), "key");
+            Objects.requireNonNull(entry.getValue(), "update");
+        }
         checkAcl(plugin, namespace);
         if (updates.isEmpty()) return;
         // 批量计费 — 一次性占 updates.size() token，要么全成要么全 reject。
@@ -203,7 +233,6 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
         // 不调 setVariable 是因为它会重复做 ACL 检查 —— 抽出 doSetVariable 复用。
         for (Map.Entry<String, VariableUpdate> e : updates.entrySet()) {
             VariableUpdate upd = e.getValue();
-            if (upd == null) continue;
             try {
                 doSetVariable(namespace, e.getKey(), upd.value(), upd.ttl(), plugin.getName());
             } catch (VariableException ex) {
@@ -222,6 +251,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     public void unsetVariable(Plugin plugin, String namespace, String key) {
         Objects.requireNonNull(plugin, "plugin");
         Objects.requireNonNull(namespace, "namespace");
+        Objects.requireNonNull(key, "key");
         checkAcl(plugin, namespace);
         try {
             String fullName = namespace + "/" + key;
@@ -355,9 +385,11 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
      */
     private @Nullable Duration clampTtl(@Nullable Duration ttl, String namespace, String key) {
         if (ttl == null) return null;
+        if (ttl.isNegative()) return ttl;
+        if (ttl.isZero()) return Duration.ZERO;
         long ms = ttl.toMillis();
-        if (ms <= 0 || ms >= VariableStore.MIN_TTL_MS) return ttl;
-        log.fine("[HikariCanvas] ttl " + ms + "ms clamped to "
+        if (ms >= VariableStore.MIN_TTL_MS) return ttl;
+        log.fine("[HikariCanvas] ttl " + ttl + " clamped to "
                 + VariableStore.MIN_TTL_MS + "ms (ns=" + namespace + " key=" + key + ")");
         return Duration.ofMillis(VariableStore.MIN_TTL_MS);
     }
@@ -371,6 +403,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
      */
     private void doSetVariable(String namespace, String key, String value,
                                @Nullable Duration rawTtl, String sourcePluginName) {
+        Objects.requireNonNull(key, "key");
         Objects.requireNonNull(value, "value");
         Duration ttl = clampTtl(rawTtl, namespace, key);
         String fullName = namespace + "/" + key;

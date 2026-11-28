@@ -36,14 +36,25 @@
 
 ### 2.1 配置 Gradle 依赖与 `paper-plugin.yml`
 
+每次 GitHub Release 除了完整插件包外，还会同步附带一枚仅含 `ac.haru.hikaricanvas.api.*` 公开接口的轻量编译包 **`HikariCanvas-<版本>-api.jar`**（体积约 6 KB，保留了完整方法参数名，不暴露任何内部实现类）。外部插件开发推荐直接引用这枚 `-api.jar`：
+
 `build.gradle.kts`：
 
 ```kotlin
+repositories {
+    mavenCentral()
+    maven("https://repo.papermc.io/repository/maven-public/")
+}
+
 dependencies {
-    // 将下载的 HikariCanvas jar 放入项目的 libs/ 目录仅作编译期引用（切勿打包进你的插件 jar）
-    compileOnly(files("libs/HikariCanvas-1.0.0.jar"))
+    compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
+    // 从 GitHub Releases 下载轻量的 -api.jar 放入 libs/ 仅作编译期引用（切勿打包进你的插件 jar）
+    compileOnly(files("libs/HikariCanvas-1.0.0-api.jar"))
 }
 ```
+
+> 如果你的项目使用 GitHub Actions 自动构建，也可以在构建前用一行命令拉取该编译包，无需把二进制文件提交进仓库：
+> `curl -fsSL https://github.com/HyacinthHaru/HikariCanvas/releases/download/v1.0.0/HikariCanvas-1.0.0-api.jar -o libs/HikariCanvas-1.0.0-api.jar`
 
 `paper-plugin.yml`：
 
@@ -160,8 +171,8 @@ void registerNamespace(Plugin plugin, String namespace, NamespaceInfo info);
 | `namespace` | `String` | 命名空间标识，须匹配 `^[a-zA-Z_][a-zA-Z0-9_]{0,31}$`（字母或下划线开头，1–32 位） |
 | `info` | `NamespaceInfo` | 展示名称、插件名与版本号（均不可为空） |
 
-- **异常**：格式不合法或撞上系统保留命名空间时抛 `IllegalArgumentException`；已被其他插件占用时抛 `NamespaceConflictException`。
-- **幂等性**：同一插件实例重复注册同一命名空间会更新 `info` 元信息，保留首次注册时间。
+- **异常**：`plugin`、`namespace` 或 `info` 为 `null` 时抛 `NullPointerException`；格式不合法或撞上系统保留命名空间时抛 `IllegalArgumentException`；已被其他插件占用时抛 `NamespaceConflictException`。
+- **幂等性**：同一插件实例重复注册同一命名空间会原地刷新 `info` 元信息（网页编辑器变量选择器的分组标题同步更新），并保留首次注册时间与已声明的键名。
 
 ### 3.2 `declareKey` —— 声明变量元数据
 
@@ -178,9 +189,19 @@ void declareKey(Plugin plugin, String namespace, String key, VarType type, @Null
 | `hint` | `@Nullable String` | 显示在编辑器变量选择器旁的说明文字（可传 `null`） |
 
 - **说明**：`declareKey` 只登记键名和提示信息供网页编辑器补全展示，**不会写入变量值**；即使你还没调用过 `setVariable`，玩家也能先在编辑器里选到这个键并排好版。
-- **异常**：未注册命名空间或跨插件调用时抛 `PluginNamespaceException`。
+- **异常**：必填参数（除 `hint` 外）为 `null` 时抛 `NullPointerException`；键名格式不合法时抛 `IllegalArgumentException`；未注册命名空间或跨插件调用时抛 `PluginNamespaceException`。
 
-### 3.3 `setVariable` —— 推送单个变量值
+### 3.3 `undeclareKey` —— 撤销变量元数据声明
+
+```java
+void undeclareKey(Plugin plugin, String namespace, String key);
+```
+
+移除先前通过 `declareKey` 登记的编辑器补全项（例如你的插件在热重载自身配置后删除了某个旧房间或旧指标的键名）。该操作**只移除选择器补全条目，不会删除已写入的变量值**（如需同时清除变量值，请一并调用 `unsetVariable`）；若该键原本未声明则静默返回。
+
+- **异常**：参数为 `null` 时抛 `NullPointerException`；键名格式不合法时抛 `IllegalArgumentException`；未注册命名空间或跨插件调用时抛 `PluginNamespaceException`。
+
+### 3.4 `setVariable` —— 推送单个变量值
 
 ```java
 void setVariable(Plugin plugin, String namespace, String key, String value, @Nullable Duration ttl);
@@ -190,11 +211,11 @@ void setVariable(Plugin plugin, String namespace, String key, String value, @Nul
 | --- | --- | --- |
 | `plugin` | `Plugin` | 归属插件实例 |
 | `namespace` | `String` | 已注册的命名空间 |
-| `key` | `String` | 变量键名（未提前 `declareKey` 也可直接写入，默认按 `STRING` 处理） |
-| `value` | `String` | 变量字符串值（不可为 `null`，允许空字符串 `""`，最长 **4096** 字符） |
-| `ttl` | `@Nullable Duration` | 有效期：`Duration.ZERO` 表示永久有效；传 `null` 表示沿用该变量上一次的 TTL；正数最小 `100ms`（低于 `100ms` 自动按 `100ms` 计） |
+| `key` | `String` | 变量键名（不可为 `null`；未提前 `declareKey` 也可直接写入，默认按 `STRING` 处理） |
+| `value` | `String` | 变量字符串值（不可为 `null`，最长 **4096** 字符；允许传空字符串 `""`，渲染期空字符串会继续走兜底链显示） |
+| `ttl` | `@Nullable Duration` | 有效期：`Duration.ZERO` 表示永久有效；传 `null` 表示沿用该变量上一次的 TTL（首次自动创建时默认永久）；正数最小 `100ms`（低于 `100ms` 含亚毫秒正数会自动按 `100ms` 计） |
 
-- **异常与容错**：仅在命名空间未注册或越权时抛 `PluginNamespaceException`（及 `value == null` 时抛 `NullPointerException`）；触发限流、值超长 4096 字符或键名格式不合法时，内部记录警告日志并静默丢弃本次写入，不中断调用方业务。
+- **异常与容错**：`plugin`、`namespace`、`key` 或 `value` 为 `null` 时抛 `NullPointerException`；命名空间未注册或越权时抛 `PluginNamespaceException`。触发限流、值超长 4096 字符、负 TTL 或键名格式不合法时，内部记录警告日志并静默丢弃本次写入，不中断调用方业务。
 
 ```java
 // 5 分钟有效期
@@ -207,13 +228,13 @@ canvas.setVariable(this, "bedwars", "match_a.mvp", "Steve", Duration.ZERO);
 canvas.setVariable(this, "bedwars", "match_a.red_score", "6", null);
 ```
 
-### 3.4 `setVariables` —— 批量推送多个变量
+### 3.5 `setVariables` —— 批量推送多个变量
 
 ```java
 void setVariables(Plugin plugin, String namespace, Map<String, VariableUpdate> updates);
 ```
 
-需要同时更新同一命名空间下的多个键时，优先使用 `setVariables` 而非循环调用 `setVariable`：内部只做一次权限校验，并将受影响的画板一次性合并标记重绘。限流配额按 `updates.size()` 条数扣减。
+需要同时更新同一命名空间下的多个键时，优先使用 `setVariables` 而非循环调用 `setVariable`：内部统一执行一次命名空间权限校验与批量限流配额扣减（按 `updates.size()` 条数扣减），受影响的画板在后台投影节流器的刷新窗口内自动合并重绘。`updates` 本身及其中的键和 `VariableUpdate` 值均不可为 `null`。
 
 ```java
 import ac.haru.hikaricanvas.api.VariableUpdate;
@@ -226,13 +247,13 @@ canvas.setVariables(this, "bedwars", Map.of(
 ));
 ```
 
-### 3.5 `unsetVariable` —— 移除单个变量
+### 3.6 `unsetVariable` —— 移除单个变量
 
 ```java
 void unsetVariable(Plugin plugin, String namespace, String key);
 ```
 
-移除单个变量值（保留命名空间本身）。移除后，画板上引用该变量的文字会按兜底顺序回退（见 [6.2 节](#62-缺值兜底顺序)）；若变量原本不存在则静默返回。
+移除单个变量值（保留命名空间与已声明的元数据）。移除后，画板上引用该变量的文字会按兜底顺序回退（见 [6.2 节](#62-缺值兜底顺序)）；若变量原本不存在则静默返回（`plugin`、`namespace` 或 `key` 为 `null` 时抛 `NullPointerException`）。
 
 ---
 
@@ -330,7 +351,8 @@ dynamic:
 
 | 异常类型 | 触发原因 | 处理方式 |
 | --- | --- | --- |
-| `IllegalArgumentException` | 命名空间格式非法、使用了保留命名空间，或必填参数为空 | 检查并修正代码中的命名与传参 |
+| `NullPointerException` | 任何未标注 `@Nullable` 的必填参数（或批量更新 Map 内的键与值）传入了 `null` | 检查调用方传参，确保非空 |
+| `IllegalArgumentException` | 命名空间格式非法、使用了保留命名空间，或 `declareKey` / `undeclareKey` 的键名格式非法 | 检查并修正代码中的命名规范 |
 | `NamespaceConflictException` | 命名空间已被服内另一款插件注册 | 更换命名空间名称（建议加上插件前缀） |
 | `PluginNamespaceException`（`NAMESPACE_NOT_REGISTERED`） | 尚未调用 `registerNamespace` 就直接声明键或写值 | 确保 `onEnable` 先完成命名空间注册 |
 | `PluginNamespaceException`（`NAMESPACE_ACL_DENIED`） | 尝试操作其他插件注册的命名空间 | 仅操作本插件自己注册的命名空间 |

@@ -7,6 +7,7 @@ import ac.haru.hikaricanvas.variable.provider.VariableProvider;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -26,18 +27,23 @@ import java.util.concurrent.ConcurrentHashMap;
  * declaredKeys 返不可变快照——读多写少场景下足以。多 plugin push 不经过本类
  * （直接 store.setValue），本类只承担 key 元信息表。</p>
  *
- * <p>详见 {@code docs/dynamic-data.md §4 / §7}。</p>
+ * <p>详见 {@code docs/dynamic-data.md §5 / §8}。</p>
  */
 public final class PluginNamespaceProvider implements VariableProvider {
 
     private final String namespace;
-    private final NamespaceInfo info;
+    private volatile NamespaceInfo info;
     /** key → DeclaredKey（含 type / description / ttlMs）。 */
     private final ConcurrentHashMap<String, DeclaredKey> declared = new ConcurrentHashMap<>();
 
     public PluginNamespaceProvider(String namespace, NamespaceInfo info) {
-        this.namespace = namespace;
-        this.info = info;
+        this.namespace = Objects.requireNonNull(namespace, "namespace");
+        this.info = Objects.requireNonNull(info, "info");
+    }
+
+    /** 同插件幂等重注册时原地刷新展示元信息（保留已声明的 key 集合与 daemon 注册实例）。 */
+    public void updateInfo(NamespaceInfo info) {
+        this.info = Objects.requireNonNull(info, "info");
     }
 
     @Override public String namespace() { return namespace; }

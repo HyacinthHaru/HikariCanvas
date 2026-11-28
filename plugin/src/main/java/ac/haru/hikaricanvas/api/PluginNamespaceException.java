@@ -1,32 +1,39 @@
 package ac.haru.hikaricanvas.api;
 
+import org.jetbrains.annotations.NotNull;
+
+import java.io.Serial;
+import java.util.Objects;
+
 /**
- * {@link HikariCanvasAPI#setVariable} / {@link HikariCanvasAPI#declareKey} /
- * {@link HikariCanvasAPI#unsetVariable} 抛：namespace 不存在或 ACL 拒绝。
+ * 调用 {@link HikariCanvasAPI} 操作变量或元数据时抛出的命名空间归属权异常：命名空间尚未注册或不属于当前插件。
  */
 public final class PluginNamespaceException extends RuntimeException {
 
+    @Serial
+    private static final long serialVersionUID = 1L;
+
     public enum Code {
-        /** namespace 未注册过 → 调用方必须先 {@link HikariCanvasAPI#registerNamespace}。 */
+        /** 命名空间尚未注册，调用方须先执行 {@link HikariCanvasAPI#registerNamespace}。 */
         NAMESPACE_NOT_REGISTERED,
-        /** namespace 已存在但属于其他 plugin（spoof 防御）。 */
+        /** 命名空间属于其他插件实例（防跨插件冒充覆写）。 */
         NAMESPACE_ACL_DENIED
     }
 
     private final Code code;
     private final String namespace;
 
-    public PluginNamespaceException(Code code, String namespace, String message) {
-        super(message);
-        this.code = code;
-        this.namespace = namespace;
+    public PluginNamespaceException(@NotNull Code code, @NotNull String namespace, @NotNull String message) {
+        super(Objects.requireNonNull(message, "message"));
+        this.code = Objects.requireNonNull(code, "code");
+        this.namespace = Objects.requireNonNull(namespace, "namespace");
     }
 
-    public Code code() {
+    public @NotNull Code code() {
         return code;
     }
 
-    public String namespace() {
+    public @NotNull String namespace() {
         return namespace;
     }
 }

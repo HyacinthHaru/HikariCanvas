@@ -61,11 +61,11 @@ jobs:
       - name: Backend - test (:plugin:test)
         run: ./gradlew :plugin:test --no-daemon --stacktrace
 
-      - name: Backend - shadowJar
+      - name: Backend - shadowJar + apiJar + examples
         # 链路自动跑：compileJava → processResources（含 generatePalette + downloadFonts
-        # + copyWebToResources）→ shadowJar relocate 7 个内嵌依赖
-        # → ac.haru.hikaricanvas.shaded.*；输出 plugin/build/libs/HikariCanvas-<版本>.jar
-        run: ./gradlew :plugin:shadowJar --no-daemon --stacktrace
+        # + copyWebToResources）→ shadowJar 重定位内嵌第三方依赖（排除服务端自带 slf4j-api）
+        # → 输出 HikariCanvas-<版本>.jar 与 HikariCanvas-<版本>-api.jar，并验证两个官方示例插件编译打包。
+        run: ./gradlew :plugin:shadowJar :plugin:apiJar :examples:demo-train-plugin:jar :examples:demo-score-plugin:jar --no-daemon --stacktrace
 
       - name: Upload jar artifact
         uses: actions/upload-artifact@v7
@@ -106,8 +106,8 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Compile main against Paper 26.2 API
+      - name: Compile main and examples against Paper 26.2 API
         # paperApi=26.2.build.+ 追最新 26.2 dev bundle（26.2 目前仍在 beta，无 -stable；.+ 通配 beta）；
         # javaVer=25 让 toolchain + options.release 都切 25（26.x paper-api 是 Java 25 字节码，无法 --release 21 编译）。
         # deprecation note（如 World#getName）只 warning 不 fail；真用了已移除 API 才会红。
-        run: ./gradlew :plugin:compileJava -PpaperApi=26.2.build.+ -PjavaVer=25 --no-daemon --stacktrace
+        run: ./gradlew :plugin:compileJava :examples:demo-train-plugin:compileJava :examples:demo-score-plugin:compileJava -PpaperApi=26.2.build.+ -PjavaVer=25 --no-daemon --stacktrace

@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.bundling.Jar
 import java.io.File
 import java.net.URI
 import java.nio.file.Files
@@ -713,9 +714,36 @@ tasks.processResources {
     }
 }
 
+// 仅打包 ac.haru.hikaricanvas.api.* 的轻量编译接口包（~6 KB）：
+// 直接从 compileJava 取字节码，不挂 processResources（不触发前端构建与字体下载），
+// 也不含 paper-plugin.yml（防止服主误把 -api.jar 放进 plugins/ 引发同名插件冲突）。
+val apiJar = tasks.register<Jar>("apiJar") {
+    group = "build"
+    description = "构建仅含公开 API 的 HikariCanvas-<版本>-api.jar（供外部插件编译期引用）"
+    archiveBaseName.set("HikariCanvas")
+    archiveClassifier.set("api")
+    from(tasks.compileJava) {
+        include("ac/haru/hikaricanvas/api/**")
+    }
+    from(rootProject.layout.projectDirectory.file("LICENSE")) {
+        into("META-INF")
+    }
+}
+
+val apiElementsOnly = configurations.create("apiElementsOnly") {
+    isCanBeConsumed = true
+    isCanBeResolved = false
+}
+
+artifacts {
+    add(apiElementsOnly.name, apiJar)
+}
+
 tasks {
     compileJava {
         options.encoding = "UTF-8"
+        // 保留公开接口方法参数名（MethodParameters 属性），避免外部插件引用 -api.jar 时 IDE 显示 arg0/arg1
+        options.compilerArgs.add("-parameters")
         // 生产 jar 锁 Java 21 字节码（跑 1.21.11 的 Java 21 服 + 向上兼容 26.x 的 Java 25 服）。
         // CI 双版本守卫用 -PjavaVer=25 对 26.x API 编译（26.x paper-api 是 Java 25，无法 --release 21）。
         options.release = javaVer
@@ -729,32 +757,42 @@ tasks {
         archiveBaseName.set("HikariCanvas")
         archiveClassifier.set("")
         // 把所有 runtime 内嵌 lib relocate 到 ac.haru.hikaricanvas.shaded.*，防止
-        // 与生产服其它插件（多半也带 jackson 等）发生类加载冲突。
+        // 与生产服其它插件（尤其是通过 join-classpath 或 GlobalPluginClassLoaderGroup 共享类空间的插件）发生类冲突。
         //
         // 注意事项：
+        // - Paper 1.21.11 与 26.x 运行时自带 slf4j-api 2.0.x + Log4j2 桥接：这里直接排除 slf4j-api 复用服务端实现；
+        //   切勿 relocate org.slf4j，否则 Javalin / Jetty / HikariCP 的日志 SPI 会与服务端断开并落入 NOPLogger 黑洞
         // - org.sqlite 含 JNI native lib（路径硬编码），relocate 会导致 native load 失败 → 不动
+        // - org.jetbrains.annotations 保留原包名，确保 HikariCanvasAPI 字节码上的 @NotNull/@Nullable 元数据完整
         // - PacketEvents 是 compileOnly + 必装插件依赖（paper-plugin.yml），不进 shadow jar：
         //   它是 GPL-3.0，打包会污染本项目 MIT 授权；服主单独装 PacketEvents 插件（它自负 init/terminate）
-        // - mergeServiceFiles 必须保留：jackson modules / jdbi plugins / jetty 都靠
+        // - mergeServiceFiles 必须保留：jackson modules / jdbi plugins / jetty / servlet 都靠
         //   META-INF/services 走 ServiceLoader 注册
+        dependencies {
+            exclude(dependency("org.slf4j:slf4j-api"))
+        }
         relocate("com.fasterxml.jackson", "ac.haru.hikaricanvas.shaded.jackson")
         relocate("com.github.benmanes.caffeine", "ac.haru.hikaricanvas.shaded.caffeine")
         relocate("org.jdbi", "ac.haru.hikaricanvas.shaded.jdbi")
+        relocate("io.leangen.geantyref", "ac.haru.hikaricanvas.shaded.geantyref")
         relocate("com.zaxxer.hikari", "ac.haru.hikaricanvas.shaded.hikari")
         relocate("io.javalin", "ac.haru.hikaricanvas.shaded.javalin")
+        relocate("kotlin", "ac.haru.hikaricanvas.shaded.kotlin")
         relocate("org.eclipse.jetty", "ac.haru.hikaricanvas.shaded.jetty")
+        relocate("jakarta", "ac.haru.hikaricanvas.shaded.jakarta")
+        relocate("org.objectweb.asm", "ac.haru.hikaricanvas.shaded.asm")
         // jackson-dataformat-yaml 间接依赖 SnakeYAML；同步 relocate 避免半 shade
         relocate("org.yaml.snakeyaml", "ac.haru.hikaricanvas.shaded.snakeyaml")
         // ac.haru.hikaricanvas.api.* 是公开 API 包，外部插件 import 路径不可变。
-        // relocate 仅对显式列出的第三方包 (com.fasterxml.jackson 等) 生效，不会自动 prefix-match
-        // 项目自身的 ac.haru.hikaricanvas.*——所以 api 包天然安全。新增 relocate 时务必只列第三方包，
-        // 不要加 relocate("ac.haru.hikaricanvas", ...)，否则 ServicesManager.load(HikariCanvasAPI.class)
-        // 在外部插件侧立即崩。详见 docs/api.md §2。
+        // relocate 仅对显式列出的第三方包生效，不会触碰项目自身的 ac.haru.hikaricanvas.*。
+        // 新增 relocate 时务必只列第三方包，严禁 relocate("ac.haru.hikaricanvas", ...)，
+        // 否则 ServicesManager.load(HikariCanvasAPI.class) 在外部插件侧立即失效。详见 docs/api.md §2。
         mergeServiceFiles()
     }
 
     assemble {
         dependsOn(shadowJar)
+        dependsOn(apiJar)
     }
 
     runServer {

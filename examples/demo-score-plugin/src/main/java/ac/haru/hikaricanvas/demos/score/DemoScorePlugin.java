@@ -4,18 +4,19 @@ import ac.haru.hikaricanvas.api.HikariCanvasAPI;
 import ac.haru.hikaricanvas.api.NamespaceInfo;
 import ac.haru.hikaricanvas.api.VarType;
 import org.bukkit.Bukkit;
-import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.time.Duration;
+
 /**
- * HikariCanvas Push API 示例：事件 + 命令 push 范型。
+ * HikariCanvas Push API 示例：事件与命令驱动推送范型。
  *
  * <p>玩家进服更新 {@code mvp}（PlayerJoinEvent 触发）；通过 {@code /demoscore add red 1}
- * 命令累加红/蓝队比分。所有变化即时 push 到 HikariCanvas，wall 上引用
+ * 命令累加红/蓝队比分。所有变化即时推送到 HikariCanvas，画板上引用
  * {@code ${var:demo_score/red}} 等占位符即可实时显示。</p>
  *
- * <p>对比 {@link ac.haru.hikaricanvas.demos.train.DemoTrainPlugin} 的"定时器 push"模式，本插件
- * 演示"事件驱动 push"——不开 BukkitTask，仅在比分变化时调 setVariable。</p>
+ * <p>对比 {@code DemoTrainPlugin} 的定时批量推送模式，本插件演示事件驱动单条推送——
+ * 不起定时任务，仅在比分或状态变化时调用 {@link HikariCanvasAPI#setVariable}。</p>
  */
 public final class DemoScorePlugin extends JavaPlugin {
     private static final String NAMESPACE = "demo_score";
@@ -48,12 +49,7 @@ public final class DemoScorePlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(
                 new DemoScoreListener(this), this);
 
-        PluginCommand cmd = getCommand("demoscore");
-        if (cmd != null) {
-            cmd.setExecutor(new DemoScoreCommand(this));
-        } else {
-            getLogger().warning("/demoscore command not registered (missing paper-plugin.yml entry?)");
-        }
+        registerCommand("demoscore", "调整示例比分（add / set / reset）", new DemoScoreCommand(this));
 
         getLogger().info("DemoScorePlugin enabled");
     }
@@ -93,12 +89,12 @@ public final class DemoScorePlugin extends JavaPlugin {
     }
 
     public void setMvp(String playerName) {
-        // mvp 永久 TTL（直到下一玩家进服覆盖）
-        canvas.setVariable(this, NAMESPACE, "mvp", playerName, null);
+        // 显式指定永久有效（直到下一名玩家进服覆盖）
+        canvas.setVariable(this, NAMESPACE, "mvp", playerName, Duration.ZERO);
     }
 
     private void pushScores() {
-        canvas.setVariable(this, NAMESPACE, "red", String.valueOf(redScore), null);
-        canvas.setVariable(this, NAMESPACE, "blue", String.valueOf(blueScore), null);
+        canvas.setVariable(this, NAMESPACE, "red", String.valueOf(redScore), Duration.ZERO);
+        canvas.setVariable(this, NAMESPACE, "blue", String.valueOf(blueScore), Duration.ZERO);
     }
 }

@@ -1,24 +1,18 @@
 package ac.haru.hikaricanvas.api;
 
 /**
- * 外部插件向 {@link HikariCanvasAPI} 声明变量类型时使用的 hint enum。
+ * 外部插件向 {@link HikariCanvasAPI#declareKey} 声明变量类型时使用的枚举提示。
  *
- * <p>API 包独立的 {@code VarType}（不引用 {@code ac.haru.hikaricanvas.variable.VarType}）——
- * 让外部插件只依赖 {@code ac.haru.hikaricanvas.api.*} 公开边界（shadowJar 仅 relocate 第三方库，
- * 不触碰 {@code ac.haru.hikaricanvas.api.*}，外部 import 路径稳定）。</p>
- *
- * <p>语义与内部 {@code ac.haru.hikaricanvas.variable.VarType} 一一对应，由
- * {@code HikariCanvasAPIImpl.convertVarType} 做转换。</p>
- *
- * <p>类型：STRING / NUMBER / BOOLEAN / COLOR。详见 {@code docs/dynamic-data.md §0}。</p>
+ * <p>位于独立的公开 {@code ac.haru.hikaricanvas.api} 包内（打包不重定位），确保外部插件编译期与运行期类路径长期稳定。
+ * 详见 {@code docs/api.md} 与 {@code docs/dynamic-data.md §1}。</p>
  */
 public enum VarType {
-    /** 普通字符串。编辑器渲染普通 text input。 */
+    /** 普通字符串。编辑器展示常规文本输入框。 */
     STRING,
-    /** 数值（仍以 string 形式存储；语义由插件侧保证）。编辑器渲染 numeric input。 */
+    /** 数值（仍以字符串形式传输存储，数值合法性由推送方保证）。编辑器展示数值输入控件。 */
     NUMBER,
-    /** 布尔。编辑器渲染 toggle。 */
+    /** 布尔值。编辑器展示开关控件。 */
     BOOLEAN,
-    /** 颜色（hex 字符串如 {@code "#FF0000"}）。编辑器渲染 color picker。 */
+    /** 颜色值（十六进制颜色串如 {@code "#FF0000"}）。编辑器展示取色器。 */
     COLOR
 }

@@ -80,18 +80,26 @@ License text in jar: `/licenses/icons/LICENSE-fontawesome.txt`
 ## Backend libraries
 
 Shaded into the jar under `ac.haru.hikaricanvas.shaded.*` (except SQLite JDBC,
-which keeps its original package for JNI native loading).
+which keeps its original package for JNI native loading, and compile/type
+annotation classes retained for bytecode metadata; SLF4J API is provided by the
+Paper server runtime and excluded from the jar).
 
 | Library | Version | License |
 |---|---|---|
 | Javalin | 7.2.2 | Apache 2.0 |
+| Kotlin Standard Library (transitive via Javalin) | — | Apache 2.0 |
+| Jetty (transitive via Javalin) | — | Apache 2.0 / EPL 2.0 |
+| Jakarta EE APIs (Servlet / Annotation / CDI / Inject / Interceptor / Transaction, transitive via Jetty & Javalin) | — | EPL 2.0 / Apache 2.0 / GPL-2.0-with-classpath-exception |
+| OW2 ASM (transitive via Jetty) | — | BSD-3-Clause |
 | Jackson (databind + dataformat-yaml) | 2.22.1 | Apache 2.0 |
 | SnakeYAML (via jackson-dataformat-yaml) | — | Apache 2.0 |
 | Caffeine | 3.2.4 | Apache 2.0 |
 | JDBI (jdbi3-core, jdbi3-sqlite) | 3.54.0 | Apache 2.0 |
+| GeAnTyRef (transitive via JDBI) | — | Apache 2.0 |
+| ANTLR 4 Runtime (inlined inside JDBI) | — | BSD-3-Clause |
 | HikariCP | 7.1.0 | Apache 2.0 |
 | SQLite JDBC (org.xerial) | 3.53.2.1 | Apache 2.0 |
-| Jetty (transitive via Javalin) | — | Apache 2.0 / EPL 2.0 |
+| JetBrains Annotations / JSpecify / Error Prone Annotations | — | Apache 2.0 |
 
 ---
 

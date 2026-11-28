@@ -1,20 +1,22 @@
 package ac.haru.hikaricanvas.demos.train;
 
 import ac.haru.hikaricanvas.api.HikariCanvasAPI;
+import ac.haru.hikaricanvas.api.VariableUpdate;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.time.Duration;
 import java.time.LocalTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
- * 每 5s 模拟两条线路的下一班车 ETA。
+ * 每 5s 模拟两条线路的下一班车到发时刻，并通过 {@link HikariCanvasAPI#setVariables} 批量推送。
  *
- * <p>真实插件这里应接铁路 plugin / DB / 计算系统；此 demo 仅用 {@link LocalTime#now()}
- * 算"下一个 5~15 分钟边界"作为占位。每次 push 三个变量（next_departure / next_destination
- * / eta_minutes），TTL 10 分钟兜底——若插件挂掉超 10 分钟，HikariCanvas 走 fallback 链
- * （详见 {@code docs/dynamic-data.md §5.3}）。</p>
+ * <p>真实插件这里应接铁路业务或外部数据库；此示例用 {@link LocalTime#now()} 计算下一个
+ * 5~15 分钟边界作为演示数据。每次将两条线路共 6 个变量组装为一个 Map 一次提交，有效期设为
+ * 10 分钟兜底——若插件停摆超过 10 分钟，画布自动按兜底链回退（详见 {@code docs/dynamic-data.md §5.3}）。</p>
  */
 public final class TrainSchedulePusher {
     /** 5 秒 = 100 ticks。 */
@@ -50,26 +52,23 @@ public final class TrainSchedulePusher {
 
     private void push() {
         LocalTime now = LocalTime.now();
-        // 模拟两条线，错开 7 分钟避免完全同步
-        pushLine("line1", computeNextDeparture(now, 0), "终点：东站");
-        pushLine("line2", computeNextDeparture(now, 7), "终点：西站");
+        Map<String, VariableUpdate> batch = new LinkedHashMap<>(6);
+        // 模拟两条线，错开 7 分钟避免完全同步，合并为一次批量推送
+        collectLineUpdates(batch, "line1", now, computeNextDeparture(now, 0), "终点：东站");
+        collectLineUpdates(batch, "line2", now, computeNextDeparture(now, 7), "终点：西站");
+        canvas.setVariables(plugin, namespace, batch);
     }
 
-    private void pushLine(String linePrefix, LocalTime departure, String destination) {
-        long etaMin = Duration.between(LocalTime.now(), departure).toMinutes();
+    private static void collectLineUpdates(Map<String, VariableUpdate> batch, String linePrefix,
+                                           LocalTime now, LocalTime departure, String destination) {
+        long etaMin = Duration.between(now, departure).toMinutes();
         if (etaMin < 0) {
             etaMin += 1440;  // 过零点
         }
-
-        canvas.setVariable(plugin, namespace, linePrefix + ".next_departure",
-                String.format("%02d:%02d", departure.getHour(), departure.getMinute()),
-                VALUE_TTL);
-        canvas.setVariable(plugin, namespace, linePrefix + ".next_destination",
-                destination,
-                VALUE_TTL);
-        canvas.setVariable(plugin, namespace, linePrefix + ".eta_minutes",
-                String.valueOf(etaMin),
-                VALUE_TTL);
+        batch.put(linePrefix + ".next_departure", new VariableUpdate(
+                String.format("%02d:%02d", departure.getHour(), departure.getMinute()), VALUE_TTL));
+        batch.put(linePrefix + ".next_destination", new VariableUpdate(destination, VALUE_TTL));
+        batch.put(linePrefix + ".eta_minutes", new VariableUpdate(String.valueOf(etaMin), VALUE_TTL));
     }
 
     /**
