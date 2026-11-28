@@ -339,4 +339,115 @@ class WallRepoTest {
             database = null;
         }
     }
+
+    @Nested
+    class ProtocolVersionPersistence {
+
+        @TempDir
+        Path tmpDir;
+
+        private Database database;
+        private WallRepo repo;
+
+        @BeforeEach
+        void setUp() {
+            database = new Database(LOG, tmpDir.resolve("data.db"));
+            new MigrationRunner(database.jdbi(), LOG).run();
+            repo = new WallRepo(LOG, database.jdbi());
+        }
+
+        @AfterEach
+        void tearDown() {
+            if (database != null) database.close();
+        }
+
+        private int queryProtocolVersion(String wallId) {
+            return database.jdbi().withHandle(h -> h.createQuery(
+                            "SELECT protocol_version FROM walls WHERE wall_id = :id")
+                    .bind("id", wallId)
+                    .mapTo(Integer.class)
+                    .one());
+        }
+
+        @Test
+        void createWithMapIds_storesCurrentProtocolVersionAndSkipsStartupMigration() {
+            ProjectState state = new ProjectState(1, 1, "#FFFFFF");
+            // 推进编辑计数，防止误绑成 state.version()
+            state.bumpVersion();
+            state.bumpVersion();
+            assertEquals(2L, state.version());
+            assertEquals(3, ProjectState.PROTOCOL_VERSION);
+
+            String wallId = repo.createWithMapIds(
+                    new WallKey("world", 0, 64, 0, BlockFace.NORTH),
+                    state, List.of(1), 1, 1, UUID.randomUUID(), "tester");
+
+            assertEquals(ProjectState.PROTOCOL_VERSION, queryProtocolVersion(wallId),
+                    "新建墙必须写入 ProjectState.protocolVersion() (3)，而非 DEFAULT 1 或编辑计数 version()");
+
+            WallRepo.MigrationStats stats = repo.migrateAllToV2();
+            assertEquals(0, stats.scanned(), "新建墙已是最新协议版本，启动扫描不应命中");
+            assertEquals(0, stats.migrated());
+        }
+
+        @Test
+        void v2Row_isNotTouchedByMigrateAllToV2_andUpgradesLazilyOnUpdateState() {
+            String wallId = repo.createWithMapIds(
+                    new WallKey("world", 10, 64, 0, BlockFace.NORTH),
+                    new ProjectState(1, 1, "#FFFFFF"),
+                    List.of(2), 1, 1, UUID.randomUUID(), "tester");
+
+            long sentinelTs = 1700000000000L;
+            database.jdbi().useHandle(h -> h.createUpdate(
+                            "UPDATE walls SET protocol_version = 2, updated_at = :ts WHERE wall_id = :id")
+                    .bind("ts", sentinelTs)
+                    .bind("id", wallId)
+                    .execute());
+
+            WallRepo.MigrationStats stats = repo.migrateAllToV2();
+            assertEquals(0, stats.scanned(), "protocol_version == 2 的旧行不应被启动迁移扫描重写");
+            assertEquals(0, stats.migrated());
+            assertEquals(2, queryProtocolVersion(wallId));
+            long tsAfterMigrate = database.jdbi().withHandle(h -> h.createQuery(
+                            "SELECT updated_at FROM walls WHERE wall_id = :id")
+                    .bind("id", wallId)
+                    .mapTo(Long.class)
+                    .one());
+            assertEquals(sentinelTs, tsAfterMigrate, "migrateAllToV2 不应触碰 v2 行");
+
+            ProjectState nextState = new ProjectState(1, 1, "#000000");
+            for (int i = 0; i < 5; i++) nextState.bumpVersion();
+            repo.updateState(wallId, nextState);
+
+            assertEquals(ProjectState.PROTOCOL_VERSION, queryProtocolVersion(wallId),
+                    "updateState 写回时应惰性把 protocol_version 升至 ProjectState.PROTOCOL_VERSION (3)");
+        }
+
+        @Test
+        void v1Row_migratesDirectlyToCurrentProtocolVersion() {
+            String wallId = repo.createWithMapIds(
+                    new WallKey("world", 20, 64, 0, BlockFace.NORTH),
+                    new ProjectState(1, 1, "#FFFFFF"),
+                    List.of(3), 1, 1, UUID.randomUUID(), "tester");
+            String v1Json = """
+                    {
+                      "version": 9,
+                      "canvas": {"widthMaps": 1, "heightMaps": 1, "background": "#FFFFFF"},
+                      "elements": [],
+                      "history": {"undoDepth": 0, "redoDepth": 0}
+                    }
+                    """;
+            database.jdbi().useHandle(h -> h.createUpdate(
+                            "UPDATE walls SET project_json = :j, protocol_version = 1 WHERE wall_id = :id")
+                    .bind("j", v1Json)
+                    .bind("id", wallId)
+                    .execute());
+
+            WallRepo.MigrationStats stats = repo.migrateAllToV2();
+            assertEquals(1, stats.scanned());
+            assertEquals(1, stats.migrated());
+            assertEquals(0, stats.failed());
+            assertEquals(ProjectState.PROTOCOL_VERSION, queryProtocolVersion(wallId));
+        }
+    }
 }

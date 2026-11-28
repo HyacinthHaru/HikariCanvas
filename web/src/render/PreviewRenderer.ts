@@ -188,18 +188,93 @@ function drawBrush(ctx: CanvasRenderingContext2D, b: BrushStrokeElement): void {
     ctx.globalAlpha = outerAlpha;
 }
 
+// ---------- 尺寸与离屏缓冲区上限（与后端 ElementValidator / GlowRenderer / ImageRenderer 对齐） ----------
+
+const MAX_ELEMENT_DIM = 10_000;
+const MAX_GLOW_PIXELS = 20_000_000;
+const MAX_FEATHER_PIXELS = 16_777_216;
+
+export interface UserSpaceBounds {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+}
+
+/**
+ * 计算当前 ctx 可见画布在用户坐标系下的整数外接矩形（镜像后端 CanvasCompositor.visibleBounds）。
+ *
+ * <p>单测替身 ctx 常不挂 canvas 或 getTransform，此时返回 null，调用方跳过可视裁剪、仅保留像素面积硬上限。</p>
+ */
+export function visibleBoundsInUserSpace(ctx: CanvasRenderingContext2D): UserSpaceBounds | null {
+    if (!ctx.canvas || typeof ctx.getTransform !== 'function') return null;
+    const cw = ctx.canvas.width;
+    const ch = ctx.canvas.height;
+    if (!Number.isFinite(cw) || !Number.isFinite(ch)) return null;
+    if (!(cw > 0 && ch > 0)) return { x: 0, y: 0, w: 0, h: 0 };
+    let m: DOMMatrix;
+    try {
+        m = ctx.getTransform();
+    } catch {
+        return null;
+    }
+    if (!m) return null;
+    const det = m.a * m.d - m.b * m.c;
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return null;
+
+    const corners: Array<[number, number]> = [
+        [0, 0],
+        [cw, 0],
+        [cw, ch],
+        [0, ch],
+    ];
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const [px, py] of corners) {
+        const dx = px - m.e;
+        const dy = py - m.f;
+        const ux = (m.d * dx - m.c * dy) / det;
+        const uy = (-m.b * dx + m.a * dy) / det;
+        if (!Number.isFinite(ux) || !Number.isFinite(uy)) return null;
+        if (ux < minX) minX = ux;
+        if (ux > maxX) maxX = ux;
+        if (uy < minY) minY = uy;
+        if (uy > maxY) maxY = uy;
+    }
+    const ix = Math.floor(minX) || 0;
+    const iy = Math.floor(minY) || 0;
+    return {
+        x: ix,
+        y: iy,
+        w: Math.ceil(maxX) - ix,
+        h: Math.ceil(maxY) - iy,
+    };
+}
+
 // ---------- dither pass（per-element off-canvas → BayerDither → drawImage） ----------
 
 let cachedPalette: PaletteLut | null = null;
-let paletteReadyHook: (() => void) | null = null;
+const paletteReadyHandlers: Array<() => void> = [];
 // in-flight 守卫。未就绪时 getCachedPalette 每帧都会被调；若不挡，每帧都注册一个
 // 新的 getPaletteLut().then 回调，导致 palette resolve 时一次性触发 N 次 requestDraw。
 let paletteLoading = false;
 /** 上次 palette 加载失败的时间戳；0 = 没失败过。过了 TTL 才允许再发一次。 */
 let paletteFailedAt = 0;
 
-/** CanvasView 注册：PaletteLut 加载完成 → 请求重绘（dither element 首帧本来 fallback clean）。 */
-export function onPaletteReady(hook: () => void) { paletteReadyHook = hook; }
+/** 注册 PaletteLut 加载完成回调（dither 首帧退 clean，就绪后触发重绘），返回取消订阅闭包。 */
+export function onPaletteReady(hook: () => void): () => void {
+    paletteReadyHandlers.push(hook);
+    return () => {
+        const i = paletteReadyHandlers.indexOf(hook);
+        if (i >= 0) paletteReadyHandlers.splice(i, 1);
+    };
+}
+
+function emitPaletteReady(): void {
+    for (const fn of [...paletteReadyHandlers]) fn();
+}
 
 function getCachedPalette(): PaletteLut | null {
     if (cachedPalette) return cachedPalette;
@@ -213,7 +288,7 @@ function getCachedPalette(): PaletteLut | null {
         cachedPalette = p;
         paletteLoading = false;
         paletteFailedAt = 0;
-        paletteReadyHook?.();
+        emitPaletteReady();
     }).catch(() => {
         // palette 加载失败：清守卫 + 记时间戳，隔 TTL 后下一次重绘会真的重发 fetch
         // （getPaletteLut 失败时会把自己缓存的 promise 丢掉，不再返回同一个已 reject 的
@@ -532,7 +607,7 @@ function drawIcon(ctx: CanvasRenderingContext2D, ic: IconElement): void {
  * </ol>
  */
 function drawIconSvgPath(ctx: CanvasRenderingContext2D, ic: IconElement): void {
-    if (ic.w <= 0 || ic.h <= 0) return;
+    if (ic.w <= 0 || ic.h <= 0 || ic.w > MAX_ELEMENT_DIM || ic.h > MAX_ELEMENT_DIM) return;
     const cached = getCachedIcon(ic.source);
     if (cached === undefined) {
         // 首次：发起 lazy load，本帧占位；加载完后 hook 触发重绘
@@ -610,10 +685,20 @@ const FAILED_RETRY_TTL_MS = 10_000;
 
 interface ImageCacheEntry { img: HTMLImageElement; ready: boolean; failed: boolean; failedAt: number; }
 const imageCache = new Map<string, ImageCacheEntry>();
-let imageReadyHook: (() => void) | null = null;
+const imageReadyHandlers: Array<() => void> = [];
 
-/** CanvasView 注册：上传图片异步加载完成后请求重绘 */
-export function onImageReady(hook: () => void) { imageReadyHook = hook; }
+/** 注册上传图片异步加载结束回调，返回取消订阅闭包。 */
+export function onImageReady(hook: () => void): () => void {
+    imageReadyHandlers.push(hook);
+    return () => {
+        const i = imageReadyHandlers.indexOf(hook);
+        if (i >= 0) imageReadyHandlers.splice(i, 1);
+    };
+}
+
+function emitImageReady(): void {
+    for (const fn of [...imageReadyHandlers]) fn();
+}
 
 // /api/upload/{hash} 后端鉴权要 sessionId query param；上层注入访问器避免
 // PreviewRenderer 直接耦合 Pinia store。
@@ -630,8 +715,8 @@ function startUploadLoad(source: string, entry: ImageCacheEntry): void {
     entry.ready = false;
     entry.failed = false;
     entry.failedAt = 0;
-    entry.img.onload = () => { entry.ready = true; imageReadyHook?.(); };
-    entry.img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); imageReadyHook?.(); };
+    entry.img.onload = () => { entry.ready = true; emitImageReady(); };
+    entry.img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); emitImageReady(); };
     entry.img.src = buildUploadUrl(source);
 }
 
@@ -656,8 +741,8 @@ export function preloadImage(source: string, dataUrl: string): void {
     const img = new Image();
     const entry: ImageCacheEntry = { img, ready: false, failed: false, failedAt: 0 };
     imageCache.set(source, entry);
-    img.onload = () => { entry.ready = true; imageReadyHook?.(); };
-    img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); imageReadyHook?.(); };
+    img.onload = () => { entry.ready = true; emitImageReady(); };
+    img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); emitImageReady(); };
     img.src = dataUrl;
 }
 
@@ -676,6 +761,7 @@ export function resetImageCaches(): void {
 }
 
 function drawImage(ctx: CanvasRenderingContext2D, im: ImageElement): void {
+    if (im.w <= 0 || im.h <= 0) return;
     const entry = getUploadImage(im.source);
     if (entry.failed || !entry.ready) {
         // 占位：虚线方框 + ?，同 drawIcon 风格
@@ -694,29 +780,46 @@ function drawImage(ctx: CanvasRenderingContext2D, im: ImageElement): void {
     }
 
     // feather 路径走 off-screen canvas + filter='blur()' + DST_IN。
-    // 硬边路径（无 mask 或 featherPx=0）仍走原 clip 实现，保持向下兼容 / 性能 OK。
+    // 关键帧插值可能把 w/h 顶过 MAX_ELEMENT_DIM：超限时降级硬边绘制，避免整张图消失造成双端分叉。
     const feather = im.mask?.featherPx;
     if (im.mask && typeof feather === 'number' && feather > 0) {
+        if (im.w > MAX_ELEMENT_DIM || im.h > MAX_ELEMENT_DIM) {
+            drawImageHardEdge(ctx, im, entry.img);
+            return;
+        }
         drawImageWithFeather(ctx, im, entry.img, feather);
         return;
     }
 
+    drawImageHardEdge(ctx, im, entry.img);
+}
+
+/** 硬边绘制路径（O(1) 内存，同时也作羽化超限时的降级路径，与 ImageRenderer.drawHardEdgeFallback 对齐）。 */
+function drawImageHardEdge(
+    ctx: CanvasRenderingContext2D,
+    im: ImageElement,
+    src: HTMLImageElement,
+): void {
     ctx.save();
     try {
         ctx.translate(im.x, im.y);
         if (im.mask) {
-            const parsed = parsePathD(im.mask.d);
-            if (im.mask.inverted) {
-                // 反相 = bbox 减 mask；用 Path2D + addPath + evenodd 自然达成
-                const inverted = new Path2D();
-                inverted.rect(0, 0, im.w, im.h);
-                inverted.addPath(parsed.path);
-                ctx.clip(inverted, 'evenodd');
-            } else {
-                ctx.clip(parsed.path);
+            try {
+                const parsed = parsePathD(im.mask.d);
+                if (im.mask.inverted) {
+                    // 反相 = bbox 减 mask；用 Path2D + addPath + evenodd 自然达成
+                    const inverted = new Path2D();
+                    inverted.rect(0, 0, im.w, im.h);
+                    inverted.addPath(parsed.path);
+                    ctx.clip(inverted, 'evenodd');
+                } else {
+                    ctx.clip(parsed.path);
+                }
+            } catch {
+                // mask 解析异常时退回无 mask 直接画原图
             }
         }
-        ctx.drawImage(entry.img, 0, 0, im.w, im.h);
+        ctx.drawImage(src, 0, 0, im.w, im.h);
     } finally {
         ctx.restore();
     }
@@ -724,11 +827,12 @@ function drawImage(ctx: CanvasRenderingContext2D, im: ImageElement): void {
 
 /**
  * feather mask 路径。流程与后端 ImageRenderer.drawWithFeather 镜像：
- * 1) image off-canvas 绘到 (w, h)
- * 2) mask off-canvas 填白
- * 3) mask 用 ctx.filter='blur(Npx)' 模糊
- * 4) image off-canvas 用 globalCompositeOperation='destination-in' 复合 mask
- * 5) drawImage 主 ctx
+ * 1) 元素矩形 [0..w, 0..h] 与可视区外扩 (3 * r + 1) 求交，再卡 MAX_FEATHER_PIXELS（超限降级硬边）
+ * 2) image off-canvas (cropW × cropH) 平移 (-cropX, -cropY) 绘制缩放原图
+ * 3) mask off-canvas (cropW × cropH) 平移 (-cropX, -cropY) 填白
+ * 4) mask 用 ctx.filter='blur(Npx)' 模糊
+ * 5) image off-canvas 用 globalCompositeOperation='destination-in' 复合 mask
+ * 6) drawImage 回主 ctx 的 (im.x + cropX, im.y + cropY)
  */
 function drawImageWithFeather(
     ctx: CanvasRenderingContext2D,
@@ -739,21 +843,53 @@ function drawImageWithFeather(
     const w = Math.max(1, Math.round(im.w));
     const h = Math.max(1, Math.round(im.h));
     const r = Math.max(0, Math.min(32, Math.round(feather)));
-    if (!im.mask) return;
+    if (!im.mask) {
+        drawImageHardEdge(ctx, im, src);
+        return;
+    }
+
+    let cropX = 0;
+    let cropY = 0;
+    let cropW = w;
+    let cropH = h;
+    const vis = visibleBoundsInUserSpace(ctx);
+    if (vis !== null) {
+        if (vis.w <= 0 || vis.h <= 0) return;
+        const pad = 3 * r + 1;
+        const x0 = Math.max(0, Math.floor(vis.x - im.x) - pad);
+        const y0 = Math.max(0, Math.floor(vis.y - im.y) - pad);
+        const x1 = Math.min(w, Math.ceil(vis.x - im.x + vis.w) + pad);
+        const y1 = Math.min(h, Math.ceil(vis.y - im.y + vis.h) + pad);
+        cropX = x0;
+        cropY = y0;
+        cropW = x1 - x0;
+        cropH = y1 - y0;
+        if (cropW <= 0 || cropH <= 0) return;
+    }
+    if (cropW * cropH > MAX_FEATHER_PIXELS) {
+        drawImageHardEdge(ctx, im, src);
+        return;
+    }
+
     // image off-canvas
     const imgCanvas = document.createElement('canvas');
-    imgCanvas.width = w;
-    imgCanvas.height = h;
+    imgCanvas.width = cropW;
+    imgCanvas.height = cropH;
     const ic = imgCanvas.getContext('2d');
     if (!ic) return;
+    ic.save();
+    ic.translate(-cropX, -cropY);
     ic.drawImage(src, 0, 0, w, h);
+    ic.restore();
 
     // mask off-canvas
     const maskCanvas = document.createElement('canvas');
-    maskCanvas.width = w;
-    maskCanvas.height = h;
+    maskCanvas.width = cropW;
+    maskCanvas.height = cropH;
     const mc = maskCanvas.getContext('2d');
     if (!mc) return;
+    mc.save();
+    mc.translate(-cropX, -cropY);
     try {
         const parsed = parsePathD(im.mask.d);
         if (im.mask.inverted) {
@@ -770,19 +906,21 @@ function drawImageWithFeather(
         // mask 解析失败 → fallback 全部不透明（无 mask）
         mc.fillStyle = '#ffffff';
         mc.fillRect(0, 0, w, h);
+    } finally {
+        mc.restore();
     }
 
     // 模糊 mask（blur 半径与后端 box blur 3 遍近似等价）
     if (r > 0) {
         const blurCanvas = document.createElement('canvas');
-        blurCanvas.width = w;
-        blurCanvas.height = h;
+        blurCanvas.width = cropW;
+        blurCanvas.height = cropH;
         const bc = blurCanvas.getContext('2d');
         if (bc) {
             bc.filter = `blur(${r}px)`;
             bc.drawImage(maskCanvas, 0, 0);
             // 用模糊版替换
-            mc.clearRect(0, 0, w, h);
+            mc.clearRect(0, 0, cropW, cropH);
             mc.drawImage(blurCanvas, 0, 0);
         }
     }
@@ -793,10 +931,11 @@ function drawImageWithFeather(
     ic.globalCompositeOperation = 'source-over';
 
     // 落到主 ctx
-    ctx.drawImage(imgCanvas, im.x, im.y);
+    ctx.drawImage(imgCanvas, im.x + cropX, im.y + cropY);
 }
 
 function drawRect(ctx: CanvasRenderingContext2D, r: RectElement): void {
+    if (r.w <= 0 || r.h <= 0) return;
     const rFill = fillToCanvasStyle(ctx, r.fill, r.x, r.y, r.w, r.h);
     if (rFill) {
         ctx.fillStyle = rFill;
@@ -1231,10 +1370,31 @@ function renderGlow(ctx: CanvasRenderingContext2D, glyphs: PositionedGlyph[],
     const bboxH = Math.ceil(maxY - minY) + pad * 2;
     if (bboxW <= 0 || bboxH <= 0) return;
 
+    // 1.5) 与可视画布外扩 pad 求交，再卡 MAX_GLOW_PIXELS 面积硬上限（镜像 GlowRenderer.clipToCanvas）。
+    //      多留一圈 pad (= radius + 1) 保证画布内每个像素的盒模糊结果与未裁剪时逐位相同。
+    let cropX = bboxX;
+    let cropY = bboxY;
+    let cropW = bboxW;
+    let cropH = bboxH;
+    const vis = visibleBoundsInUserSpace(ctx);
+    if (vis !== null) {
+        if (vis.w <= 0 || vis.h <= 0) return;
+        const x0 = Math.max(bboxX, vis.x - pad);
+        const y0 = Math.max(bboxY, vis.y - pad);
+        const x1 = Math.min(bboxX + bboxW, vis.x + vis.w + pad);
+        const y1 = Math.min(bboxY + bboxH, vis.y + vis.h + pad);
+        cropX = x0;
+        cropY = y0;
+        cropW = x1 - x0;
+        cropH = y1 - y0;
+        if (cropW <= 0 || cropH <= 0) return;
+    }
+    if (cropW * cropH > MAX_GLOW_PIXELS) return;
+
     // 2) local canvas：画字形 mask（白色）
     const local = document.createElement('canvas');
-    local.width = bboxW;
-    local.height = bboxH;
+    local.width = cropW;
+    local.height = cropH;
     const lg = local.getContext('2d');
     if (!lg) return;
     lg.imageSmoothingEnabled = false;
@@ -1242,27 +1402,28 @@ function renderGlow(ctx: CanvasRenderingContext2D, glyphs: PositionedGlyph[],
     lg.font = fontSpec;
     lg.fillStyle = '#ffffff';
     lg.textBaseline = 'alphabetic';
+    lg.translate(-cropX, -cropY);
     for (const g of glyphs) {
         if (g.rotated) {
             lg.save();
-            lg.translate(g.x - bboxX, g.baselineY - bboxY);
+            lg.translate(g.x, g.baselineY);
             lg.rotate(Math.PI / 2);
             const chW = lg.measureText(g.ch).width;
             lg.fillText(g.ch, -chW / 2, ascent - fontSize / 2);
             lg.restore();
         } else {
-            lg.fillText(g.ch, g.x - bboxX, g.baselineY - bboxY);
+            lg.fillText(g.ch, g.x, g.baselineY);
         }
     }
 
     // 3) 提取 alpha + 水平/垂直盒模糊
-    const imgData = lg.getImageData(0, 0, bboxW, bboxH);
-    const n = bboxW * bboxH;
+    const imgData = lg.getImageData(0, 0, cropW, cropH);
+    const n = cropW * cropH;
     const alpha = new Uint8Array(n);
     for (let i = 0; i < n; i++) alpha[i] = imgData.data[i * 4 + 3];
     const tmp = new Uint8Array(n);
-    boxBlurHorizontal(alpha, tmp, bboxW, bboxH, radius);
-    boxBlurVertical(tmp, alpha, bboxW, bboxH, radius);
+    boxBlurHorizontal(alpha, tmp, cropW, cropH, radius);
+    boxBlurVertical(tmp, alpha, cropW, cropH, radius);
 
     // 4) 着色
     const rgb = parseRgb(glow.color);
@@ -1275,7 +1436,7 @@ function renderGlow(ctx: CanvasRenderingContext2D, glyphs: PositionedGlyph[],
     lg.putImageData(imgData, 0, 0);
 
     // 5) 合到主画布
-    ctx.drawImage(local, bboxX, bboxY);
+    ctx.drawImage(local, cropX, cropY);
 }
 
 function boxBlurHorizontal(src: Uint8Array, dst: Uint8Array, w: number, h: number, radius: number): void {

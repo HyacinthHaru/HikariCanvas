@@ -89,9 +89,25 @@ export function useLivePaint(opts: UseLivePaintOpts): UseLivePaintReturn {
             graph.value = resp.graph;
         } else {
             console.warn('[livepaint] worker error:', resp.message);
-            graph.value = null;
+            // 置 degraded 哨兵而非 null，使点击进入明确的退化提示而非永久卡在"计算中…"。
+            graph.value = opts.enabled.value
+                ? { gaps: [], canvasWidth: 0, canvasHeight: 0, degraded: true }
+                : null;
         }
     };
+
+    const handleWorkerFailure = (label: string, ev: unknown): void => {
+        console.warn(`[livepaint] ${label}:`, ev);
+        if (sentAt) sentAt.clear();
+        pendingRequestId = ++nextRequestId;
+        isBuilding.value = false;
+        graph.value = opts.enabled.value
+            ? { gaps: [], canvasWidth: 0, canvasHeight: 0, degraded: true }
+            : null;
+    };
+
+    worker.onerror = (ev) => handleWorkerFailure('worker uncaught error', ev);
+    worker.onmessageerror = (ev) => handleWorkerFailure('worker message deserialization error', ev);
 
     function send(): void {
         if (!opts.enabled.value) {

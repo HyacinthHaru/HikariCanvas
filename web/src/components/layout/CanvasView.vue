@@ -773,20 +773,26 @@ function findElementAt(canvasX: number, canvasY: number): Element | null {
 function onPaintBucketClick(canvasX: number, canvasY: number): void {
     // wall 锁定
     if (project.isLocked) {
-        net.pushLog('meta', t.value.livePaint.wallLocked);
+        const msg = t.value.livePaint.wallLocked;
+        net.lastError = msg;
+        net.pushLog('meta', msg);
         return;
     }
     // graph 还没构建（首帧 / 大量 element rebuild 中）—— 提示用户稍等再点。
     // 加 isBuilding 门——重新启用工具后、新一轮 rebuild 完成前 graph 可能仍是
     // 上一轮的陈旧拓扑，此时点击应被"请稍候"安全拒绝，而非对过期拓扑执行填充。
     if (!livePaint.graph.value || livePaint.isBuilding.value) {
-        net.pushLog('meta', t.value.livePaint.building);
+        const msg = t.value.livePaint.building;
+        net.lastError = msg;
+        net.pushLog('meta', msg);
         return;
     }
-    // polygon-clipping 抛错时 graph.degraded=true，gaps 为空——显式不可用
+    // polygon-clipping 抛错或 worker 异常时 graph.degraded=true，gaps 为空——显式不可用
     // 而不是给用户"整画布单 gap"的假象
     if (livePaint.graph.value.degraded) {
-        net.pushLog('err', t.value.livePaint.degraded);
+        const msg = t.value.livePaint.degraded;
+        net.lastError = msg;
+        net.pushLog('err', msg);
         return;
     }
 
@@ -796,19 +802,25 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
         // 决定目标 layer：active layer 优先；锁定时拒绝（不自动跳到别的 layer，避免用户困惑）
         const activeLayer = project.activeLayer;
         if (!activeLayer || activeLayer.locked) {
-            net.pushLog('meta', t.value.livePaint.layerLocked);
+            const msg = t.value.livePaint.layerLocked;
+            net.lastError = msg;
+            net.pushLog('meta', msg);
             return;
         }
 
         const elementData = gapToPathElement(gap, paintBucket.tolerance);
         if (elementData.w <= 0 || elementData.h <= 0 || !elementData.d) {
-            net.pushLog('meta', t.value.livePaint.noGapFound);
+            const msg = t.value.livePaint.noGapFound;
+            net.lastError = msg;
+            net.pushLog('meta', msg);
             return;
         }
         // 路径描述已经简化到容差上限还是超过服务端长度限制 —— 发出去必被拒。
         // 与其让用户看到"高亮说能填、点了却只在日志里冒一条 err"，不如当场说清楚。
         if (elementData.overBudget) {
-            net.pushLog('err', t.value.livePaint.gapTooComplex);
+            const msg = t.value.livePaint.gapTooComplex;
+            net.lastError = msg;
+            net.pushLog('err', msg);
             return;
         }
 
@@ -835,7 +847,9 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
     const hitElement = findElementAt(canvasX, canvasY);
     if (hitElement) {
         if (hitElement.locked) {
-            net.pushLog('meta', t.value.livePaint.elementLocked);
+            const msg = t.value.livePaint.elementLocked;
+            net.lastError = msg;
+            net.pushLog('meta', msg);
             return;
         }
         // 命中的元素可能在别的图层上（gap 图按所有可见图层建）。那个图层若被锁，
@@ -843,7 +857,9 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
         const owningLayer = (project.state?.layers ?? [])
             .find((l) => (l.elements ?? []).some((e) => e.id === hitElement.id));
         if (owningLayer?.locked) {
-            net.pushLog('meta', t.value.livePaint.layerLocked);
+            const msg = t.value.livePaint.layerLocked;
+            net.lastError = msg;
+            net.pushLog('meta', msg);
             return;
         }
         // 仅 4 种元素支持 fill 字段：rect / circle / shape / path
@@ -863,12 +879,16 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
             return;
         }
         // text（color 字段）/ image（无填充语义）/ brush（笔触无填充语义）→ 提示
-        net.pushLog('meta', t.value.livePaint.elementUnsupported(hitElement.type));
+        const msg = t.value.livePaint.elementUnsupported(hitElement.type);
+        net.lastError = msg;
+        net.pushLog('meta', msg);
         return;
     }
 
     // 3. 都没命中（理论几乎不应该——gap 覆盖空白，element 覆盖元素；缝隙极少）
-    net.pushLog('meta', t.value.livePaint.noGapFound);
+    const msg = t.value.livePaint.noGapFound;
+    net.lastError = msg;
+    net.pushLog('meta', msg);
 }
 
 function onStageMouseUp(): void {
@@ -1207,8 +1227,8 @@ onMounted(() => {
     ensureFontLoaded('source_han_sans');
     loaderUnsubscribers.push(onFontLoaded(() => requestDraw()));
     loaderUnsubscribers.push(onIconLoaded(() => requestDraw()));
-    onImageReady(() => requestDraw());
-    onPaletteReady(() => requestDraw());
+    loaderUnsubscribers.push(onImageReady(() => requestDraw()));
+    loaderUnsubscribers.push(onPaletteReady(() => requestDraw()));
     preloadMetrics('ark_pixel');
     preloadMetrics('source_han_sans');
     loaderUnsubscribers.push(onMetricsReady(() => requestDraw()));

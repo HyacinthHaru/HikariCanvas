@@ -133,10 +133,10 @@ public final class WallRepo {
                         "INSERT INTO walls(wall_id, world, origin_x, origin_y, origin_z, facing, "
                                 + "width_maps, height_maps, map_ids, project_json, "
                                 + "owner_uuid, owner_name, alias, published_at, "
-                                + "template_id, template_version, created_at, updated_at) "
+                                + "template_id, template_version, protocol_version, created_at, updated_at) "
                                 + "VALUES(:id, :world, :ox, :oy, :oz, :facing, "
                                 + ":w, :h, :mapIds, :json, :ouuid, :oname, NULL, NULL, "
-                                + "NULL, NULL, :now, :now)")
+                                + "NULL, NULL, :pv, :now, :now)")
                         .bind("id", wallId)
                         .bind("world", key.world())
                         .bind("ox", key.originX())
@@ -149,6 +149,7 @@ public final class WallRepo {
                         .bind("json", json)
                         .bind("ouuid", ownerUuid.toString())
                         .bind("oname", ownerName)
+                        .bind("pv", state.protocolVersion())
                         .bind("now", now)
                         .execute());
                 return wallId;
@@ -163,14 +164,16 @@ public final class WallRepo {
         throw new IllegalStateException("wall_id collision 5x; SecureRandom broken?");
     }
 
-    /** 仅更新 ProjectState（每次 op 后由 SessionManager 调）。 */
+    /** 仅更新 ProjectState（每次 op 后由 SessionManager 调），同步刷新 protocol_version 列。 */
     public void updateState(String wallId, ProjectState state) {
         try {
             String json = mapper.writeValueAsString(state);
             long now = System.currentTimeMillis();
             jdbi.useHandle(h -> h.createUpdate(
-                    "UPDATE walls SET project_json = :json, updated_at = :now WHERE wall_id = :id")
+                    "UPDATE walls SET project_json = :json, protocol_version = :pv, "
+                            + "updated_at = :now WHERE wall_id = :id")
                     .bind("json", json)
+                    .bind("pv", state.protocolVersion())
                     .bind("now", now)
                     .bind("id", wallId)
                     .execute());
@@ -540,8 +543,10 @@ public final class WallRepo {
     }
 
     /**
-     * 启动期一次性扫描 walls 表，把 {@code protocol_version &lt; 2} 的行升级到 v2。
-     * 实现细节见 {@code docs/data-model.md §2.4.1}（决策 A：startup full-scan）。
+     * 启动期一次性扫描 walls 表，把 {@code protocol_version &lt; 2} 的 v1 行升级为 layered 形态，
+     * 并将 {@code protocol_version} 写为 {@link ProjectState#PROTOCOL_VERSION}。
+     * 实现细节见 {@code docs/data-model.md §2.4.1 / §2.4.2}：查询条件保持 {@code &lt; 2}，既有 v2 行
+     * 不在启动期重写，而是随常规保存（{@link #updateState}）惰性升级到 v3。
      *
      * <p>容错策略：单行 migrate 失败 → log warn + 该行 protocol_version 保留为 1，
      * 启动继续。下次启动会再尝试；运行期 {@code /canvas open <id>} 也会再次走 lazy 路径
@@ -567,12 +572,13 @@ public final class WallRepo {
             scanned++;
             try {
                 String newJson = migrateProjectJsonV1ToV2(mapper, r.json);
-                // 始终把 protocol_version 标 2 —— 即便内容本就是 v2、roundtrip 没动也算"已确认"，
+                // 反序列化再序列化后的 JSON 已带当前 ProjectState.PROTOCOL_VERSION，列值与之同步，
                 // 避免下次启动重复扫
                 jdbi.useHandle(h -> h.createUpdate(
-                        "UPDATE walls SET project_json = :j, protocol_version = 2 "
+                        "UPDATE walls SET project_json = :j, protocol_version = :pv "
                                 + "WHERE wall_id = :id")
                         .bind("j", newJson)
+                        .bind("pv", ProjectState.PROTOCOL_VERSION)
                         .bind("id", r.wallId)
                         .execute());
                 migrated++;

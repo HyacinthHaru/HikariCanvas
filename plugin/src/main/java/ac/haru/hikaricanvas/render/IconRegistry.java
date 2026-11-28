@@ -98,16 +98,25 @@ public final class IconRegistry {
                     continue;
                 }
                 Map<String, String> entries = new LinkedHashMap<>(icons.size());
+                Map<String, String> iconViewBoxes = new LinkedHashMap<>(icons.size());
                 icons.fieldNames().forEachRemaining(name -> {
                     JsonNode v = icons.get(name);
                     String d = v.isObject() ? v.path("d").asText(null) : (v.isTextual() ? v.asText() : null);
-                    if (d != null && !d.isBlank()) entries.put(name, d);
+                    if (d != null && !d.isBlank()) {
+                        entries.put(name, d);
+                        String rawVb = v.isObject() ? v.path("viewBox").asText(null) : null;
+                        String trimmedVb = rawVb == null ? null : rawVb.trim();
+                        String iconViewBox = (trimmedVb == null || trimmedVb.isBlank()) ? viewBox : trimmedVb;
+                        iconViewBoxes.put(name, iconViewBox);
+                    }
                 });
                 IconPack ip = new IconPack(pack, version, license, viewBox, entries);
                 packs.put(pack, ip);
                 for (Map.Entry<String, String> e : entries.entrySet()) {
-                    String fullId = pack + "/" + e.getKey();
-                    index.put(fullId, new IconInfo(fullId, e.getKey(), pack, viewBox, "builtin"));
+                    String key = e.getKey();
+                    String fullId = pack + "/" + key;
+                    String iconViewBox = iconViewBoxes.getOrDefault(key, viewBox);
+                    index.put(fullId, new IconInfo(fullId, key, pack, iconViewBox, "builtin"));
                 }
                 log.fine("[icons] loaded pack " + pack + " v" + version
                         + " (" + entries.size() + " icons)");
@@ -268,8 +277,9 @@ public final class IconRegistry {
 
     /**
      * 单个 icon pack 的全量信息。{@code icons} 是 {@code id → path d} 不可变映射。
-     * pack 内统一 {@code viewBox}（FA 全 {@code 0 0 512 512}）；user pack 用占位值，真实
-     * viewBox 在 {@link IconInfo#viewBox()} 上。
+     * {@code viewBox} 为 pack 级默认回退值（如 FA 默认 {@code 0 0 512 512}，user pack 为
+     * {@code 0 0 24 24}）；单个图标可有不同宽高比（如 FA {@code 576×512} / {@code 640×512} /
+     * {@code 384×512}），逐图标真实 viewBox 存储在 {@link IconInfo#viewBox()} 中。
      */
     public record IconPack(String pack, String version, String license, String viewBox,
                            Map<String, String> icons) {

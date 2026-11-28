@@ -43,6 +43,7 @@ import java.util.zip.ZipFile;
  *     "viewBox": "0 0 512 512",
  *     "icons": {
  *       "heart": { "d": "M256,..." },
+ *       "star": { "d": "M316.9,...", "viewBox": "0 0 576 512" },
  *       ...
  *     }
  *   }
@@ -61,11 +62,17 @@ public final class IconLibraryGenerator {
     private static final String FA_VIEWBOX = "0 0 512 512";
 
     /**
-     * FA SVG 取 path d 的 regex。FA Free 每个 SVG 都是单一 path：
-     * {@code <svg xmlns="..." viewBox="0 0 512 512"><path d="..."/></svg>}
+     * FA SVG 取 path d 与根 {@code <svg viewBox="...">} 的 regex。FA Free 每个 SVG 都是单一 path，
+     * 但不同图标宽度各异（如 {@code 512×512} / {@code 576×512} / {@code 640×512} / {@code 384×512}），
+     * 不能假设全部为正方形 {@code 0 0 512 512}。
      */
     private static final Pattern PATH_D_RE =
             Pattern.compile("<path\\b[^>]*?\\sd=([\"'])(.*?)\\1", Pattern.DOTALL);
+
+    private static final Pattern SVG_VIEWBOX_RE =
+            Pattern.compile("<svg\\b[^>]*?\\sviewBox=([\"'])(.*?)\\1", Pattern.DOTALL);
+
+    private record IconEntry(String d, String viewBox) {}
 
     /**
      * zip 内 SVG 路径"中间段"标记 → 输出 pack id。Font Awesome Free zip 实际带顶层目录
@@ -93,8 +100,8 @@ public final class IconLibraryGenerator {
         }
         Files.createDirectories(outDir);
 
-        // 收集每个 pack 的 icons：name → path d。TreeMap 保字母序，便于 git diff 审查。
-        Map<String, TreeMap<String, String>> packs = new LinkedHashMap<>();
+        // 收集每个 pack 的 icons：name → (path d, viewBox)。TreeMap 保字母序，便于 git diff 审查。
+        Map<String, TreeMap<String, IconEntry>> packs = new LinkedHashMap<>();
         for (String[] m : PACK_MAPPING) packs.put(m[1], new TreeMap<>());
 
         try (ZipFile zip = new ZipFile(zipPath.toFile())) {
@@ -135,14 +142,15 @@ public final class IconLibraryGenerator {
                     System.err.println("  [skip] no <path d> in " + name);
                     continue;
                 }
-                packs.get(matchedPack).put(iconName, d);
+                String iconViewBox = extractViewBox(svg);
+                packs.get(matchedPack).put(iconName, new IconEntry(d, iconViewBox));
             }
         }
 
         int total = 0;
         for (var e : packs.entrySet()) {
             String packId = e.getKey();
-            TreeMap<String, String> icons = e.getValue();
+            TreeMap<String, IconEntry> icons = e.getValue();
             Path out = outDir.resolve(packId + ".icons.json");
             writePackJson(out, packId, FA_VERSION, FA_LICENSE, FA_VIEWBOX, icons);
             System.out.println("wrote " + icons.size() + " icons -> " + out);
@@ -156,12 +164,20 @@ public final class IconLibraryGenerator {
         return m.find() ? m.group(2) : null;
     }
 
+    private static String extractViewBox(String svgContent) {
+        Matcher m = SVG_VIEWBOX_RE.matcher(svgContent);
+        if (!m.find()) return FA_VIEWBOX;
+        String vb = m.group(2).trim();
+        return vb.isBlank() ? FA_VIEWBOX : vb;
+    }
+
     /**
      * 写出 pack JSON。每个 icon 一行（git diff 友好），手工 JSON 序列化（避免 generator 引
-     * Jackson 依赖；palette.json 也是同款手工写）。path d 字符串走 {@link #jsonString}。
+     * Jackson 依赖；palette.json 也是同款手工写）。仅当图标自身 {@code viewBox} 与 pack 默认值不同时
+     * 才写出单图标 {@code "viewBox"} 字段，保持 JSON 体积紧凑。
      */
     private static void writePackJson(Path out, String pack, String version, String license,
-                                       String viewBox, TreeMap<String, String> icons) throws IOException {
+                                       String viewBox, TreeMap<String, IconEntry> icons) throws IOException {
         try (BufferedWriter w = Files.newBufferedWriter(out, StandardCharsets.UTF_8)) {
             w.write("{\n");
             w.write("  \"pack\": " + jsonString(pack) + ",\n");
@@ -169,10 +185,15 @@ public final class IconLibraryGenerator {
             w.write("  \"license\": " + jsonString(license) + ",\n");
             w.write("  \"viewBox\": " + jsonString(viewBox) + ",\n");
             w.write("  \"icons\": {\n");
-            List<Map.Entry<String, String>> entries = new ArrayList<>(icons.entrySet());
+            List<Map.Entry<String, IconEntry>> entries = new ArrayList<>(icons.entrySet());
             for (int i = 0; i < entries.size(); i++) {
                 var e = entries.get(i);
-                w.write("    " + jsonString(e.getKey()) + ": {\"d\": " + jsonString(e.getValue()) + "}");
+                IconEntry entry = e.getValue();
+                w.write("    " + jsonString(e.getKey()) + ": {\"d\": " + jsonString(entry.d()));
+                if (!entry.viewBox().equals(viewBox)) {
+                    w.write(", \"viewBox\": " + jsonString(entry.viewBox()));
+                }
+                w.write("}");
                 w.write(i < entries.size() - 1 ? ",\n" : "\n");
             }
             w.write("  }\n");

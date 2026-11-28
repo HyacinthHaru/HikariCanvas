@@ -96,7 +96,7 @@ CREATE TABLE walls (
   published_at  INTEGER,                   -- nullable timestamp；NULL=可编辑，非 NULL=已锁定（lock 时间戳，2026-05-14 起语义化）
   template_id   TEXT,                      -- 模板系统填，源模板 ID
   template_version INTEGER,                -- 应用时的模板版本
-  protocol_version INTEGER NOT NULL DEFAULT 1, -- V006 加：标记 project_json 形态（1=v1 / 2=v2 layered）
+  protocol_version INTEGER NOT NULL DEFAULT 1, -- V006 加：标记 project_json 形态（1=v1 / 2=v2 layered / 3=v3 timeline，随写入同步为 ProjectState.PROTOCOL_VERSION）
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
@@ -189,7 +189,7 @@ v2 形态:
 
 - 不做启动期扫描升级（无结构变更，无须 rewrite）。
 - 运行期代码**同时接受 2 与 3**：读到 v2（无 `timelines`）按静态处理，读到 v3 按带时间轴处理。
-- **lazy on-write**：某 wall 下次保存时 `project_json` 自然写成 `protocolVersion: 3`，无显式迁移步骤。
+- **lazy on-write**：新建画板（`createWithMapIds`）、常规保存（`updateState`）及启动期 v1 升级回写（`migrateAllToV2`，查询条件保持 `WHERE protocol_version < 2`）时，`project_json` 与 `walls.protocol_version` 列均自然写成 `ProjectState.PROTOCOL_VERSION`（`3`），旧 v2 行无需显式启动迁移步骤。
 
 **无新 SQLite 表 / 无新 schema 版本。** `timelines` 以及每元素关键帧轨（`Timeline.tracks: Map<elementId, List<Keyframe>>`）全部序列化进 `walls.project_json` blob，与 `layers` / `elements` 同级，不增加 DB schema 版本或 `ALTER` 语句（与 §6 的 schema 版本约定对照见 §6.2 末）。
 

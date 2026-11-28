@@ -74,6 +74,13 @@ function shouldAttemptLoad(fontId: string): boolean {
 }
 
 /**
+ * 同步查询某字体的 metrics 表是否已加载到位（未加载或加载失败的 null sentinel 均返 false）。
+ */
+export function hasMetrics(fontId: string): boolean {
+    return tables.get(fontId) != null;
+}
+
+/**
  * 丢弃所有失败条目，让下次访问立刻重新加载（不等 TTL）。
  * 切 wall / 重连后调，语义同 IconLoader.clearFailedIconCache。
  */

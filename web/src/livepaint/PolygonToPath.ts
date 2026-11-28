@@ -47,6 +47,10 @@ export const PATH_D_BUDGET = 3900;
 /** 简化容差上限：再大轮廓就糊得不成样子了，与 maybeSimplify 内部阶梯共用这个天花板。 */
 const MAX_TOLERANCE = 16;
 
+/** 与后端 ElementValidator 对齐的整数坐标与尺寸硬上限。 */
+const MAX_COORD = 10_000;
+const MAX_DIM = 10_000;
+
 /**
  * 阶梯式 RDP 简化。顶点 > VERTEX_WARN_THRESHOLD 时触发，初始 tolerance = baseTolerance，
  * 每轮翻倍直到 ≤ VERTEX_HARD_LIMIT 或 tolerance ≥ 16（再大就视觉退化太厉害，放弃）。
@@ -126,11 +130,21 @@ export function gapToPathElement(gap: GapPolygon, baseTolerance: number = DEFAUL
     accumulate(gap.outer);
     for (const hole of gap.holes) accumulate(hole);
 
-    if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
+    if (
+        !isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)
+        || (maxX <= minX && maxY <= minY)
+    ) {
         return { x: 0, y: 0, w: 0, h: 0, d: '', vertexCount: 0, overBudget: false };
     }
 
-    const shift = ([x, y]: [number, number]): [number, number] => [x - minX, y - minY];
+    // 后端 ElementValidator 要求 x/y/w/h 为整数且 w/h ≥ 1。
+    // 外接盒向外取整到整数格，并用整数起点 (ix, iy) 直接平移顶点：ix + (x - ix) === x，零平移漂移。
+    const ix = Math.floor(minX) || 0;
+    const iy = Math.floor(minY) || 0;
+    const iw = Math.max(1, Math.ceil(maxX) - ix);
+    const ih = Math.max(1, Math.ceil(maxY) - iy);
+
+    const shift = ([x, y]: [number, number]): [number, number] => [x - ix, y - iy];
     // 先对外环 / 每个 hole 做 RDP 简化（基于本地坐标，shift 后再算更稳定，
     // 因为 tolerance 是绝对像素阈值）。简化策略见 maybeSimplify。
     const shiftedOuter: Polygon = gap.outer.map(shift);
@@ -157,14 +171,19 @@ export function gapToPathElement(gap: GapPolygon, baseTolerance: number = DEFAUL
         built = buildAt(tolerance);
     }
 
+    const outOfBounds = Math.abs(ix) > MAX_COORD
+        || Math.abs(iy) > MAX_COORD
+        || iw > MAX_DIM
+        || ih > MAX_DIM;
+
     return {
-        x: minX,
-        y: minY,
-        w: maxX - minX,
-        h: maxY - minY,
+        x: ix,
+        y: iy,
+        w: iw,
+        h: ih,
         d: built.d,
         vertexCount: built.vertexCount,
-        overBudget: built.d.length > PATH_D_BUDGET,
+        overBudget: outOfBounds || built.d.length > PATH_D_BUDGET,
     };
 }
 

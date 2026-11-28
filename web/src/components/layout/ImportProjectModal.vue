@@ -101,7 +101,7 @@ async function doImport(file: File) {
  */
 function warningText(w: ImportWarningDto): string {
     const fn = t.value.project.warn[w.kind];
-    return fn ? fn(w.detail) : w.detail;
+    return fn ? fn(w.detail) : (w.detail || w.kind);
 }
 
 /**

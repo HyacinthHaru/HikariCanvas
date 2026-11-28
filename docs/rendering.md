@@ -268,18 +268,18 @@ g.setClip(originalClip);
 
 如 element.renderMode === 'dither'：drawElementsTo 走的是 per-element off-buffer 路径→ `drawElementBody` 完整跑（含 mask clip）→ 整个 element buffer 跑 `BayerDither.apply` → blend 回主 graphics。所以 dither 在 mask **内部** 像素，mask 外像素本就透明，dither 不影响（"先 dither 再 mask"语义实际由 per-element buffer 结构自然达成）。
 
-**羽化 mask 的中间缓冲区（后端）：**
+**羽化 mask 的中间缓冲区（双端一致裁剪与上限）：**
 
-`mask.featherPx > 0` 时后端走 off-buffer + alpha 复合，缓冲区**必须先与画布求交再分配**：
+`mask.featherPx > 0` 时前后端均走 off-buffer + alpha 复合，缓冲区**必须先与可见画布范围求交再分配**：
 
-- 可见范围取自 `Graphics2D.getClipBounds()`（`CanvasCompositor` 在建主 buffer / 层 buffer /
-  dither buffer 时都显式 `setClip` 到该 buffer 的整块范围，renderer 才读得到画布尺寸；
-  clip 只是把本来就画不出去的部分显式化，不改任何像素）
-- 交集再向四周扩 `3 × featherPx + 1`：盒滤波跑 3 遍，每遍影响半径 `featherPx`，扩这么多能保证
-  可见区内每个像素的模糊输入都齐全 —— **裁剪前后可见像素逐位相同**
-- 扩后仍超 `MAX_FEATHER_PIXELS`（16 M 像素），或压根拿不到 clip 时，**降级为硬边 clip + 直接画原图**
-  （O(1) 内存），而不是整个元素不画。元素 `w/h` 被关键帧插值放大过 `MAX_DIM` 时同理走降级 ——
-  以前是直接 `return`，后端整张图消失、前端照常显示，双端分叉
+- 后端可见范围取自 `Graphics2D.getClipBounds()`（`CanvasCompositor` 在建主 buffer / 层 buffer /
+  dither buffer 时都显式 `setClip` 到该 buffer 的整块范围，AWT 自动随旋转、错切或平移逆变换回当前用户坐标系）；
+  前端 `PreviewRenderer` 通过对 `ctx.getTransform()` 求逆矩阵，将目标 `<canvas>` 四角反映射回当前用户坐标系，
+  在旋转、斜体剪切与抖动子画布下得到与后端数学等价的可见包围盒
+- 交集再向四周扩 `3 × featherPx + 1`：后端盒滤波跑 3 遍（每遍影响半径 `featherPx`），前端高斯模糊同取该安全边距，
+  保证可见区内每个像素的模糊输入都齐全 —— **裁剪前后可见像素不变**
+- 扩后仍超 `MAX_FEATHER_PIXELS`（`16,777,216` 像素，即 4096×4096），或拿不到有效逆变换但原始面积超上限时，
+  双端统一**降级为硬边 clip + 直接画原图**（O(1) 内存），而不是整个元素消失。元素 `w/h` 被关键帧插值放大过 `MAX_DIM` 时同理走降级；若插值回弹出现 `w <= 0 || h <= 0`，双端所有元素渲染器（含 `Rect` 与 `Image`）统一在入口早退跳过绘制
 
 **盒滤波用可分离 1D 核**（水平一遍 + 垂直一遍，每像素 `O(k)`），不用 `(2r+1)²` 二维核
 （`r=32` 时每像素 4225 次乘加 × 3 遍，10000×10000 元素能把渲染线程钉死几分钟）。前端羽化走
@@ -331,17 +331,14 @@ g.setClip(originalClip);
 方格算。后端曾用 `canonicalCharWidth`、前端用 `ctx.measureText`，于是宽西文字符（W / M）的右缘光晕在
 游戏内被裁掉、编辑器里却完整 —— 两端都必须走 `charAdvance`。
 
-**缓冲区裁剪与面积上限（后端）：** 外接盒只由字形位置决定，不受画布尺寸约束 —— `text` 256 字 CJK +
+**缓冲区裁剪与面积上限（双端一致）：** 外接盒只由字形位置决定，不受画布尺寸约束 —— `text` 256 字 CJK +
 `fontSize=512` + `lineHeight=4` + `letterSpacing=128` 这套**全部合法**的参数能让 bbox 涨到
-1e4 × 3.5e4 ≈ 3.5e8 像素，单帧 ARGB + `getRGB` 的 `int[]` 就是 3.5 GB，而渲染又在编辑会话的锁里，
-有 `canvas.edit` 的玩家能用纯合法 op 打挂服务器。因此后端：
+1e4 × 3.5e4 ≈ 3.5e8 像素，单帧缓冲区可达数 GB（不仅能打爆服务端内存，也会撞破浏览器 `<canvas>` 尺寸上限卡死标签页）。因此双端统一执行：
 
-1. 先把 bbox 与**画布向外扩 `radius + 1`** 的范围求交（padding ≥ 模糊半径 → 画布内像素的模糊输入
-   全都还在，**裁剪前后可见像素逐位相同**）；画布范围取自 `Graphics2D.getClipBounds()`
-2. 交集面积仍超 `MAX_GLOW_PIXELS`（20 M 像素，够 32×32 maps 满画布 + padding），或读不到 clip
-   且原始 bbox 超上限 → **本次不画发光**（打一条限流警告），不尝试分配
-
-前端在浏览器里画，超限只影响该标签页，暂不设同款上限。
+1. 先把 bbox 与**当前用户坐标系下的可见画布范围向外扩 `radius + 1`** 求交（padding ≥ 模糊半径 → 画布内像素的模糊输入
+   全都还在，**裁剪前后可见像素逐位相同**）；后端取 `Graphics2D.getClipBounds()`，前端由 `ctx.getTransform()` 逆矩阵反映射目标 `<canvas>` 四角获得
+2. 交集面积仍超 `MAX_GLOW_PIXELS`（`20,000,000` 像素，够 32×32 maps 满画布 + padding），或读不到有效可见范围
+   且原始 bbox 超上限 → **双端统一本次不画发光**（后端打限流警告，正文照常绘制），不尝试分配超大离屏缓冲区
 
 ### 5.4 效果顺序
 

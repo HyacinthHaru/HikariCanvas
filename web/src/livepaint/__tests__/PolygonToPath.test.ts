@@ -89,6 +89,102 @@ describe('gapToPathElement', () => {
         expect(out.d).toBe('');
         expect(out.vertexCount).toBe(0);
     });
+
+    it('零面积单点退化输入 → 全 0 结果', () => {
+        const gap: GapPolygon = {
+            outer: [[12.5, 8.25], [12.5, 8.25], [12.5, 8.25]],
+            holes: [],
+        };
+        const out = gapToPathElement(gap);
+        expect(out).toEqual({ x: 0, y: 0, w: 0, h: 0, d: '', vertexCount: 0, overBudget: false });
+    });
+
+    it('浮点顶点坐标：输出整数 x/y/w/h 且 x + localX 精确还原世界坐标（零平移漂移）', () => {
+        const outer: Polygon = [
+            [12.8, 7.3],
+            [40.2, 7.3],
+            [40.2, 25.9],
+            [12.8, 25.9],
+        ];
+        const hole: Polygon = [
+            [18.4, 10.6],
+            [24.1, 10.6],
+            [24.1, 16.2],
+            [18.4, 16.2],
+        ];
+        const out = gapToPathElement({ outer, holes: [hole] });
+
+        expect(Number.isInteger(out.x)).toBe(true);
+        expect(Number.isInteger(out.y)).toBe(true);
+        expect(Number.isInteger(out.w)).toBe(true);
+        expect(Number.isInteger(out.h)).toBe(true);
+        expect(out.x).toBe(12);
+        expect(out.y).toBe(7);
+        expect(out.w).toBe(29);
+        expect(out.h).toBe(19);
+        expect(out.overBudget).toBe(false);
+
+        const coords: Array<[number, number]> = [];
+        const re = /[ML](-?\d+\.\d+)\s+(-?\d+\.\d+)/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(out.d)) !== null) {
+            coords.push([parseFloat(m[1]), parseFloat(m[2])]);
+        }
+        const expectedWorld = [...outer, ...hole];
+        expect(coords).toHaveLength(expectedWorld.length);
+        for (let i = 0; i < expectedWorld.length; i++) {
+            const [localX, localY] = coords[i];
+            expect(localX).toBeGreaterThanOrEqual(0);
+            expect(localX).toBeLessThanOrEqual(out.w);
+            expect(localY).toBeGreaterThanOrEqual(0);
+            expect(localY).toBeLessThanOrEqual(out.h);
+            expect(out.x + localX).toBeCloseTo(expectedWorld[i][0], 2);
+            expect(out.y + localY).toBeCloseTo(expectedWorld[i][1], 2);
+        }
+    });
+
+    it('亚像素窄条（0.6px × 20px）：整数 w 钳制 ≥ 1', () => {
+        const sliver: GapPolygon = {
+            outer: [
+                [10.2, 5.0],
+                [10.8, 5.0],
+                [10.8, 25.0],
+                [10.2, 25.0],
+            ],
+            holes: [],
+        };
+        const out = gapToPathElement(sliver);
+        expect(out.x).toBe(10);
+        expect(out.y).toBe(5);
+        expect(out.w).toBeGreaterThanOrEqual(1);
+        expect(out.w).toBe(1);
+        expect(out.h).toBe(20);
+        expect(out.overBudget).toBe(false);
+    });
+
+    it('超出服务端 10000 坐标或尺寸上限时标记 overBudget=true', () => {
+        const hugeCoord: GapPolygon = {
+            outer: [
+                [10_005, 0],
+                [10_015, 0],
+                [10_015, 10],
+                [10_005, 10],
+            ],
+            holes: [],
+        };
+        expect(gapToPathElement(hugeCoord).overBudget).toBe(true);
+
+        const hugeDim: GapPolygon = {
+            outer: [
+                [0, 0],
+                [10_005, 0],
+                [10_005, 10],
+                [0, 10],
+            ],
+            holes: [],
+        };
+        expect(gapToPathElement(hugeDim).overBudget).toBe(true);
+    });
 });
 
 describe('maybeSimplify (via gapToPathElement)', () => {

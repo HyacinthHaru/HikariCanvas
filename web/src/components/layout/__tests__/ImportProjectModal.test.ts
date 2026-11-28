@@ -65,7 +65,9 @@ describe('ImportProjectModal warnings → 可读文案', () => {
             warnings: [
                 { kind: 'missing-font', detail: 'Arial' },
                 { kind: 'animation-flattened', detail: '' },
+                { kind: 'asset-rehashed', detail: 'deadbeefdeadbeef' },
                 { kind: 'script-command-blocked', detail: 'give-diamond' },
+                { kind: 'future-unknown-warning', detail: '' },
             ],
         });
     });
@@ -79,9 +81,13 @@ describe('ImportProjectModal warnings → 可读文案', () => {
         expect(text).toContain('已用默认字体代替');
         expect(text).toContain('Arial');
         expect(text).toContain('已按初始样子导入');
+        expect(text).toContain('部分图片经安全重编码后已自动更新引用');
         expect(text).toContain('give-diamond');
+        expect(text).toContain('future-unknown-warning');
         expect(text).not.toContain('missing-font');
         expect(text).not.toContain('animation-flattened');
+        expect(text).not.toContain('asset-rehashed');
+        expect(text).not.toContain('deadbeefdeadbeef');
         expect(text).not.toContain('script-command-blocked');
     });
 
@@ -93,6 +99,10 @@ describe('ImportProjectModal warnings → 可读文案', () => {
         const text = wrapper.text();
         expect(text).not.toContain('missing-font');
         expect(text).not.toContain('animation-flattened');
+        expect(text).not.toContain('asset-rehashed');
+        expect(text).not.toContain('deadbeefdeadbeef');
+        expect(text).toContain('Some images were re-encoded for safety and their references were updated automatically');
+        expect(text).toContain('future-unknown-warning');
         expect(text.toLowerCase()).toContain('default font');
     });
 });

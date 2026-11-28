@@ -16,7 +16,7 @@
  * 让 layout 返回可控 glyph path 字符串——这样能精确验证 polygon 顶点数 / 形状。
  */
 
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import {
     textElementToPolygon,
     textElementToMultiPolygon,
@@ -24,6 +24,7 @@ import {
     __setFontkitModuleForTest,
     __resetCachesForTest,
 } from '../TextGlyphExtractor';
+import { hasMetrics, clearFailedMetricsCache } from '../../render/GlyphMetricsLut';
 import { elementToMultiPolygonAsync } from '../ElementToPolygon';
 import { buildGraph, findGapAt } from '../LivePaintCore';
 import type { Element, TextElement } from '@/types/protocol';
@@ -903,5 +904,100 @@ describe('TextGlyphExtractor — 并排轮廓不被当成内孔', () => {
             makeText({ text: '回', fontId: 'source_han_sans', fontSize: 100 }));
         expect(multi).not.toBeNull();
         expect(multi!.length).toBe(2);
+    });
+});
+
+describe('TextGlyphExtractor — 字距 metrics 预取与未就绪不缓存', () => {
+    it('metrics 缺失时返回未缓存的 canonical 回退轮廓；metrics 到位后重算真实字距并写入缓存', async () => {
+        const FONT_ID = 'metrics_lazy_test_font';
+        mockFetchOk();
+
+        let glyphCalls = 0;
+        const baseFont = makeMockFont({
+            defaultPath: 'M0 0 L300 0 L300 500 L0 500 Z',
+            advanceWidth: 900,
+        }) as {
+            unitsPerEm: number;
+            glyphForCodePoint(cp: number): unknown;
+        };
+        const trackedFont = {
+            unitsPerEm: baseFont.unitsPerEm,
+            glyphForCodePoint(cp: number): unknown {
+                glyphCalls++;
+                return baseFont.glyphForCodePoint(cp);
+            },
+        };
+        __setFontkitModuleForTest(makeMockFontkitModule(trackedFont) as never);
+
+        const el = makeText({
+            text: 'AB',
+            fontId: FONT_ID,
+            fontSize: 32,
+            x: 0,
+            y: 0,
+            w: 200,
+            h: 50,
+        });
+
+        try {
+            // 1) metrics fetch 失败 → hasMetrics 为 false，但回退轮廓仍正常返回且不进缓存
+            vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, json: async () => ({}) })));
+            const ringFallback = await textElementToPolygon(el);
+            expect(hasMetrics(FONT_ID)).toBe(false);
+            expect(ringFallback).not.toBeNull();
+            const callsAfterFirst = glyphCalls;
+            expect(callsAfterFirst).toBe(2);
+
+            const multiFallback = await textElementToMultiPolygon(el);
+            expect(multiFallback).not.toBeNull();
+            // 未缓存：第二次调用真的重新走 glyphForCodePoint
+            expect(glyphCalls).toBe(4);
+
+            const fallbackMinXs = multiFallback!.map((poly) => {
+                let minX = Infinity;
+                for (const [x] of poly[0]) if (x < minX) minX = x;
+                return minX;
+            }).sort((a, b) => a - b);
+            // canonical ASCII advance @ 32px = 16px
+            expect(fallbackMinXs[0]).toBeCloseTo(0, 3);
+            expect(fallbackMinXs[1]).toBeCloseTo(16, 3);
+
+            // 2) 清掉失败冷却后提供真实 metrics（baseSize=32, advance=28）
+            clearFailedMetricsCache();
+            vi.stubGlobal('fetch', vi.fn(async () => ({
+                ok: true,
+                json: async () => ({
+                    fontId: FONT_ID,
+                    baseSize: 32,
+                    ascent: 26,
+                    descent: 6,
+                    advances: { 65: 28, 66: 28 },
+                }),
+            })));
+
+            const multiReal = await textElementToMultiPolygon(el);
+            expect(hasMetrics(FONT_ID)).toBe(true);
+            expect(multiReal).not.toBeNull();
+            expect(glyphCalls).toBe(6);
+
+            const realMinXs = multiReal!.map((poly) => {
+                let minX = Infinity;
+                for (const [x] of poly[0]) if (x < minX) minX = x;
+                return minX;
+            }).sort((a, b) => a - b);
+            expect(realMinXs[0]).toBeCloseTo(0, 3);
+            expect(realMinXs[1]).toBeCloseTo(28, 3);
+
+            // 3) metrics 已就绪：后续调用直接命中缓存，不再触发 glyphForCodePoint
+            const multiCached = await textElementToMultiPolygon(el);
+            const ringCached = await textElementToPolygon(el);
+            const ringCachedAgain = await textElementToPolygon(el);
+            expect(multiCached).not.toBeNull();
+            expect(ringCached).not.toBeNull();
+            expect(ringCachedAgain).not.toBeNull();
+            expect(glyphCalls).toBe(6);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });

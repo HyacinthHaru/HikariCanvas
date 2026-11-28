@@ -962,8 +962,9 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 | `animation-flattened` | 动画被压平为静态（保留位，当前实现未产出） |
 | `orphan-track-dropped` | 关键帧轨引用了不存在的 elementId，该轨被丢弃（detail = elementId） |
 | `asset-quota` | 部分 `assets/*.png` 因配额满 / 不可解码被跳过（detail = 跳过张数） |
+| `asset-rehashed` | 部分图片经服务端安全重解码重编码后内容哈希发生变化，元素引用已自动重映射（detail = 原 16 位 hex 哈希；前端展示通用提示，不直接透出裸哈希） |
 
-> 上表为文档约定的完整集合（与 `ImportWarning` 类注释一致）。**当前实装实际产出 8 种**：`missing-font` / `missing-variable`（仅 `userglobal`）/ `missing-icon`（仅 `user/*`）/ `asset-quota` / `orphan-track-dropped` / `script-invalid` / `script-command-blocked` / `script-quota`；仅 `animation-flattened` 仍为预留 kind，代码暂未触发。前端按全集翻译即可。
+> 上表为文档约定的完整集合（与 `ImportWarning` 类注释一致）。**当前实装实际产出 9 种**：`missing-font` / `missing-variable`（仅 `userglobal`）/ `missing-icon`（仅 `user/*`）/ `asset-quota` / `asset-rehashed` / `orphan-track-dropped` / `script-invalid` / `script-command-blocked` / `script-quota`；仅 `animation-flattened` 仍为预留 kind，代码暂未触发。前端按全集翻译即可。
 
 **错误**——失败响应统一为 `{ "error": <code>, "message": <人读原因> }` + 对应 HTTP status：
 

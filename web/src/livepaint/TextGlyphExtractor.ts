@@ -30,6 +30,7 @@ import polygonClipping from 'polygon-clipping';
 import type { Pair, MultiPolygon as PCMultiPolygon, Polygon as PCPolygon, Ring as PCRing } from 'polygon-clipping';
 import type { TextElement } from '@/types/protocol';
 import { layoutText } from '@/render/TextLayout';
+import { preloadMetrics, hasMetrics, clearFailedMetricsCache } from '../render/GlyphMetricsLut';
 import type { Polygon } from './types';
 
 /** glyph path bezier 采样段数（与 ElementToPolygon PATH_CURVE_SAMPLES 一致）。 */
@@ -133,6 +134,7 @@ export function __resetCachesForTest(): void {
     fontCache.clear();
     polygonCache.clear();
     multiPolygonCache.clear();
+    clearFailedMetricsCache();
 }
 
 /** 加载 fontkit 模块（dynamic import；首次调用触发 chunk download）。 */
@@ -208,15 +210,17 @@ export async function textElementToPolygon(textEl: TextElement): Promise<Polygon
         // 走 multi 路径再降级为"面积最大外环"——避免与 textElementToMultiPolygon 重复
         // 跑昂贵的 fontkit layout + union。
         const { multi, cacheable } = await getOrComputeMultiLayout(textEl);
-        // 字体这次没拿到时不写缓存：那是"暂时取不到字体"，不是"这段文字没形状"。
-        if (!cacheable) return null;
         cached = multi === null ? null : pickLargestOuterRing(multi);
-        // LRU 简单实现：超阈值清最早 entry
-        if (polygonCache.size >= POLYGON_CACHE_MAX) {
-            const firstKey = polygonCache.keys().next().value;
-            if (firstKey !== undefined) polygonCache.delete(firstKey);
+        // 字体或字距表尚未到位时不写缓存，避免将临时 canonical 回退排版钉死在该 key 上；
+        // 但已算出的 fallback 轮廓仍正常返回给本次调用方使用。
+        if (cacheable) {
+            // LRU 简单实现：超阈值清最早 entry
+            if (polygonCache.size >= POLYGON_CACHE_MAX) {
+                const firstKey = polygonCache.keys().next().value;
+                if (firstKey !== undefined) polygonCache.delete(firstKey);
+            }
+            polygonCache.set(key, cached);
         }
-        polygonCache.set(key, cached);
     }
     if (cached === null) return null;
 
@@ -292,8 +296,11 @@ async function getOrComputeMultiLayout(textEl: TextElement): Promise<LayoutLooku
     if (multiPolygonCache.has(key)) {
         return { multi: multiPolygonCache.get(key) ?? null, cacheable: true };
     }
-    const { multi, fontMissing } = await computeLayoutMultiPolygon(textEl);
+    const { multi, fontMissing, metricsReady } = await computeLayoutMultiPolygon(textEl);
     if (fontMissing) return { multi: null, cacheable: false };
+    // 字距 metrics 表尚未就绪时，layoutText 走的是 canonicalCharWidth 粗算；
+    // 本次仍把算出的 fallback 形状返回给调用方，但跳过写缓存，等表到位后重算真实摆位。
+    if (!metricsReady) return { multi, cacheable: false };
     if (multiPolygonCache.size >= POLYGON_CACHE_MAX) {
         const firstKey = multiPolygonCache.keys().next().value;
         if (firstKey !== undefined) multiPolygonCache.delete(firstKey);
@@ -353,10 +360,12 @@ function pickLargestOuterRing(multi: PCMultiPolygon): Polygon | null {
  */
 async function computeLayoutMultiPolygon(
     textEl: TextElement,
-): Promise<{ multi: PCMultiPolygon | null; fontMissing: boolean }> {
-    const font = await loadFont(textEl.fontId);
+): Promise<{ multi: PCMultiPolygon | null; fontMissing: boolean; metricsReady: boolean }> {
+    // 字体文件与字距 metrics 表并行预取，确保后续 layoutText 能直接读到与主线程一致的真实字距。
+    const [font] = await Promise.all([loadFont(textEl.fontId), preloadMetrics(textEl.fontId)]);
+    const metricsReady = hasMetrics(textEl.fontId);
     // 字体没取到要单独告诉调用方：它跟"这段文字算出来就是空的"不一样，不能缓存。
-    if (!font) return { multi: null, fontMissing: true };
+    if (!font) return { multi: null, fontMissing: true, metricsReady };
     const unitsPerEm = font.unitsPerEm || 1000;
     const fontSize = textEl.fontSize;
     /** font design units → pixel 缩放 */
@@ -369,10 +378,10 @@ async function computeLayoutMultiPolygon(
     //
     // vertical 模式在 textElementToPolygon / textElementToMultiPolygon 入口已早退，
     // 这里再做一次防御保险。
-    if (textEl.vertical) return { multi: null, fontMissing: false };
+    if (textEl.vertical) return { multi: null, fontMissing: false, metricsReady };
     const layoutInput: TextElement = { ...textEl, x: 0, y: 0 };
     const positioned = layoutText(layoutInput);
-    if (positioned.length === 0) return { multi: null, fontMissing: false };
+    if (positioned.length === 0) return { multi: null, fontMissing: false, metricsReady };
 
     const italic = textEl.italic === true;
 
@@ -427,7 +436,7 @@ async function computeLayoutMultiPolygon(
         }
     }
 
-    if (subPolygons.length === 0) return { multi: null, fontMissing: false };
+    if (subPolygons.length === 0) return { multi: null, fontMissing: false, metricsReady };
 
     let merged: ReturnType<typeof polygonClipping.union>;
     try {
@@ -436,9 +445,9 @@ async function computeLayoutMultiPolygon(
         if (import.meta.env.DEV) {
             console.warn('[TextGlyphExtractor] union failed:', e);
         }
-        return { multi: null, fontMissing: false };
+        return { multi: null, fontMissing: false, metricsReady };
     }
-    if (!merged || merged.length === 0) return { multi: null, fontMissing: false };
+    if (!merged || merged.length === 0) return { multi: null, fontMissing: false, metricsReady };
 
     // 返完整 MultiPolygon = Polygon[] = Ring[][]
     //   - 每 Polygon = [outerRing, hole1, hole2, ...]
@@ -465,7 +474,7 @@ async function computeLayoutMultiPolygon(
         }
         if (cleanPoly.length > 0) out.push(cleanPoly);
     }
-    return { multi: out.length === 0 ? null : out, fontMissing: false };
+    return { multi: out.length === 0 ? null : out, fontMissing: false, metricsReady };
 }
 
 /**

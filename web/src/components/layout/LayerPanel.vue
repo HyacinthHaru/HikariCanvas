@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useDebounceFn } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
+import { useVariableStore } from '@/stores/variables';
 import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
@@ -19,10 +20,15 @@ import {
     X,
 } from 'lucide-vue-next';
 import type { BlendMode, Layer, LayerColorTag } from '@/types/protocol';
-import { renderLayerThumbnail } from '@/render/LayerThumbnailRenderer';
+import { renderLayerThumbnail, clearLayerThumbnailCache } from '@/render/LayerThumbnailRenderer';
+import { onImageReady, onPaletteReady } from '@/render/PreviewRenderer';
+import { onFontLoaded } from '@/render/FontLoader';
+import { onIconLoaded } from '@/render/IconLoader';
+import { onMetricsReady } from '@/render/GlyphMetricsLut';
 
 const project = useProjectStore();
 const ui = useUiStore();
+const variableStore = useVariableStore();
 const ws = getWsClient();
 const { t } = useI18n();
 
@@ -230,9 +236,53 @@ function setColorTag(layer: Layer, tag: LayerColorTag | null): void {
 
 // ---------- 图层缩略图 ----------
 
-function thumbnailFor(layer: Layer): string | null {
-    return renderLayerThumbnail(project.state, layer);
+// 异步资源（字体 / 图标 / 字距表 / 上传图片 / 调色板）到位或变量更新时，layer 本身的内容签名未变，
+// 但缩略图首次渲染时拿到的是 fallback 占位。合并到下一帧统一清空缩略图缓存并递增版本号触发重算。
+const thumbRev = ref(0);
+let thumbRafId: number | null = null;
+const thumbUnsubscribers: Array<() => void> = [];
+
+function scheduleThumbRefresh(): void {
+    if (thumbRafId !== null) return;
+    thumbRafId = requestAnimationFrame(() => {
+        thumbRafId = null;
+        clearLayerThumbnailCache();
+        thumbRev.value++;
+    });
 }
+
+onMounted(() => {
+    thumbUnsubscribers.push(
+        onFontLoaded(() => scheduleThumbRefresh()),
+        onIconLoaded(() => scheduleThumbRefresh()),
+        onMetricsReady(() => scheduleThumbRefresh()),
+        onImageReady(() => scheduleThumbRefresh()),
+        onPaletteReady(() => scheduleThumbRefresh()),
+        watch(() => variableStore.variables, () => scheduleThumbRefresh()),
+    );
+});
+
+onBeforeUnmount(() => {
+    if (thumbRafId !== null) {
+        cancelAnimationFrame(thumbRafId);
+        thumbRafId = null;
+    }
+    for (const unsub of thumbUnsubscribers) {
+        try { unsub(); } catch (err) { console.warn('[LayerPanel] loader unsubscribe failed', err); }
+    }
+    thumbUnsubscribers.length = 0;
+});
+
+const thumbnailsByLayerId = computed<Map<string, string | null>>(() => {
+    void thumbRev.value;
+    const state = project.state;
+    const out = new Map<string, string | null>();
+    if (!state) return out;
+    for (const layer of state.layers) {
+        out.set(layer.id, renderLayerThumbnail(state, layer));
+    }
+    return out;
+});
 </script>
 
 <template>
@@ -282,8 +332,8 @@ function thumbnailFor(layer: Layer): string | null {
             :title="t.layerPanel.thumbnailAlt(layer.name)"
           >
             <img
-              v-if="thumbnailFor(layer)"
-              :src="thumbnailFor(layer)!"
+              v-if="thumbnailsByLayerId.get(layer.id)"
+              :src="thumbnailsByLayerId.get(layer.id)!"
               :alt="t.layerPanel.thumbnailAlt(layer.name)"
               class="block w-full h-full object-contain"
               draggable="false"

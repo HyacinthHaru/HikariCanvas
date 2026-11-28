@@ -89,7 +89,7 @@ function buildSyntheticState(source: ProjectState, layer: Layer): ProjectState {
 /**
  * 渲染（或从 cache 取）单 layer 的 64×64 dataURL。
  *
- * <p>DEV-only perf log：首次 render / cache miss 会 console.log 耗时；正常 reuse 静默。</p>
+ * <p>DEV-only perf log：首次 render / cache miss 会 console.debug 耗时；正常 reuse 静默。</p>
  */
 export function renderLayerThumbnail(
     state: ProjectState | null,
